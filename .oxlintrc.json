@@ -1,0 +1,27 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "plugins": ["react", "typescript", "oxc"],
+  "ignorePatterns": ["dist", "playwright-report", "test-results"],
+  "rules": {
+    "react/rules-of-hooks": "error",
+    "react/exhaustive-deps": "warn",
+    "react/only-export-components": ["warn", { "allowConstantExport": true }],
+    "no-restricted-imports": [
+      "error",
+      {
+        "patterns": [
+          {
+            "regex": "(^|/)mocks(/|$)",
+            "message": "演示数据只能经由 src/services/ 访问：请改从 @/services/* 导入，不要直接导入 src/mocks/（见 AGENTS.md 模块边界）"
+          }
+        ]
+      }
+    ]
+  },
+  "overrides": [
+    {
+      "files": ["src/services/**", "src/mocks/**"],
+      "rules": { "no-restricted-imports": "off" }
+    }
+  ]
+}

@@ -1,0 +1,132 @@
+/* 设计 tokens：语义颜色、字号、字体。规则见 DESIGN.md。
+   组件内只使用这里定义的语义 token，不写硬编码颜色。 */
+
+:root {
+  color-scheme: light;
+  --ui-font-size: 14px;
+
+  /* 结构面 */
+  --background: #f5f5f6;
+  --sidebar: #ededef;
+  --surface: #ffffff;
+  --surface-hover: #f3f3f5;
+  --card: #ffffff;
+  --card-border: #e4e4e7;
+  --popover: #ffffff;
+  --popover-border: #dcdce0;
+  --overlay: rgb(28 28 31 / 0.3);
+  --input: #ffffff;
+  --input-focused: #ffffff;
+  --input-border: #d4d4d8;
+  --input-border-hover: #a1a1aa;
+
+  /* 文本 */
+  --foreground: #1c1c1f;
+  --foreground-subtle: #55555e;
+  --foreground-subtlest: #6b6b74;
+
+  /* 边框与状态面 */
+  --border: #e4e4e7;
+  --border-hover: #cfcfd4;
+  --hover: #ececef;
+  --selected: #e2e3e8;
+  --accent: #eaeffb;
+  --tag: #e8e8eb;
+  --find-highlight: #fdf0b5;
+
+  /* 强调与语义状态 */
+  --brand: #3050c8;
+  --primary: #26262b;
+  --primary-foreground: #fafafa;
+  --destructive: #c62828;
+}
+
+.dark {
+  color-scheme: dark;
+  --background: #131316;
+  --sidebar: #19191d;
+  --surface: #1d1d21;
+  --surface-hover: #242429;
+  --card: #1d1d21;
+  --card-border: #2b2b31;
+  --popover: #212126;
+  --popover-border: #34343b;
+  --overlay: rgb(0 0 0 / 0.5);
+  --input: #1d1d21;
+  --input-focused: #212126;
+  --input-border: #3a3a42;
+  --input-border-hover: #55555e;
+
+  --foreground: #e6e6e9;
+  --foreground-subtle: #a3a3ac;
+  --foreground-subtlest: #878791;
+
+  --border: #2b2b31;
+  --border-hover: #3a3a42;
+  --hover: #26262b;
+  --selected: #2f2f36;
+  --accent: #1f2637;
+  --tag: #2a2a30;
+  --find-highlight: #5a4a12;
+
+  --brand: #8ea2ff;
+  --primary: #e6e6e9;
+  --primary-foreground: #1c1c1f;
+  --destructive: #f07070;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-sidebar: var(--sidebar);
+  --color-surface: var(--surface);
+  --color-surface-hover: var(--surface-hover);
+  --color-card: var(--card);
+  --color-card-border: var(--card-border);
+  --color-popover: var(--popover);
+  --color-popover-border: var(--popover-border);
+  --color-overlay: var(--overlay);
+  --color-input: var(--input);
+  --color-input-focused: var(--input-focused);
+  --color-input-border: var(--input-border);
+  --color-input-border-hover: var(--input-border-hover);
+  --color-input-border-focused: var(--brand);
+
+  --color-foreground: var(--foreground);
+  --color-foreground-subtle: var(--foreground-subtle);
+  --color-foreground-subtlest: var(--foreground-subtlest);
+
+  --color-border: var(--border);
+  --color-border-hover: var(--border-hover);
+  --color-hover: var(--hover);
+  --color-selected: var(--selected);
+  --color-accent: var(--accent);
+  --color-tag: var(--tag);
+  --color-find-highlight: var(--find-highlight);
+
+  --color-brand: var(--brand);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-destructive: var(--destructive);
+  --color-ring: var(--brand);
+
+  /* 字体：系统无衬线栈，兼容中文 */
+  --font-sans:
+    system-ui, -apple-system, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei',
+    'Noto Sans CJK SC', 'Helvetica Neue', Arial, sans-serif;
+  --font-mono:
+    ui-monospace, 'Cascadia Mono', 'SF Mono', Menlo, Consolas, 'Noto Sans Mono CJK SC', monospace;
+
+  /* UI 字号体系：全部由 --ui-font-size 派生，界面文字只用 text-ui-* */
+  --text-ui-xl: calc(var(--ui-font-size) + 4px);
+  --text-ui-xl--line-height: 1.5;
+  --text-ui-lg: calc(var(--ui-font-size) + 2px);
+  --text-ui-lg--line-height: 1.5;
+  --text-ui-base: var(--ui-font-size);
+  --text-ui-base--line-height: 1.6;
+  --text-ui-caption: calc(var(--ui-font-size) - 1px);
+  --text-ui-caption--line-height: 1.5;
+  --text-ui-sm: calc(var(--ui-font-size) - 2px);
+  --text-ui-sm--line-height: 1.5;
+  --text-ui-xs: calc(var(--ui-font-size) - 4px);
+  --text-ui-xs--line-height: 1.4;
+}

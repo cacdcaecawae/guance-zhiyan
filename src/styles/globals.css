@@ -1,0 +1,21 @@
+@import 'tailwindcss';
+@import './tokens.css';
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+@layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+  body {
+    @apply bg-background text-foreground text-ui-base antialiased wrap-break-word;
+  }
+  * {
+    @apply border-border;
+  }
+  mark {
+    @apply bg-find-highlight text-foreground rounded-sm px-0.5;
+  }
+}
