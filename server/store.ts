@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { mkdirSync } from 'node:fs'
+import { mkdirSync, chmodSync, openSync, closeSync, fchmodSync } from 'node:fs'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import type { Artifact, ModelSelection, SessionSummary, User } from '../src/types/index.ts'
@@ -19,7 +19,22 @@ export class Store {
   constructor(root: string) {
     this.root = root
     mkdirSync(root, { recursive: true, mode: 0o700 })
-    this.db = new DatabaseSync(join(root, 'app.sqlite'))
+    if (process.platform !== 'win32') chmodSync(root, 0o700)
+    const path = join(root, 'app.sqlite')
+    const fd = openSync(path, 'a', 0o600)
+    try {
+      if (process.platform !== 'win32') fchmodSync(fd, 0o600)
+    } finally {
+      closeSync(fd)
+    }
+    for (const suffix of ['-wal', '-shm']) {
+      try {
+        if (process.platform !== 'win32') chmodSync(path + suffix, 0o600)
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+      }
+    }
+    this.db = new DatabaseSync(path)
     this.db.exec(`
       PRAGMA foreign_keys=ON;
       PRAGMA journal_mode=WAL;
@@ -42,14 +57,19 @@ export class Store {
         .all()
         .some((column) => column.name === 'generated')
     ) {
-      // Existing files predate arbitrary exports and were made by our own generators.
-      this.db.exec(
-        'BEGIN; ALTER TABLE artifacts ADD COLUMN generated INTEGER NOT NULL DEFAULT 0; UPDATE artifacts SET generated=1; COMMIT;',
-      )
+      this.db.exec('ALTER TABLE artifacts ADD COLUMN generated INTEGER NOT NULL DEFAULT 0;')
+    }
+    if (this.db.prepare('PRAGMA user_version').get()?.user_version === 0) {
+      // Early local builds marked unknown origins trusted; revoke that once without deleting files.
+      this.db.exec('BEGIN; UPDATE artifacts SET generated=0; PRAGMA user_version=1; COMMIT;')
     }
   }
   user(subject: string, name: string): User {
-    this.db.prepare('INSERT OR IGNORE INTO users VALUES(?, ?, ?)').run(randomUUID(), subject, name)
+    this.db
+      .prepare(
+        'INSERT INTO users VALUES(?, ?, ?) ON CONFLICT(subject) DO UPDATE SET name=excluded.name',
+      )
+      .run(randomUUID(), subject, name)
     return this.db
       .prepare('SELECT id, name FROM users WHERE subject=?')
       .get(subject) as unknown as User

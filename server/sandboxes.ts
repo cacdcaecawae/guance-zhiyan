@@ -203,13 +203,16 @@ export class Sandboxes {
           await this.wait(signal)
           continue
         }
-        entry = { users: 0, used: Date.now(), remote: this.create(sessionId) }
+        const ready = Promise.withResolvers<Sandbox>()
+        entry = { users: 0, used: Date.now(), remote: ready.promise }
         this.entries.set(sessionId, entry)
+        void this.create(sessionId, entry).then(ready.resolve, ready.reject)
       }
       entry.users++
       try {
         const remote = await entry.remote
         signal?.throwIfAborted()
+        if (entry.fenced || this.entries.get(sessionId) !== entry) throw sandboxError()
         return await work(remote)
       } finally {
         entry.users--
@@ -218,36 +221,54 @@ export class Sandboxes {
       }
     }
   }
-  async create(sessionId: string) {
+  async create(sessionId: string, entry: Entry) {
+    let remote: Sandbox | undefined
     try {
-      const remote = await Sandbox.create(this.creation(sessionId))
+      remote = await Sandbox.create(this.creation(sessionId))
       this.store.db
         .prepare('INSERT OR REPLACE INTO sandboxes VALUES(?, ?)')
         .run(sessionId, remote.id)
       return remote
     } catch {
-      this.entries.delete(sessionId)
+      if (remote) {
+        entry.fenced = true
+        entry.remote = Promise.resolve(remote)
+        try {
+          await remote.kill()
+        } catch (error) {
+          // Keep an untracked remote instance fenced and counted until deletion succeeds.
+          if (!missing(error)) throw sandboxError()
+        }
+        await remote.close()
+      }
+      if (this.entries.get(sessionId) === entry) this.entries.delete(sessionId)
       this.changed()
       throw sandboxError()
     }
   }
   async retire(id: string, entry: Entry) {
+    if (this.entries.get(id) !== entry) return
     if (entry.retiring) return entry.retiring
     entry.fenced = true
     const retiring = (async () => {
       let remote: Sandbox
+      const pending = entry.remote
       try {
-        remote = await entry.remote
+        remote = await pending
       } catch {
-        return
+        if (entry.remote === pending || this.entries.get(id) !== entry) return
+        // Creation may retain a remote instance after both persistence and cleanup failed.
+        remote = await entry.remote
       }
       try {
         await remote.kill()
       } catch (e) {
         if (!missing(e)) throw sandboxError()
       }
-      this.store.db.prepare('DELETE FROM sandboxes WHERE session_id=?').run(id)
-      this.entries.delete(id)
+      this.store.db
+        .prepare('DELETE FROM sandboxes WHERE session_id=? AND remote_id=?')
+        .run(id, remote.id)
+      if (this.entries.get(id) === entry) this.entries.delete(id)
       await remote.close()
     })()
     entry.retiring = retiring

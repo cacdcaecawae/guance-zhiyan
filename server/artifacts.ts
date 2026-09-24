@@ -7,6 +7,7 @@ import JSZip from 'jszip'
 import { XMLParser } from 'fast-xml-parser'
 import type { Context } from '@deepseek-ai/cordis'
 import { defineTool } from '@deepseek-ai/dsh-tools'
+import { HarnessError } from '@deepseek-ai/dsh-llm'
 import type { Artifact } from '../src/types/index.ts'
 import { Store, HttpError } from './store.ts'
 
@@ -20,7 +21,6 @@ const MAX_CONTENT = 200_000
 const MAX_USER_BYTES = 50 * 1024 * 1024
 type GeneratedFormat = 'md' | 'docx' | 'xlsx' | 'csv'
 type Workspace = {
-  writeFile(name: string, data: Uint8Array, signal?: AbortSignal): Promise<void>
   readOffice(data: Uint8Array, format: 'docx' | 'xlsx', signal?: AbortSignal): Promise<string>
 }
 const contentOutput = {
@@ -44,7 +44,6 @@ export class Artifacts {
     format: GeneratedFormat,
     content: string,
     signal?: AbortSignal,
-    workspace?: Workspace,
   ) {
     this.store.session(userId, sessionId)
     if (
@@ -54,9 +53,9 @@ export class Artifacts {
       /[/\\]/.test(name) ||
       Array.from(name).some((char) => char.charCodeAt(0) < 32)
     )
-      throw new Error('文件名称或格式无效。')
+      throw new HarnessError('文件名称或格式无效。', 'FILE_INVALID_NAME')
     if (!content.trim() || Buffer.byteLength(content) > MAX_CONTENT)
-      throw new Error('文件内容为空或超过 200 KB。')
+      throw new HarnessError('文件内容为空或超过 200 KB。', 'FILE_INVALID_CONTENT')
     let bytes: Buffer
     if (format === 'docx') {
       const children = content.split(/\r?\n/).map((line) => {
@@ -88,8 +87,9 @@ export class Artifacts {
             ),
         )
       )
-        throw new Error(
+        throw new HarnessError(
           '表格内容必须为二维 JSON 数组，最多 2000 行、50 列，单元格仅支持文本或数字。',
+          'FILE_INVALID_TABLE',
         )
       if (format === 'xlsx') {
         const book = new ExcelJS.Workbook()
@@ -123,7 +123,6 @@ export class Artifacts {
     } else bytes = Buffer.from(content)
     signal?.throwIfAborted()
     const filename = name.replace(/\.[a-z0-9]+$/i, '') + '.' + format
-    await workspace?.writeFile(filename, bytes, signal)
     return this.save(userId, sessionId, filename, bytes, signal, true)
   }
   async save(
@@ -142,7 +141,7 @@ export class Artifacts {
       Array.from(name).some((char) => char.charCodeAt(0) < 32 || char.charCodeAt(0) === 127) ||
       bytes.length > MAX_USER_BYTES
     )
-      throw new Error('文件名称无效或文件超过 50 MiB。')
+      throw new HarnessError('文件名称无效或文件超过 50 MiB。', 'FILE_TOO_LARGE')
     signal?.throwIfAborted()
     const extension = extname(name).slice(1).toLowerCase()
     const artifact: Artifact = {
@@ -163,7 +162,7 @@ export class Artifacts {
         )
         .get(userId) as { size: number }
       if (used.size + bytes.length > MAX_USER_BYTES)
-        throw new Error('文件空间已达上限，请联系管理员。')
+        throw new HarnessError('文件空间已达上限，请联系管理员。', 'FILE_QUOTA')
       this.store.addArtifact(userId, artifact, generated)
     } catch (error) {
       await unlink(this.path(artifact.id)).catch(() => {})
@@ -179,14 +178,18 @@ export class Artifacts {
     signal?: AbortSignal,
   ) {
     const file = this.store.artifact(userId, id)
-    if (file.sessionId !== sessionId) throw new Error('只能读取当前会话的文件。')
+    if (file.sessionId !== sessionId)
+      throw new HarnessError('只能读取当前会话的文件。', 'FILE_SESSION_ONLY')
     const data = await readFile(this.path(id))
     if (
       (file.format === 'docx' || file.format === 'xlsx') &&
       !this.store.generatedArtifact(userId, id)
     ) {
       if (!workspace)
-        throw new Error('外部生成的 Office 文件需要在会话沙箱中读取，请先配置沙箱服务。')
+        throw new HarnessError(
+          '外部生成的 Office 文件需要在会话沙箱中读取，请先配置沙箱服务。',
+          'FILE_SANDBOX_REQUIRED',
+        )
       return workspace.readOffice(data, file.format, signal)
     }
     let text: string
@@ -211,7 +214,8 @@ export class Artifacts {
       }
       text = collect(parsed)
     } else {
-      if (data.includes(0)) throw new Error('这是二进制文件，请使用沙箱工具处理或下载。')
+      if (data.includes(0))
+        throw new HarnessError('这是二进制文件，请使用沙箱工具处理或下载。', 'FILE_BINARY')
       text = new TextDecoder('utf-8', { fatal: true }).decode(data)
     }
     return text.length > 32000 ? text.slice(0, 32000) + '\n[内容已截断]' : text
@@ -230,15 +234,7 @@ export class Artifacts {
         output: contentOutput,
         execute: async (args, exec) =>
           JSON.stringify(
-            await this.create(
-              userId,
-              sessionId,
-              args.name,
-              args.format,
-              args.content,
-              exec.signal,
-              workspace,
-            ),
+            await this.create(userId, sessionId, args.name, args.format, args.content, exec.signal),
           ),
       }),
     )

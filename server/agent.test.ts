@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtemp, readFile, rm } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, chmod, stat } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve, sep } from 'node:path'
 import { once } from 'node:events'
@@ -10,6 +10,7 @@ import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { DEFAULT_MAX_TOKENS } from '@deepseek-ai/dsh-llm-deepseek'
 import { SessionId, type SessionEvent } from '@deepseek-ai/dsh-session'
 import { traceFromEvents } from './trace.ts'
+import { messagesFromEvents, toolInput, toolError } from './view.ts'
 import { TestModel, textChunks, toolChunks } from '../tests/support/model.ts'
 import { Store } from './store.ts'
 import { Agents } from './agent.ts'
@@ -20,11 +21,25 @@ test('existing SQLite sessions migrate without losing ownership and keep model s
   const old = new DatabaseSync(join(root, 'app.sqlite'))
   old.exec(`CREATE TABLE users(id TEXT PRIMARY KEY, subject TEXT UNIQUE NOT NULL, name TEXT NOT NULL);
     CREATE TABLE sessions(id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), title TEXT NOT NULL, created INTEGER NOT NULL);
+    CREATE TABLE artifacts(id TEXT PRIMARY KEY, session_id TEXT NOT NULL, name TEXT NOT NULL, format TEXT NOT NULL, size INTEGER NOT NULL);
+    INSERT INTO artifacts VALUES('unknown', 'session', 'unknown.docx', 'docx', 100);
     INSERT INTO users VALUES('user', 'existing-user', 'Test');
     INSERT INTO sessions VALUES('session', 'user', '已有会话', 1);`)
   old.close()
+  if (process.platform !== 'win32') {
+    await chmod(root, 0o777)
+    await chmod(join(root, 'app.sqlite'), 0o666)
+  }
   let store = new Store(root)
   try {
+    if (process.platform !== 'win32') {
+      assert.equal((await stat(root)).mode & 0o777, 0o700)
+      for (const name of ['app.sqlite', 'app.sqlite-wal', 'app.sqlite-shm'])
+        assert.equal((await stat(join(root, name))).mode & 0o777, 0o600)
+    }
+    assert.equal(store.generatedArtifact('user', 'unknown'), false)
+    assert.deepEqual({ ...store.user('existing-user', 'Changed') }, { id: 'user', name: 'Changed' })
+    store.db.exec('UPDATE artifacts SET generated=1; PRAGMA user_version=0;')
     assert.deepEqual(
       { ...store.session('user', 'session') },
       {
@@ -38,6 +53,11 @@ test('existing SQLite sessions migrate without losing ownership and keep model s
     assert.throws(() => store.session('other', 'session'), /没有找到/)
     store.close()
     store = new Store(root)
+    assert.equal(
+      store.generatedArtifact('user', 'unknown'),
+      false,
+      'revoke trust assigned by early builds',
+    )
     assert.equal(store.session('user', 'session').provider, 'qianwen')
     assert.equal(store.list('user')[0].title, '已有会话')
   } finally {
@@ -81,6 +101,41 @@ test('native DSH: scoped tools, persistent history, cancellation and long-runnin
       ),
     )
     assert.equal(view.artifacts[0].format, 'docx')
+    const history = await agents.events(first.id)
+    const interrupted = history.filter(
+      (event) => event.type !== 'turn/end' && event.type !== 'tool/result',
+    )
+    const start = history.find((event) => event.type === 'turn/start')!
+    const resumed = [
+      ...interrupted,
+      { ...start, seq: history.length + 1, data: { ...start.data, turn: 2 } },
+    ] as SessionEvent[]
+    const projected = messagesFromEvents(resumed, true).filter(
+      (message) => message.role === 'assistant',
+    )
+    assert.equal(projected[0].status, 'stopped')
+    assert.equal(projected[1].status, 'loading')
+    assert.equal(
+      traceFromEvents(resumed, true).find((row) => row.kind === 'tool')?.status,
+      'stopped',
+    )
+    const largeCall = history.map((event) =>
+      event.type === 'tool/call'
+        ? {
+            ...event,
+            data: {
+              ...event.data,
+              arguments: JSON.stringify({ content: 'x'.repeat(200000), name: '报告.docx' }),
+            },
+          }
+        : event,
+    )
+    const input = traceFromEvents(largeCall, false).find((row) => row.kind === 'tool')!.input!
+    assert.ok(input.length < 2000)
+    assert.equal(JSON.parse(input).name, '报告.docx')
+    assert.equal(toolInput(input), input)
+    assert.match(toolError('FILE_QUOTA'), /空间已达上限/)
+    assert.match(toolError('FILE_WORKSPACE_ONLY'), /当前会话工作区/)
     assert.match(await agents.files.read(alice.id, first.id, view.artifacts[0].id), /研究报告/)
     const exposed = model.requests[0].tools?.map((tool) => tool.name) ?? []
     assert.deepEqual(exposed.sort(), [
@@ -542,6 +597,7 @@ test('HTTP: authentication, ownership, request boundaries and file download', as
   }).init()
   const server = createApp(store, agents, {
     origin: 'http://trusted.test',
+    dist: root,
     authenticate: async (req) =>
       typeof req.headers['x-test-user'] === 'string'
         ? { subject: req.headers['x-test-user'], name: 'Test' }
@@ -553,6 +609,7 @@ test('HTTP: authentication, ownership, request boundaries and file download', as
   assert.ok(address && typeof address !== 'string')
   const base = `http://127.0.0.1:${address.port}`
   try {
+    assert.equal((await fetch(base + '/bad%XX')).status, 404)
     assert.equal((await fetch(base + '/api/me')).status, 401)
     assert.equal((await fetch(base + '/api/health')).headers.get('x-frame-options'), 'DENY')
     const headers = { 'x-test-user': 'alice', 'Content-Type': 'application/json' }

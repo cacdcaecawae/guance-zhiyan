@@ -56,9 +56,12 @@ export function MessageList({
                       {message.error}
                     </p>
                   )}
-                  {message.status === 'done' && message.parts.length === 0 && (
-                    <p className="text-foreground-subtle">本次未返回正文。</p>
-                  )}
+                  {message.status === 'done' &&
+                    !message.parts
+                      .slice(message.parts.findLastIndex((part) => part.type === 'tool') + 1)
+                      .some((part) => part.type === 'text' && part.text.trim()) && (
+                      <p className="text-foreground-subtle">本次未返回正文。</p>
+                    )}
                   {(message.status === 'error' || message.status === 'stopped') && (
                     <Button
                       variant="outline"

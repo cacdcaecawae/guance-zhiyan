@@ -17,7 +17,7 @@ import { connection, modelAdapter, modelCatalog, validateSelection } from './mod
 import { qianwenSearch } from './qianwen-search.ts'
 import { Store, HttpError } from './store.ts'
 import { Artifacts } from './artifacts.ts'
-import { messagesFromEvents, type LiveAttempt } from './view.ts'
+import { appendChunks, messagesFromEvents, type LiveAttempt } from './view.ts'
 import { traceFromEvents } from './trace.ts'
 import type { Sandboxes } from './sandboxes.ts'
 import { SessionSandbox, registerSandbox } from './sandbox-tools.ts'
@@ -34,6 +34,13 @@ interface ActiveRun {
   live?: LiveAttempt
   stopped: boolean
   done?: Promise<void>
+  projection?: {
+    eventCount: number
+    live?: LiveAttempt
+    chunks: number
+    messages: Session['messages']
+    trace: Session['trace']
+  }
 }
 export interface AgentOptions {
   adapter?: LlmAdapter // Test injection only; never selected by an environment variable.
@@ -109,12 +116,47 @@ export class Agents {
     if (this.failed.has(id)) throw new HttpError(500, '会话保存失败，请联系管理员检查存储。')
     const events = await this.events(id)
     const run = this.active.get(id)
+    const cached = run?.projection
+    let messages: Session['messages'], trace: Session['trace']
+    if (cached && cached.eventCount === events.length && cached.live === run?.live) {
+      messages = cached.messages
+      trace = cached.trace
+      const live = run?.live
+      const chunks =
+        live?.chunks
+          .slice(cached.chunks)
+          .filter((chunk) => chunk.type === 'text-delta' || chunk.type === 'reasoning-delta') ?? []
+      if (live && chunks.length) {
+        const answer = messages.at(-1)
+        if (answer?.role === 'assistant') {
+          const parts = answer.parts.map((part) => ({ ...part }))
+          appendChunks(parts, chunks, `live-${live.step}`, live.step)
+          messages = [...messages.slice(0, -1), { ...answer, parts }]
+        }
+        trace = trace.map((row) =>
+          row.id === `live-${live.turn}-${live.step}`
+            ? { ...row, text: row.text + chunks.map((chunk) => chunk.text).join('') }
+            : row,
+        )
+      }
+    } else {
+      messages = messagesFromEvents(events, !!run, run?.live)
+      trace = traceFromEvents(events, !!run, run?.live)
+    }
+    if (run)
+      run.projection = {
+        eventCount: events.length,
+        live: run.live,
+        chunks: run.live?.chunks.length ?? 0,
+        messages,
+        trace,
+      }
     return {
       ...summary,
-      messages: messagesFromEvents(events, !!run, run?.live),
+      messages,
       artifacts: this.store.artifacts(userId, id),
       running: !!run,
-      trace: traceFromEvents(events, !!run, run?.live),
+      trace,
     }
   }
   async start(userId: string, id: string, question: string, requested?: ModelSelection) {

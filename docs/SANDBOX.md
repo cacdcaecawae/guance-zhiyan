@@ -11,7 +11,7 @@ docker build -t guance-workspace:1 -f server/sandbox/Dockerfile .
 docker build -t guance-egress:1 -f server/sandbox/egress.Dockerfile .
 ```
 
-工作区镜像预装 Bash、Node.js、Python、python-docx、openpyxl、python-pptx、ReportLab 和中文字体。`/workspace` 属于 uid/gid 1000，Docker 新建卷继承目录权限。文件 worker 与 DSH 依赖位于只允许 root 修改的 `/opt/gczy`。
+工作区镜像预装 Bash、Node.js、Python、python-docx、openpyxl、python-pptx、ReportLab 和中文字体。Node 基础镜像固定 digest，文件 worker 的 npm 依赖通过独立 package-lock.json 与 npm ci 安装。`/workspace` 属于 uid/gid 1000，Docker 新建卷继承目录权限。文件 worker 与 DSH 依赖位于只允许 root 修改的 `/opt/gczy`。
 
 生成管理密钥，存放在被 Git 忽略的文件中（不要提交或输出密钥）：
 
@@ -45,10 +45,10 @@ SANDBOX_DENY_CIDRS=部署主机与管理入口的实际公网IPv4或CIDR，逗�
 - 同一会话复用沙箱；不同用户及不同会话各用独立卷 `gczy-<session UUID>`。数据库控制归属，模型不能选择卷或宿主机挂载。
 - 第一次调用才启动容器；默认最多 4 个容器。容量满时优先回收空闲容器，否则等待，等待可取消。普通聊天不受此容量限制。
 - 空闲约 5 分钟回收容器，活动实例定期续期。停止生成销毁当前会话容器及其后台进程；工作区卷与已导出附件保留。应用重启先清理数据库记录的旧实例，避免旧进程与新执行同时写入卷。
-- `/workspace` 持久化，`/tmp`、内存和进程不持久化。`create_file` 产生的文档同时进入工作区；Bash 生成的任意格式文件需调用 `export_file` 发布下载副本。修改工作区文件不会修改已下载附件。
+- `/workspace` 持久化，`/tmp`、内存和进程不持久化。`create_file` 独立生成下载附件，不启动沙箱、不自动复制到工作区；Bash 生成的任意格式文件需调用 `export_file` 发布下载副本。修改工作区文件不会修改已下载附件。
 - Bash 默认单次等待 120 秒，可通过工具 `timeoutMs` 指定；超时销毁该会话容器。命令输出保留最多 1 MiB 的尾部并明确标记截断；这不限制模型回答长度。需要完整大输出时写入工作区文件后导出。
 - 每个导出文件及每位用户已有下载附件沿用 50 MiB 限额；这不是工作区磁盘配额。
-- 任意导出的 Word/Excel 属于不可信压缩文件，`read_file` 在沙箱内用 Python 解析；未启用沙箱时明确拒绝解析。后端只直接解析自有生成器产生并在数据库标记的 Office 文件，避免高压缩文件突破容器内存配额。
+- 任意导出的 Word/Excel 属于不可信压缩文件，`read_file` 在沙箱内用 Python 解析；未启用沙箱时明确拒绝解析。后端只直接解析自有生成器产生并在数据库标记的 Office 文件，避免高压缩文件突破容器内存配额。早期本机版本的附件来源标记会在首次升级时清除，文件与会话保留；这些旧 Office 仍可下载，读取需沙箱。
 
 ## 部署边界
 

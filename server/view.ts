@@ -12,6 +12,16 @@ const textOf = (content: readonly ContentBlock[]) =>
 
 export function toolError(code?: string): string {
   const messages: Record<string, string> = {
+    FILE_INVALID_NAME: '文件名称或格式无效。',
+    FILE_INVALID_CONTENT: '文件内容为空或超过 200 KB。',
+    FILE_INVALID_TABLE:
+      '表格内容必须为二维 JSON 数组，最多 2000 行、50 列，单元格仅支持文本或数字。',
+    FILE_TOO_LARGE: '文件名称无效或文件超过 50 MiB。',
+    FILE_QUOTA: '文件空间已达上限，请联系管理员。',
+    FILE_SESSION_ONLY: '只能读取当前会话的文件。',
+    FILE_WORKSPACE_ONLY: '只能导出当前会话工作区内的文件。',
+    FILE_SANDBOX_REQUIRED: '外部生成的 Office 文件需要在会话沙箱中读取，请先配置沙箱服务。',
+    FILE_BINARY: '这是二进制文件，请使用沙箱工具处理或下载。',
     SANDBOX_UNAVAILABLE: '执行环境不可用，请检查沙箱服务后重试。',
     FS_NOT_FOUND: '工作区中没有找到该文件，请检查路径。',
     FS_PERMISSION_DENIED: '无法访问该文件，请使用当前会话工作区。',
@@ -26,7 +36,29 @@ export function toolError(code?: string): string {
   return messages[code ?? ''] ?? '工具执行失败，请检查参数、网络或服务配置。'
 }
 
-function appendChunks(parts: AnswerPart[], chunks: StreamChunk[], prefix: string, step: number) {
+export const toolText = (text: string) =>
+  text.length > 16000 ? text.slice(0, 16000) + '\n[内容已截断]' : text
+export function toolInput(input: string) {
+  if (input.length <= 2000) return input
+  const summary: Record<string, unknown> = { _truncated: true }
+  try {
+    const value = JSON.parse(input)
+    for (const key of ['command', 'file_path', 'path', 'url', 'name', 'id'])
+      if (typeof value?.[key] === 'string') summary[key] = value[key].slice(0, 160)
+    if (Array.isArray(value?.queries))
+      summary.queries = value.queries.slice(0, 3).map((item: unknown) => String(item).slice(0, 80))
+  } catch {
+    /* Invalid tool JSON is displayed as a bounded preview. */
+  }
+  return JSON.stringify({ ...summary, preview: input.slice(0, 400) })
+}
+
+export function appendChunks(
+  parts: AnswerPart[],
+  chunks: StreamChunk[],
+  prefix: string,
+  step: number,
+) {
   for (const chunk of chunks) {
     if (chunk.type !== 'text-delta' && chunk.type !== 'reasoning-delta') continue
     const id = `${prefix}-${chunk.index}`
@@ -81,7 +113,7 @@ export function messagesFromEvents(
         id: event.data.callId,
         type: 'tool',
         name: event.data.name,
-        input: event.data.arguments.slice(0, 2000),
+        input: toolInput(event.data.arguments),
         output: '',
         status: 'running',
       })
@@ -93,7 +125,7 @@ export function messagesFromEvents(
         part.status = event.data.message.isError ? 'error' : 'done'
         part.output = event.data.message.isError
           ? toolError(event.data.error?.code)
-          : textOf(event.data.message.content).slice(0, 16000)
+          : toolText(textOf(event.data.message.content))
       }
     } else if (answer && event.type === 'turn/end') {
       const reason = event.data.reason
@@ -127,7 +159,11 @@ export function messagesFromEvents(
     appendChunks(answer.parts, live.chunks, `live-${live.step}`, live.step)
   }
   for (const message of messages)
-    if (message.role === 'assistant' && message.status === 'loading' && !running) {
+    if (
+      message.role === 'assistant' &&
+      message.status === 'loading' &&
+      (!running || message !== answer)
+    ) {
       message.status = 'stopped'
       message.error = '上次生成已中断，可以重新提问。'
     }

@@ -6,6 +6,8 @@ import { Agents } from './agent.ts'
 import { modelCatalog, validateSelection } from './models.ts'
 import { MIME } from './artifacts.ts'
 import { authenticate as defaultAuthenticate, type Authenticate } from './auth.ts'
+import { sessionChanges, type SessionFrame } from '../src/services/session-stream.ts'
+import type { Session } from '../src/types/index.ts'
 
 async function body(request: IncomingMessage) {
   if (!request.headers['content-type']?.startsWith('application/json'))
@@ -47,7 +49,13 @@ export function createApp(
       if (!path.startsWith('/api/')) {
         if (request.method !== 'GET' || !options.dist) throw new HttpError(404, '页面不存在。')
         const root = resolve(options.dist)
-        const target = resolve(root, '.' + decodeURIComponent(path))
+        let decoded: string
+        try {
+          decoded = decodeURIComponent(path)
+        } catch {
+          throw new HttpError(404, '页面不存在。')
+        }
+        const target = resolve(root, '.' + decoded)
         if (!target.startsWith(root + sep) && target !== root)
           throw new HttpError(404, '页面不存在。')
         const mime: Record<string, string> = {
@@ -142,6 +150,7 @@ export function createApp(
         let dirty = true
         let writing = false
         let closed = false
+        let previous: Session | undefined
         let batch: ReturnType<typeof setTimeout> | undefined
         const send = async () => {
           if (writing || closed) return
@@ -150,7 +159,11 @@ export function createApp(
           try {
             const view = await agents.snapshot(user.id, id)
             if (!closed) {
-              if (!response.write(`data: ${JSON.stringify(view)}\n\n`))
+              const frame: SessionFrame = previous
+                ? { changes: sessionChanges(previous, view) }
+                : { snapshot: view }
+              previous = view
+              if (!response.write(`data: ${JSON.stringify(frame)}\n\n`))
                 await new Promise<void>((done) => {
                   const finish = () => {
                     response.off('drain', finish)

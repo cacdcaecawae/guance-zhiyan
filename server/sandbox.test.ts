@@ -13,10 +13,48 @@ import { Store } from './store.ts'
 import { Agents } from './agent.ts'
 import { Artifacts } from './artifacts.ts'
 import { Sandboxes, sandboxConfig } from './sandboxes.ts'
-import { SessionSandbox, RemoteShell } from './sandbox-tools.ts'
+import { SessionSandbox, RemoteShell, captureOutput } from './sandbox-tools.ts'
 import { TestModel, textChunks, toolChunks } from '../tests/support/model.ts'
 
 // Real OpenSandbox SDK over HTTP/SSE; the fixture never executes supplied shell commands.
+test('Bash capture handles a million output lines with bounded copying and correct byte offsets', (t) => {
+  const cap = 1024 * 1024
+  const capture = captureOutput(cap)
+  const concat = Buffer.concat,
+    copy = Buffer.prototype.copyWithin
+  let copied = 0
+  t.mock.method(Buffer, 'concat', (list: Uint8Array[], length?: number) => {
+    copied += length ?? list.reduce((size, part) => size + part.length, 0)
+    return concat(list, length)
+  })
+  t.mock.method(
+    Buffer.prototype,
+    'copyWithin',
+    function (this: Buffer, target: number, start: number, end: number) {
+      copied += end - start
+      return copy.call(this, target, start, end)
+    },
+  )
+  const started = performance.now()
+  let total = 0
+  for (let i = 1; i <= 1_000_000; i++) {
+    const line = `${i}\n`
+    total += Buffer.byteLength(line)
+    capture.append(line)
+  }
+  t.diagnostic(
+    `1,000,000 lines: ${(performance.now() - started).toFixed(1)} ms; compacted ${copied} bytes`,
+  )
+  assert.ok(copied < total * 2, 'buffer copying must stay linear in output size')
+  assert.equal(capture.output.truncated, true)
+  assert.equal(Buffer.byteLength(capture.output.text), cap)
+  assert.ok(capture.output.text.endsWith('999999\n1000000\n'))
+  assert.equal(capture.readFrom(0).nextOffset, total)
+  assert.equal(capture.readFrom(total).text, '')
+  capture.append('tail')
+  assert.equal(capture.readFrom(total).text, 'tail')
+})
+
 async function protocolFixture() {
   const creations: Record<string, unknown>[] = []
   const live = new Map<string, { volume: string; pending: ServerResponse[] }>()
@@ -24,7 +62,9 @@ async function protocolFixture() {
   const uploads = new Map<string, string>()
   const commandStarted = new Set<() => void>()
   const errors: unknown[] = []
-  const state: { failDeletes: number; officeWritten?: () => void } = { failDeletes: 0 }
+  const state: { failDeletes: number; officeWritten?: () => void; ready?: () => void } = {
+    failDeletes: 0,
+  }
   let origin = ''
   const server = createServer(async (request, response) => {
     const json = (value: unknown, status = 200) => {
@@ -81,7 +121,10 @@ async function protocolFixture() {
         const [, id, path] = endpoint
         const entry = live.get(id)!
         const files = volumes.get(entry.volume)!
-        if (path === '/ping') return json({ ok: true })
+        if (path === '/ping') {
+          state.ready?.()
+          return json({ ok: true })
+        }
         if (path === '/files/upload') {
           const form = await new Response(body, {
             headers: { 'content-type': request.headers['content-type']! },
@@ -191,6 +234,16 @@ test('DSH tools use isolated OpenSandbox SDK sessions, persist exports and kill 
     await agents.start(alice.id, a.id, 'hello')
     await agents.active.get(a.id)?.done
     assert.equal(fixture.creations.length, 0, 'ordinary chat is lazy')
+    const generatorOnly = store.create(alice.id)
+    let generating = 0
+    model.respond = () =>
+      ++generating === 1
+        ? toolChunks('create_file', { name: '离线生成', format: 'md', content: '# 独立文件工具' })
+        : textChunks('已生成')
+    await agents.start(alice.id, generatorOnly.id, 'generate without sandbox')
+    await agents.active.get(generatorOnly.id)?.done
+    assert.equal(store.artifacts(alice.id, generatorOnly.id).length, 1)
+    assert.equal(fixture.creations.length, 0, 'create_file must not request a sandbox')
     assert.ok(model.requests[0].tools?.some((tool) => tool.name === 'bash'))
     assert.ok(model.requests[0].tools?.some((tool) => tool.name === 'read'))
     let step = 0
@@ -249,6 +302,21 @@ test('DSH tools use isolated OpenSandbox SDK sessions, persist exports and kill 
     const exported = await session.exportFile('/workspace/report.txt', agents.files)
     assert.equal(await agents.files.read(alice.id, a.id, exported.id), 'sandbox report')
     assert.equal(fixture.creations.length, 3, 'new container remounts the persisted workspace')
+    const oldEntry = manager.entries.get(a.id)!
+    const oldRemote = await oldEntry.remote
+    const delayed = Promise.withResolvers<never>()
+    const oldRun = oldRemote.commands.run.bind(oldRemote.commands)
+    oldRemote.commands.run = () => delayed.promise
+    const pendingCommand = session.command(['bash', '-c', 'late failure'], {}, {})
+    const failedCommand = assert.rejects(pendingCommand, /late stream failure/)
+    await new Promise((done) => setImmediate(done))
+    await session.stop()
+    await session.writeFile('new.txt', Buffer.from('new instance'))
+    const newRemote = await manager.entries.get(a.id)!.remote
+    delayed.reject(new Error('late stream failure'))
+    await failedCommand
+    assert.ok(fixture.live.has(newRemote.id), 'late failure must not kill the replacement instance')
+    oldRemote.commands.run = oldRun
     const started = Promise.withResolvers<void>()
     fixture.commandStarted.add(started.resolve)
     model.respond = () => toolChunks('bash', { command: 'wait-for-stop', description: 'wait' })
@@ -328,6 +396,37 @@ test('sandbox capacity waits, queued cancellation creates nothing, idle eviction
       'fixture office\n',
     )
     await competing
+    await manager.stop(user.id, a.id)
+    store.db.exec(
+      "CREATE TRIGGER fail_sandbox_insert BEFORE INSERT ON sandboxes BEGIN SELECT RAISE(FAIL, 'fixture full disk'); END;",
+    )
+    fixture.state.failDeletes = 1
+    await assert.rejects(
+      manager.use(user.id, a.id, undefined, async () =>
+        assert.fail('must not execute after persistence failure'),
+      ),
+      /沙箱服务不可用/,
+    )
+    assert.equal(manager.entries.size, 1, 'failed cleanup retains its capacity slot')
+    assert.equal(manager.entries.get(a.id)?.fenced, true)
+    assert.equal(fixture.live.size, 1)
+    await manager.stop(user.id, a.id)
+    assert.equal(fixture.live.size, 0)
+    // Close can already be waiting on creation when INSERT and the first DELETE both fail.
+    fixture.state.failDeletes = 1
+    let closing: Promise<void> | undefined
+    fixture.state.ready = () => {
+      fixture.state.ready = undefined
+      closing = manager.close()
+    }
+    await assert.rejects(
+      manager.use(user.id, a.id, undefined, async () => {}),
+      /沙箱服务不可用/,
+    )
+    await closing
+    assert.equal(fixture.live.size, 0, 'close retries a retained instance after creation rejects')
+    assert.equal(manager.entries.size, 0)
+    store.db.exec('DROP TRIGGER fail_sandbox_insert')
     assert.deepEqual(fixture.errors, [])
   } finally {
     await manager.close()

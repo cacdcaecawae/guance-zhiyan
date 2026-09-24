@@ -1,5 +1,6 @@
 import { useSyncExternalStore } from 'react'
 import type { Artifact, ModelCatalog, ModelSelection, Session, SessionSummary, User } from '@/types'
+import { applySessionFrame, type SessionFrame } from './session-stream'
 
 interface State {
   user: User | null
@@ -97,7 +98,7 @@ export function watchSession(id?: string) {
         source.onmessage = (event) => {
           if (version !== generation) return
           try {
-            apply(JSON.parse(event.data) as Session)
+            apply(applySessionFrame(state.current, JSON.parse(event.data) as SessionFrame))
           } catch {
             update({ connectionError: '无法读取执行状态，请重新连接。' })
             source?.close()

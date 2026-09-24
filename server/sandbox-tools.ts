@@ -22,6 +22,7 @@ import * as BashTool from '@deepseek-ai/dsh-tool-bash'
 import * as FileTools from '@deepseek-ai/dsh-tool-fs'
 import * as ShellEnv from '@deepseek-ai/dsh-shell-env'
 import { defineTool } from '@deepseek-ai/dsh-tools'
+import { HarnessError } from '@deepseek-ai/dsh-llm'
 import type { Sandbox, ExecutionHandlers, RunCommandOpts } from '@alibaba-group/opensandbox'
 import { Sandboxes, sandboxError } from './sandboxes.ts'
 import { Artifacts } from './artifacts.ts'
@@ -32,6 +33,48 @@ const cwd = (value?: string) =>
 
 // execd emits lines without their terminators (including the final partial line).
 const outputLine = (text: string) => (text.endsWith('\n') ? text : text + '\n')
+
+/** Compact once per cap bytes, not once per line. Reads retain absolute byte offsets. */
+export function captureOutput(cap: number) {
+  const bytes = Buffer.alloc(cap * 2)
+  let length = 0,
+    total = 0,
+    cursor = 0
+  return {
+    append(text: string) {
+      const next = Buffer.from(text)
+      total += next.length
+      if (next.length >= cap) {
+        next.copy(bytes, 0, next.length - cap)
+        length = cap
+      } else {
+        if (length + next.length > bytes.length) {
+          bytes.copyWithin(0, length - cap, length)
+          length = cap
+        }
+        next.copy(bytes, length)
+        length += next.length
+      }
+    },
+    get output() {
+      return { text: this.readFrom(0).text, truncated: total > cap }
+    },
+    readFrom(offset: number) {
+      const size = Math.min(length, cap),
+        base = total - size
+      return {
+        text: bytes.subarray(length - size + Math.max(0, offset - base), length).toString(),
+        nextOffset: total,
+        lossy: offset < base,
+      }
+    },
+    read() {
+      const result = this.readFrom(cursor)
+      cursor = result.nextOffset
+      return result
+    },
+  }
+}
 
 export class SessionSandbox {
   mutation = Promise.resolve()
@@ -67,9 +110,10 @@ export class SessionSandbox {
     signal?: AbortSignal,
   ) {
     return this.use(signal, async (remote) => {
+      const entry = this.manager.entries.get(this.sessionId)!
       let stopping: Promise<void> | undefined
       const stop = () => {
-        stopping ??= this.stop()
+        stopping ??= this.manager.retire(this.sessionId, entry)
         void stopping.catch(() => {})
       }
       signal?.addEventListener('abort', stop, { once: true })
@@ -86,7 +130,7 @@ export class SessionSandbox {
         return result
       } catch (e) {
         if (stopping) await stopping
-        else await this.stop()
+        else await this.manager.retire(this.sessionId, entry)
         if (signal?.aborted) throw signal.reason
         throw e
       } finally {
@@ -150,7 +194,7 @@ export class SessionSandbox {
   async exportFile(path: string, files: Artifacts, signal?: AbortSignal) {
     const target = await this.rpc<FsTarget>('resolve', [path, { cwd: '/workspace' }], signal)
     if (!target.displayPath.startsWith('/workspace/'))
-      throw new Error('只能导出当前会话工作区内的文件。')
+      throw new HarnessError('只能导出当前会话工作区内的文件。', 'FILE_WORKSPACE_ONLY')
     const bytes = await this.rpc<string>('readBytes', [target, null, 50 * 1024 * 1024], signal)
     return files.save(
       this.userId,
@@ -327,37 +371,8 @@ export class RemoteShell extends ShellExecutor {
     spec.signal?.addEventListener('abort', onAbort, { once: true })
     const timer =
       spec.onExpiry === 'kill' ? setTimeout(() => cancel('timedOut'), spec.timeoutMs) : undefined
-    const capture = (cap: number) => {
-      let bytes = Buffer.alloc(0),
-        total = 0,
-        cursor = 0
-      return {
-        append(text: string) {
-          const next = Buffer.from(text)
-          total += next.length
-          const all = Buffer.concat([bytes, next])
-          bytes = all.subarray(Math.max(0, all.length - cap))
-        },
-        get output() {
-          return { text: bytes.toString(), truncated: total > bytes.length }
-        },
-        readFrom(offset: number) {
-          const base = total - bytes.length
-          return {
-            text: bytes.subarray(Math.max(0, offset - base)).toString(),
-            nextOffset: total,
-            lossy: offset < base,
-          }
-        },
-        read() {
-          const read = this.readFrom(cursor)
-          cursor = read.nextOffset
-          return read
-        },
-      }
-    }
-    const stdout = capture(spec.stdoutMaxBytes),
-      stderr = capture(1024 * 1024)
+    const stdout = captureOutput(spec.stdoutMaxBytes),
+      stderr = captureOutput(1024 * 1024)
     const settled = Promise.withResolvers<void>()
     const process: ShellExecution = {
       status: 'running',

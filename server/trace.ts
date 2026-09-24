@@ -2,7 +2,7 @@ import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import { assembleAssistantStream, type ContentBlock } from '@deepseek-ai/dsh-llm'
 import type { TraceEntry } from '../src/types/index.ts'
 import type { LiveAttempt } from './view.ts'
-import { toolError } from './view.ts'
+import { toolError, toolInput, toolText } from './view.ts'
 
 const contentText = (content: readonly ContentBlock[]) =>
   content
@@ -17,6 +17,19 @@ export function traceFromEvents(
   const rows: TraceEntry[] = []
   const users = new Set<string>()
   const attempts = new Set<string>()
+  const explicitUsers = new Set(
+    events.flatMap((event) => (event.type === 'user/message' ? [event.data.id] : [])),
+  )
+  const starts = new Map<string, number>()
+  const finished = new Set<string>()
+  for (const event of events) {
+    if (event.type === 'step/start') starts.set(`${event.data.turn}-${event.data.step}`, event.time)
+    if (event.type === 'assistant/message' || event.type === 'assistant/attempt')
+      finished.add(`${event.data.turn}-${event.data.step}`)
+  }
+  const tools = new Map<string, TraceEntry>()
+  const models = new Map<number, TraceEntry>()
+  const pending = new Map<number, TraceEntry[]>()
   let turn = 0
   for (const event of events) {
     if (event.type === 'turn/start') turn = event.data.turn
@@ -35,11 +48,7 @@ export function traceFromEvents(
     } else if (event.type === 'user/message' || event.type === 'agent/inbox/spliced') {
       const messages = event.type === 'user/message' ? [event.data] : event.data.inserted
       for (const message of messages) {
-        if (
-          event.type === 'agent/inbox/spliced' &&
-          events.some((item) => item.type === 'user/message' && item.data.id === message.id)
-        )
-          continue
+        if (event.type === 'agent/inbox/spliced' && explicitUsers.has(message.id)) continue
         if (users.has(message.id)) continue
         users.add(message.id)
         rows.push({
@@ -53,13 +62,7 @@ export function traceFromEvents(
       }
     } else if (event.type === 'assistant/message' || event.type === 'assistant/attempt') {
       if (event.type === 'assistant/attempt') attempts.add(`event-${event.seq}`)
-      const start = events.find(
-        (item) =>
-          item.type === 'step/start' &&
-          item.data.turn === event.data.turn &&
-          item.data.step === event.data.step,
-      )
-      rows.push({
+      const row: TraceEntry = {
         id: `event-${event.seq}`,
         turn: event.data.turn,
         step: event.data.step,
@@ -70,7 +73,7 @@ export function traceFromEvents(
             ? event.data.message.content
             : assembleAssistantStream(event.data.stream).interruptedBlocks(),
         ),
-        time: start?.time ?? event.time,
+        time: starts.get(`${event.data.turn}-${event.data.step}`) ?? event.time,
         end: event.time,
         status:
           event.type === 'assistant/attempt'
@@ -78,61 +81,53 @@ export function traceFromEvents(
             : event.data.interrupted
               ? 'stopped'
               : 'done',
-      })
+      }
+      rows.push(row)
+      models.set(row.turn, row)
     } else if (event.type === 'tool/call') {
-      rows.push({
+      const row: TraceEntry = {
         id: event.data.callId,
         turn: event.data.turn,
         step: event.data.step,
         kind: 'tool',
         label: event.data.name,
-        input: event.data.arguments,
+        input: toolInput(event.data.arguments),
         text: '',
         time: event.time,
         status: 'running',
-      })
+      }
+      rows.push(row)
+      tools.set(row.id, row)
+      const inTurn = pending.get(row.turn) ?? []
+      inTurn.push(row)
+      pending.set(row.turn, inTurn)
     } else if (event.type === 'tool/result') {
-      const row = rows.find((item) => item.id === event.data.message.toolCallId)
+      const row = tools.get(event.data.message.toolCallId)
       if (row) {
         row.end = event.time
         row.status = event.data.message.isError ? 'error' : 'done'
         row.text = event.data.message.isError
           ? toolError(event.data.error?.code)
-          : contentText(event.data.message.content)
+          : toolText(contentText(event.data.message.content))
       }
     } else if (event.type === 'turn/end') {
-      const lastModel = rows.findLast(
-        (row) => row.turn === event.data.turn && row.kind === 'assistant',
-      )
+      const lastModel = models.get(event.data.turn)
       if (
         lastModel &&
         attempts.has(lastModel.id) &&
         (event.data.reason.kind === 'aborted' || event.data.reason.kind === 'interrupted')
       )
         lastModel.status = 'stopped'
-      for (const row of rows)
-        if (row.turn === event.data.turn && row.status === 'running') {
+      for (const row of pending.get(event.data.turn) ?? [])
+        if (row.status === 'running') {
           row.end = event.time
           row.status = 'stopped'
         }
     }
   }
-  if (
-    live &&
-    !events.some(
-      (event) =>
-        (event.type === 'assistant/message' || event.type === 'assistant/attempt') &&
-        event.data.turn === live.turn &&
-        event.data.step === live.step,
-    )
-  ) {
-    const start = events.find(
-      (event) =>
-        event.type === 'step/start' &&
-        event.data.turn === live.turn &&
-        event.data.step === live.step,
-    )
-    if (start)
+  if (live && !finished.has(`${live.turn}-${live.step}`)) {
+    const start = starts.get(`${live.turn}-${live.step}`)
+    if (start !== undefined)
       rows.push({
         id: `live-${live.turn}-${live.step}`,
         turn: live.turn,
@@ -144,10 +139,11 @@ export function traceFromEvents(
             chunk.type === 'text-delta' || chunk.type === 'reasoning-delta' ? [chunk.text] : [],
           )
           .join(''),
-        time: start.time,
+        time: start,
         status: running ? 'running' : 'stopped',
       })
   }
-  if (!running) for (const row of rows) if (row.status === 'running') row.status = 'stopped'
+  for (const row of rows)
+    if (row.status === 'running' && (!running || row.turn !== turn)) row.status = 'stopped'
   return rows
 }

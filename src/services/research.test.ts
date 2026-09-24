@@ -53,7 +53,9 @@ it('会话切换丢弃过时读取；HTTP 确认不覆盖较新的流式状态',
     const post = askQuestion('new', '问题')
     act(() => {
       source.onmessage?.(
-        new MessageEvent('message', { data: JSON.stringify(session('new', '最新回答')) }),
+        new MessageEvent('message', {
+          data: JSON.stringify({ snapshot: session('new', '最新回答') }),
+        }),
       )
     })
     await act(async () => {

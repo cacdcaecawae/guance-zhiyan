@@ -1,4 +1,4 @@
-FROM node:24-bookworm-slim
+FROM node:24-bookworm-slim@sha256:0e0ff40c39bc087845bfb27465a0df4ea419520094bc35842ff83dd8cbe6f9b6
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 python3-venv fonts-noto-cjk ca-certificates \
     && rm -rf /var/lib/apt/lists/* \
@@ -7,7 +7,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && mkdir -p /opt/gczy /workspace \
     && chown 1000:1000 /workspace
 WORKDIR /opt/gczy
-RUN npm install --omit=dev --save-exact @deepseek-ai/cordis@4.0.4 @deepseek-ai/dsh-fs-local@0.1.7-rc.1
+COPY server/sandbox/package.json server/sandbox/package-lock.json ./
+RUN npm ci --omit=dev --ignore-scripts
 COPY server/sandbox/fs-worker.mjs /opt/gczy/fs-worker.mjs
 ENV PATH="/opt/venv/bin:${PATH}"
 WORKDIR /workspace
