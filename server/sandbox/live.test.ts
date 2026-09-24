@@ -49,7 +49,7 @@ test(
       return text
     }
     try {
-      assert.equal(await run(first, 'id -u'), '1000\n')
+      assert.equal((await run(first, 'id -u')).trim(), '1000')
       await run(
         first,
         'test "$(cat /sys/fs/cgroup/memory.max)" != max; test "$(cut -d" " -f1 /sys/fs/cgroup/cpu.max)" != max; test "$(cat /sys/fs/cgroup/pids.max)" = 256',
@@ -102,7 +102,7 @@ PY`,
         first,
         'before=$(wc -c < ticks); sleep 1; after=$(wc -c < ticks); test "$before" = "$after"',
       )
-      assert.equal(await run(second, 'id -u'), '1000\n')
+      assert.equal((await run(second, 'id -u')).trim(), '1000')
       const started = Promise.withResolvers<void>()
       const abort = new AbortController()
       const running = first.command(
