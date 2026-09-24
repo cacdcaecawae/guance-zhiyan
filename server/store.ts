@@ -36,6 +36,17 @@ export class Store {
         ALTER TABLE sessions ADD COLUMN model TEXT NOT NULL DEFAULT 'deepseek-flash';
         COMMIT;`)
     }
+    if (
+      !this.db
+        .prepare('PRAGMA table_info(artifacts)')
+        .all()
+        .some((column) => column.name === 'generated')
+    ) {
+      // Existing files predate arbitrary exports and were made by our own generators.
+      this.db.exec(
+        'BEGIN; ALTER TABLE artifacts ADD COLUMN generated INTEGER NOT NULL DEFAULT 0; UPDATE artifacts SET generated=1; COMMIT;',
+      )
+    }
   }
   user(subject: string, name: string): User {
     this.db.prepare('INSERT OR IGNORE INTO users VALUES(?, ?, ?)').run(randomUUID(), subject, name)
@@ -91,11 +102,24 @@ export class Store {
     if (!row) throw new HttpError(404, '没有找到文件。')
     return row as unknown as Artifact
   }
-  addArtifact(userId: string, artifact: Artifact) {
+  generatedArtifact(userId: string, id: string) {
+    this.artifact(userId, id)
+    return this.db.prepare('SELECT generated FROM artifacts WHERE id=?').get(id)?.generated === 1
+  }
+  addArtifact(userId: string, artifact: Artifact, generated = false) {
     this.session(userId, artifact.sessionId)
     this.db
-      .prepare('INSERT INTO artifacts VALUES(?, ?, ?, ?, ?)')
-      .run(artifact.id, artifact.sessionId, artifact.name, artifact.format, artifact.size)
+      .prepare(
+        'INSERT INTO artifacts(id, session_id, name, format, size, generated) VALUES(?, ?, ?, ?, ?, ?)',
+      )
+      .run(
+        artifact.id,
+        artifact.sessionId,
+        artifact.name,
+        artifact.format,
+        artifact.size,
+        generated ? 1 : 0,
+      )
   }
   close() {
     this.db.close()

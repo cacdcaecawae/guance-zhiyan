@@ -156,6 +156,49 @@ export class SessionSandbox {
       signal,
     )
   }
+  async readOffice(data: Uint8Array, format: 'docx' | 'xlsx', signal?: AbortSignal) {
+    const path = `/tmp/gczy-office-${randomUUID()}.${format}`
+    await this.rpc('writeBytes', [path, Buffer.from(data).toString('base64')], signal)
+    let output = ''
+    const code = `import sys, itertools
+if sys.argv[2] == 'docx':
+    from docx import Document
+    lines = (p.text for p in Document(sys.argv[1]).paragraphs)
+else:
+    from openpyxl import load_workbook
+    book = load_workbook(sys.argv[1], read_only=True, data_only=True)
+    lines = ('\\t'.join(str(c) if c is not None else '' for c in row) for row in book.active.iter_rows(values_only=True))
+remaining = 32000
+for line in lines:
+    text = (line + '\\n')[:remaining]
+    sys.stdout.write(text)
+    remaining -= len(text)
+    if remaining <= 0:
+        sys.stdout.write('\\n[内容已截断]')
+        break
+`
+    try {
+      const result = await this.command(
+        ['python3', '-c', code, path, format],
+        { workingDirectory: '/workspace' },
+        {
+          skipAccumulation: true,
+          onStdout: (message) => {
+            output = (output + message.text).slice(0, 32100)
+          },
+        },
+        signal,
+      )
+      if (result.exitCode !== 0)
+        throw new Error('沙箱无法读取此 Office 文件，请检查格式或文件内容。')
+      return output
+    } finally {
+      // Cleanup through the current lease only; never recreate a stopped container for a temp file.
+      const entry = this.manager.entries.get(this.sessionId)
+      if (entry && !entry.fenced)
+        await (await entry.remote).files.deleteFiles([path]).catch(() => {})
+    }
+  }
 }
 
 class RemoteFileSystem extends FileSystem {

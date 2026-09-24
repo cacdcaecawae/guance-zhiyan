@@ -91,7 +91,7 @@ PY`,
         "python3 - <<'PY'\nfrom docx import Document\nd = Document(); d.add_paragraph('Real sandbox report'); d.save('/workspace/report.docx')\nPY",
       )
       const word = await first.exportFile('report.docx', files)
-      assert.match(await files.read(alice.id, a.id, word.id), /Real sandbox report/)
+      assert.match(await files.read(alice.id, a.id, word.id, first), /Real sandbox report/)
       await run(
         first,
         "setsid bash -c 'while true; do echo tick >> /workspace/ticks; sleep 0.1; done' >/dev/null 2>&1 &\nwhile [ ! -s ticks ]; do sleep 0.05; done",
@@ -123,7 +123,16 @@ PY`,
       await manager.close()
       store.close()
       // Only remove volumes minted by this test; normal user volumes are retained.
-      await promisify(execFile)('docker', ['volume', 'rm', `gczy-${a.id}`, `gczy-${b.id}`])
+      const { stdout: listed } = await promisify(execFile)('docker', [
+        'volume',
+        'ls',
+        '--format',
+        '{{.Name}}',
+      ])
+      const volumes = [`gczy-${a.id}`, `gczy-${b.id}`].filter((name) =>
+        listed.split('\n').includes(name),
+      )
+      if (volumes.length) await promisify(execFile)('docker', ['volume', 'rm', ...volumes])
       assert.ok(
         resolve(root).startsWith(resolve(tmpdir()) + sep) && root.includes('gczy-live-sandbox-'),
       )

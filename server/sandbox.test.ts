@@ -8,8 +8,10 @@ import { join, resolve, sep } from 'node:path'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { Context } from '@deepseek-ai/cordis'
+import JSZip from 'jszip'
 import { Store } from './store.ts'
 import { Agents } from './agent.ts'
+import { Artifacts } from './artifacts.ts'
 import { Sandboxes, sandboxConfig } from './sandboxes.ts'
 import { SessionSandbox, RemoteShell } from './sandbox-tools.ts'
 import { TestModel, textChunks, toolChunks } from '../tests/support/model.ts'
@@ -209,6 +211,12 @@ test('DSH tools use isolated OpenSandbox SDK sessions, persist exports and kill 
     assert.equal(fixture.creations.length, 2)
     assert.notEqual(fixture.creations[0].volumes, fixture.creations[1].volumes)
     const session = new SessionSandbox(manager, alice.id, a.id)
+    const zip = new JSZip()
+    zip.file('word/document.xml', 'x'.repeat(8 * 1024 * 1024))
+    const compressed = await zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' })
+    assert.ok(compressed.length < 50000)
+    const external = await new Artifacts(store).save(alice.id, a.id, 'compressed.docx', compressed)
+    await assert.rejects(agents.files.read(alice.id, a.id, external.id), /需要在会话沙箱中读取/)
     const ctx = new Context()
     const shell = new RemoteShell(ctx, session)
     const process = await shell.execute(

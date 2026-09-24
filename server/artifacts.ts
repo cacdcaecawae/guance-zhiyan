@@ -19,7 +19,10 @@ export const MIME: Record<string, string> = {
 const MAX_CONTENT = 200_000
 const MAX_USER_BYTES = 50 * 1024 * 1024
 type GeneratedFormat = 'md' | 'docx' | 'xlsx' | 'csv'
-type Workspace = { writeFile(name: string, data: Uint8Array, signal?: AbortSignal): Promise<void> }
+type Workspace = {
+  writeFile(name: string, data: Uint8Array, signal?: AbortSignal): Promise<void>
+  readOffice(data: Uint8Array, format: 'docx' | 'xlsx', signal?: AbortSignal): Promise<string>
+}
 const contentOutput = {
   schema: { type: 'string' as const },
   render: (_args: unknown, text: string) => [{ type: 'text' as const, text }],
@@ -121,9 +124,16 @@ export class Artifacts {
     signal?.throwIfAborted()
     const filename = name.replace(/\.[a-z0-9]+$/i, '') + '.' + format
     await workspace?.writeFile(filename, bytes, signal)
-    return this.save(userId, sessionId, filename, bytes, signal)
+    return this.save(userId, sessionId, filename, bytes, signal, true)
   }
-  async save(userId: string, sessionId: string, name: string, bytes: Buffer, signal?: AbortSignal) {
+  async save(
+    userId: string,
+    sessionId: string,
+    name: string,
+    bytes: Buffer,
+    signal?: AbortSignal,
+    generated = false,
+  ) {
     this.store.session(userId, sessionId)
     if (
       !name.trim() ||
@@ -154,17 +164,31 @@ export class Artifacts {
         .get(userId) as { size: number }
       if (used.size + bytes.length > MAX_USER_BYTES)
         throw new Error('文件空间已达上限，请联系管理员。')
-      this.store.addArtifact(userId, artifact)
+      this.store.addArtifact(userId, artifact, generated)
     } catch (error) {
       await unlink(this.path(artifact.id)).catch(() => {})
       throw error
     }
     return artifact
   }
-  async read(userId: string, sessionId: string, id: string) {
+  async read(
+    userId: string,
+    sessionId: string,
+    id: string,
+    workspace?: Workspace,
+    signal?: AbortSignal,
+  ) {
     const file = this.store.artifact(userId, id)
     if (file.sessionId !== sessionId) throw new Error('只能读取当前会话的文件。')
     const data = await readFile(this.path(id))
+    if (
+      (file.format === 'docx' || file.format === 'xlsx') &&
+      !this.store.generatedArtifact(userId, id)
+    ) {
+      if (!workspace)
+        throw new Error('外部生成的 Office 文件需要在会话沙箱中读取，请先配置沙箱服务。')
+      return workspace.readOffice(data, file.format, signal)
+    }
     let text: string
     if (file.format === 'xlsx') {
       const book = new ExcelJS.Workbook()
@@ -233,7 +257,7 @@ export class Artifacts {
         description: '读取当前会话生成文件的文本，最多返回 32000 字符。',
         parameters: { id: { type: 'string', required: true } },
         output: contentOutput,
-        execute: (args) => this.read(userId, sessionId, args.id),
+        execute: (args, exec) => this.read(userId, sessionId, args.id, workspace, exec.signal),
       }),
     )
   }

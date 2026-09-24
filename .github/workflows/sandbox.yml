@@ -45,5 +45,10 @@ jobs:
           done
           exit 1
       - run: pnpm test:sandbox
+      - name: Sandbox service diagnostics
+        if: failure()
+        run: |
+          docker ps -a --format '{{.Names}} {{.Status}} {{.Ports}}'
+          docker compose -f server/sandbox/compose.yaml logs --no-color --tail 80
       - if: always()
         run: docker compose -f server/sandbox/compose.yaml down
