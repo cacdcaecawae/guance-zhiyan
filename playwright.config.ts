@@ -14,10 +14,17 @@ export default defineConfig({
     screenshot: 'only-on-failure',
   },
   projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],
-  webServer: {
-    command: `pnpm dev --port ${PORT} --strictPort`,
-    url: `http://localhost:${PORT}`,
-    // 不复用已占用端口上的服务器，避免测到 vite preview（默认同为 4173）或其他 worktree 的代码
-    reuseExistingServer: false,
-  },
+  webServer: [
+    {
+      command: 'node tests/support/server.ts',
+      url: 'http://127.0.0.1:3001/api/health',
+      reuseExistingServer: false,
+    },
+    {
+      command: `pnpm dev --port ${PORT} --strictPort`,
+      url: `http://localhost:${PORT}`,
+      // 不复用已占用端口上的服务器，避免测到 vite preview（默认同为 4173）或其他 worktree 的代码
+      reuseExistingServer: false,
+    },
+  ],
 })

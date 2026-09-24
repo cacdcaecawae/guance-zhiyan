@@ -26,3 +26,9 @@ dist-ssr
 # Playwright
 playwright-report
 test-results
+
+# Server secrets and private state
+.env
+.env.*
+!.env.example
+server/data/
