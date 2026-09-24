@@ -43,7 +43,7 @@ export function AppShell() {
             </SheetContent>
           </Sheet>
         )}
-        <main className="flex min-w-0 flex-1 flex-col">
+        <main className="flex min-w-0 flex-1 flex-col bg-surface">
           <Outlet />
         </main>
       </div>
@@ -55,7 +55,7 @@ export function AppShell() {
 export function TopBar({ title, children }: { title: string; children?: ReactNode }) {
   const { toggle, expanded } = useContext(ShellContext)
   return (
-    <header className="flex h-12 shrink-0 items-center gap-2 border-b border-border bg-background px-3">
+    <header className="flex h-12 shrink-0 items-center gap-2 border-b border-border px-3">
       <Button
         variant="ghost"
         size="icon"

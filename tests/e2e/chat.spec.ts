@@ -37,7 +37,6 @@ test('流式部分回答、停止、失败后重新提问', async ({ page }) => 
   await box.fill('持续生成')
   await box.press('Enter')
   await expect(page.getByRole('article', { name: '回答' })).toContainText('已经生成的部分内容')
-  await expect(page.getByRole('combobox', { name: '供应商' })).toBeDisabled()
   await expect(page.getByRole('combobox', { name: '模型' })).toBeDisabled()
   await page.getByRole('button', { name: '停止生成' }).click()
   await expect(page.getByRole('status')).toContainText('已停止')
@@ -50,30 +49,33 @@ test('流式部分回答、停止、失败后重新提问', async ({ page }) => 
   await expect(page.getByRole('alert')).toHaveCount(2)
 })
 
-test('供应商和 DeepSeek 模型可切换，刷新保留，沿用同一会话历史', async ({ page }) => {
+test('同一列表按平台切换 DeepSeek 模型，刷新保留，沿用同一会话历史', async ({ page }) => {
   await page.goto('/workspace')
-  const provider = page.getByRole('combobox', { name: '供应商' })
   const model = page.getByRole('combobox', { name: '模型' })
-  await expect(model).toHaveValue('deepseek-flash')
-  await provider.selectOption('qianwen')
-  await expect(model).toHaveValue('deepseek-v4.1-flash')
-  await model.selectOption('deepseek-v4-pro-0813')
+  // 两个平台有同名模型，选项名只含模型名，需按平台分组定位
+  const pick = async (platform: string, name: string) => {
+    await model.click()
+    await page
+      .getByRole('group', { name: platform })
+      .getByRole('option', { name, exact: true })
+      .click()
+  }
+  await expect(model).toContainText('DeepSeek V4.1 Flash · DeepSeek 官方')
+  await pick('千问 AI 平台', 'DeepSeek V4 Pro（0813）')
+  await expect(model).toContainText('DeepSeek V4 Pro（0813） · 千问 AI 平台')
   await page.getByRole('textbox', { name: '研究问题' }).fill('你好')
   await page.getByRole('button', { name: '发送' }).click()
   await expect(page.getByRole('heading', { name: '测试回答' })).toBeVisible()
   const url = page.url()
   await page.reload()
-  await expect(provider).toHaveValue('qianwen')
-  await expect(model).toHaveValue('deepseek-v4-pro-0813')
-  await provider.selectOption('deepseek-official')
-  await model.selectOption('deepseek-v4-pro')
+  await expect(model).toContainText('DeepSeek V4 Pro（0813） · 千问 AI 平台')
+  await pick('DeepSeek 官方', 'DeepSeek V4 Pro')
   await page.getByRole('textbox', { name: '研究问题' }).fill('继续')
   await page.getByRole('button', { name: '发送' }).click()
   await expect(page.getByRole('article', { name: '回答' })).toHaveCount(2)
   await expect(page).toHaveURL(url)
   await page.reload()
-  await expect(provider).toHaveValue('deepseek-official')
-  await expect(model).toHaveValue('deepseek-v4-pro')
+  await expect(model).toContainText('DeepSeek V4 Pro · DeepSeek 官方')
 })
 
 test('真实文件工具、执行追踪和 Word 下载；其他用户不能访问', async ({ page, browser }) => {

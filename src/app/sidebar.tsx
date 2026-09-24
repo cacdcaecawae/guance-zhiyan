@@ -4,6 +4,7 @@ import { useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/cn'
 import { createSession, useResearch } from '@/services/research'
+import { Logo } from './logo'
 import { ThemeToggle } from './theme-toggle'
 
 const NAV = [
@@ -40,9 +41,12 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
 
   return (
     <nav aria-label="主导航" className="flex h-full min-h-0 flex-col gap-4 p-3">
-      <div className="px-2 pt-1">
-        <div className="text-ui-lg font-semibold">管策智研</div>
-        <div className="text-ui-sm text-foreground-subtlest">政策文本研究工作台</div>
+      <div className="flex items-center gap-2.5 px-2 pt-1">
+        <Logo className="size-8 shrink-0" />
+        <div className="min-w-0">
+          <div className="font-serif text-ui-lg font-semibold tracking-wide">管策智研</div>
+          <div className="text-ui-sm text-foreground-subtlest">政策文本研究工作台</div>
+        </div>
       </div>
 
       <Button

@@ -21,37 +21,87 @@
 }
 
 @layer components {
+  /* 回答正文排版（纸墨）：间距随所在字号缩放，正文用 text-ui-prose，执行过程内用 text-ui-caption。 */
+  .answer-markdown {
+    text-autospace: normal;
+  }
   .answer-markdown > * + * {
-    @apply mt-3;
+    margin-top: 0.8em;
+  }
+  .answer-markdown p,
+  .answer-markdown li {
+    text-wrap: pretty;
   }
   .answer-markdown h1,
-  .answer-markdown h2,
-  .answer-markdown h3,
+  .answer-markdown h2 {
+    @apply text-ui-xl font-semibold;
+    margin-top: 1.4em;
+  }
+  .answer-markdown h3 {
+    @apply text-ui-lg font-semibold;
+    margin-top: 1.4em;
+  }
   .answer-markdown h4,
   .answer-markdown h5,
   .answer-markdown h6 {
-    @apply text-ui-base font-semibold;
+    @apply font-semibold text-foreground-subtle;
+    margin-top: 1.2em;
+  }
+  .answer-markdown > :first-child {
+    margin-top: 0;
+  }
+  .answer-markdown strong {
+    @apply font-semibold;
+  }
+  /* 中文不做伪斜体，改用着重号 */
+  .answer-markdown em {
+    font-style: normal;
+    text-emphasis: filled dot;
+    text-emphasis-position: under right;
+    text-emphasis-color: var(--color-foreground-subtlest);
   }
   .answer-markdown ul {
-    @apply list-disc pl-5;
+    @apply list-disc;
+    padding-left: 1.5em;
   }
   .answer-markdown ol {
-    @apply list-decimal pl-5;
+    @apply list-decimal;
+    padding-left: 1.75em;
   }
-  .answer-markdown li + li {
-    @apply mt-1;
+  .answer-markdown li::marker {
+    @apply text-foreground-subtlest;
   }
-  .answer-markdown pre {
-    @apply overflow-x-auto rounded-lg bg-surface p-3 text-ui-caption;
+  .answer-markdown li + li,
+  .answer-markdown li > ul,
+  .answer-markdown li > ol {
+    margin-top: 0.35em;
   }
-  .answer-markdown :not(pre) > code {
-    @apply rounded-sm bg-surface px-1 text-ui-caption;
+  /* 正文内分隔线短而居中，与问题条目之间的通栏细线区分 */
+  .answer-markdown hr {
+    @apply mx-auto w-16 border-border-hover;
+    margin-block: 1.6em;
   }
   .answer-markdown blockquote {
-    @apply border-l-2 border-border pl-3 text-foreground-subtle;
+    @apply border-l-2 border-brand/40 pl-4 text-foreground-subtle;
+  }
+  .answer-markdown pre {
+    @apply overflow-x-auto rounded-lg border border-border bg-surface-hover p-3 font-mono text-ui-sm;
+  }
+  .answer-markdown :not(pre) > code {
+    @apply rounded-sm bg-tag px-1 font-mono text-ui-caption;
+  }
+  /* 三线表：顶底粗线、表头细线，无竖线 */
+  .answer-markdown table {
+    @apply border-y-2 border-foreground-subtle;
   }
   .answer-markdown th,
   .answer-markdown td {
-    @apply border border-border px-3 py-2 text-left;
+    @apply px-3 py-1.5 text-left align-top text-ui-caption tabular-nums;
+  }
+  .answer-markdown th {
+    @apply border-b border-foreground-subtlest font-semibold;
+  }
+  .answer-markdown tbody tr + tr td {
+    @apply border-t border-border;
   }
 }

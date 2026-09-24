@@ -12,6 +12,7 @@ import {
 } from '@/services/research'
 import { Composer } from './composer'
 import { MessageList } from './message-list'
+import { ModelPicker } from './model-picker'
 import { Welcome } from './welcome'
 import { Trajectory } from './trajectory'
 import type { ModelSelection } from '@/types'
@@ -38,7 +39,7 @@ export function WorkspacePage({ sessionId }: { sessionId?: string }) {
   const selection =
     chosen ??
     (session ? { provider: session.provider, model: session.model } : catalog?.defaultSelection)
-  const provider = catalog?.providers.find((item) => item.id === selection?.provider)
+  const empty = !loading && !error && !session?.messages.length
   const submit = async (question: string) => {
     setPosting(true)
     setOperationError(null)
@@ -67,34 +68,7 @@ export function WorkspacePage({ sessionId }: { sessionId?: string }) {
   return (
     <>
       <TopBar title={session?.title ?? '研究工作台'}>
-        <span className="text-ui-sm text-foreground-subtlest">研究助手</span>
-      </TopBar>
-      <section aria-label="研究工作区" className="flex min-h-0 flex-1 flex-col bg-surface">
-        <div className="shrink-0 px-4">
-          {' '}
-          {connectionError && (
-            <div role="alert" className="mb-2 text-ui-caption text-destructive">
-              {connectionError}{' '}
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => setReconnect((value) => value + 1)}
-              >
-                重新连接
-              </Button>
-            </div>
-          )}
-          {operationError && (
-            <p role="alert" className="mb-2 text-ui-caption text-destructive">
-              {operationError}
-            </p>
-          )}
-        </div>
-        <div
-          role="tablist"
-          aria-label="会话视图"
-          className="flex shrink-0 gap-6 border-b border-border px-6"
-        >
+        <div role="tablist" aria-label="会话视图" className="flex shrink-0 gap-5 self-stretch pr-2">
           {(['conversation', 'trace'] as const).map((tab) => (
             <button
               key={tab}
@@ -120,11 +94,33 @@ export function WorkspacePage({ sessionId }: { sessionId?: string }) {
                   document.getElementById(next + '-tab')?.focus()
                 }
               }}
-              className={`border-b-2 py-2.5 text-ui-caption outline-none focus-visible:ring-2 focus-visible:ring-ring ${view === tab ? 'border-brand text-brand' : 'border-transparent text-foreground-subtle hover:text-foreground'}`}
+              className={`relative rounded-sm px-1.5 text-ui-caption outline-none transition-colors after:absolute after:inset-x-1.5 after:-bottom-px after:h-0.5 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset ${view === tab ? 'font-medium text-foreground after:bg-brand' : 'text-foreground-subtle hover:text-foreground'}`}
             >
               {tab === 'conversation' ? '对话' : '轨迹'}
             </button>
           ))}
+        </div>
+      </TopBar>
+      <section aria-label="研究工作区" className="flex min-h-0 flex-1 flex-col">
+        <div className="shrink-0 px-4">
+          {' '}
+          {connectionError && (
+            <div role="alert" className="mb-2 text-ui-caption text-destructive">
+              {connectionError}{' '}
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setReconnect((value) => value + 1)}
+              >
+                重新连接
+              </Button>
+            </div>
+          )}
+          {operationError && (
+            <p role="alert" className="mb-2 text-ui-caption text-destructive">
+              {operationError}
+            </p>
+          )}
         </div>
         <div
           role="tabpanel"
@@ -145,9 +141,16 @@ export function WorkspacePage({ sessionId }: { sessionId?: string }) {
           id="conversation-panel"
           aria-labelledby="conversation-tab"
           hidden={view !== 'conversation'}
-          className={view === 'conversation' ? 'flex min-h-0 flex-1 flex-col' : 'hidden'}
+          className={
+            view !== 'conversation'
+              ? 'hidden'
+              : `flex min-h-0 flex-1 flex-col ${empty ? 'justify-center pb-12' : ''}`
+          }
         >
-          <div data-message-scroll className="min-h-0 flex-1 overflow-y-auto px-4">
+          <div
+            data-message-scroll
+            className={`relative min-h-0 overflow-y-auto px-4 ${empty ? '' : 'flex-1'}`}
+          >
             {loading ? (
               <p role="status" className="p-6 text-foreground-subtle">
                 正在加载会话…
@@ -180,7 +183,7 @@ export function WorkspacePage({ sessionId }: { sessionId?: string }) {
               />
             )}
             {!!session?.artifacts.length && (
-              <section aria-label="会话文件" className="mx-auto mb-4 flex max-w-3xl flex-col gap-2">
+              <section aria-label="会话文件" className="mx-auto mb-4 flex max-w-4xl flex-col gap-2">
                 <h2 className="font-medium">会话文件</h2>
                 {session.artifacts.map((file) => (
                   <a
@@ -197,65 +200,26 @@ export function WorkspacePage({ sessionId }: { sessionId?: string }) {
               </section>
             )}
           </div>
-          <div className="shrink-0 px-4 pb-4">
-            <div className="mx-auto max-w-3xl">
-              {!error && (
-                <div className="mb-2 flex flex-wrap gap-2">
-                  <label className="flex min-w-0 flex-1 flex-col gap-1 text-ui-sm text-foreground-subtle">
-                    <span className="sr-only">供应商</span>
-                    <select
-                      aria-label="供应商"
-                      disabled={busy || loading}
-                      value={selection?.provider ?? ''}
-                      className="h-8 min-w-0 rounded-lg border border-input-border bg-input px-2 text-ui-caption text-foreground outline-none hover:border-input-border-hover focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
-                      onChange={(event) => {
-                        const next = catalog?.providers.find(
-                          (item) => item.id === event.target.value,
-                        )
-                        if (next) setChosen({ provider: next.id, model: next.models[0].id })
-                      }}
-                    >
-                      {catalog?.providers.map((item) => (
-                        <option key={item.id} value={item.id}>
-                          {item.name}
-                          {item.configured ? '' : '（未配置密钥）'}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                  <label className="flex min-w-0 flex-1 flex-col gap-1 text-ui-sm text-foreground-subtle">
-                    <span className="sr-only">模型</span>
-                    <select
-                      aria-label="模型"
-                      disabled={busy || loading}
-                      value={selection?.model ?? ''}
-                      className="h-8 min-w-0 rounded-lg border border-input-border bg-input px-2 text-ui-caption text-foreground outline-none hover:border-input-border-hover focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
-                      onChange={(event) => {
-                        if (selection)
-                          setChosen({ provider: selection.provider, model: event.target.value })
-                      }}
-                    >
-                      {provider?.models.map((item) => (
-                        <option key={item.id} value={item.id}>
-                          {item.name}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                  <p className="w-full text-ui-sm text-foreground-subtlest">
-                    所选平台将接收本会话历史并提供回答与联网搜索。
-                  </p>
-                </div>
-              )}
+          <div className="shrink-0 px-4 pt-2 pb-4">
+            <div className="mx-auto max-w-4xl">
               {!error && (
                 <Composer
                   onSubmit={submit}
                   busy={busy || loading}
                   onStop={session?.running ? stop : undefined}
-                />
+                >
+                  {catalog && selection && (
+                    <ModelPicker
+                      catalog={catalog}
+                      selection={selection}
+                      disabled={busy || loading}
+                      onChange={setChosen}
+                    />
+                  )}
+                </Composer>
               )}
-              <p className="mt-1.5 text-ui-sm text-foreground-subtlest">
-                Enter 发送，Shift+Enter 换行。联网资料需核对来源；文献库检索尚未实现。
+              <p className="mt-1.5 text-ui-sm text-balance text-foreground-subtlest">
+                所选平台会接收本会话历史 · 联网资料需核对来源 · 文献库检索尚未实现
               </p>
             </div>
           </div>
