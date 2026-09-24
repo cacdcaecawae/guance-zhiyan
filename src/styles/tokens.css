@@ -6,76 +6,76 @@
   --ui-font-size: 14px;
 
   /* 结构面 */
-  --background: #f6f5f1;
-  --sidebar: #eeece6;
-  --surface: #fcfbf9;
-  --surface-hover: #f3f1ec;
+  --background: #f5f5f6;
+  --sidebar: #ededef;
+  --surface: #ffffff;
+  --surface-hover: #f3f3f5;
   --card: #ffffff;
-  --card-border: #e4e1d8;
+  --card-border: #e4e4e7;
   --popover: #ffffff;
-  --popover-border: #d9d5ca;
-  --overlay: rgb(31 30 27 / 0.3);
+  --popover-border: #dcdce0;
+  --overlay: rgb(28 28 31 / 0.3);
   --input: #ffffff;
   --input-focused: #ffffff;
-  --input-border: #d5d1c6;
-  --input-border-hover: #a5a092;
+  --input-border: #d4d4d8;
+  --input-border-hover: #a1a1aa;
 
   /* 文本 */
-  --foreground: #1f1e1b;
-  --foreground-subtle: #4d4942;
-  --foreground-subtlest: #625e55;
+  --foreground: #1c1c1f;
+  --foreground-subtle: #55555e;
+  --foreground-subtlest: #6b6b74;
 
   /* 边框与状态面 */
-  --border: #e4e1d8;
-  --border-hover: #cfcabd;
-  --hover: #e9e6df;
-  --selected: #e2ded4;
-  --accent: #e2efeb;
-  --tag: #e8e5dd;
-  --find-highlight: #fbe8a2;
+  --border: #e4e4e7;
+  --border-hover: #cfcfd4;
+  --hover: #ececef;
+  --selected: #e2e3e8;
+  --accent: #eaeffb;
+  --tag: #e8e8eb;
+  --find-highlight: #fdf0b5;
 
   /* 强调与语义状态 */
-  --brand: #1d6660;
-  --primary: #1d5f5a;
-  --primary-foreground: #fbfaf7;
-  --destructive: #b3261e;
-  --trace-model: #7a5aa6;
-  --trace-tool: #98590a;
-  --trace-context: #1f714b;
+  --brand: #3050c8;
+  --primary: #26262b;
+  --primary-foreground: #fafafa;
+  --destructive: #c62828;
+  --trace-model: #8061ac;
+  --trace-tool: #a5620a;
+  --trace-context: #288259;
 }
 
 .dark {
   color-scheme: dark;
-  --background: #161614;
-  --sidebar: #1b1b18;
-  --surface: #1d1d1a;
-  --surface-hover: #262622;
-  --card: #1f1f1c;
-  --card-border: #302f2a;
-  --popover: #242420;
-  --popover-border: #3a3934;
+  --background: #131316;
+  --sidebar: #19191d;
+  --surface: #1d1d21;
+  --surface-hover: #242429;
+  --card: #1d1d21;
+  --card-border: #2b2b31;
+  --popover: #212126;
+  --popover-border: #34343b;
   --overlay: rgb(0 0 0 / 0.5);
-  --input: #1d1d1a;
-  --input-focused: #242420;
-  --input-border: #3e3d37;
-  --input-border-hover: #5c5a52;
+  --input: #1d1d21;
+  --input-focused: #212126;
+  --input-border: #3a3a42;
+  --input-border-hover: #55555e;
 
-  --foreground: #e9e7e1;
-  --foreground-subtle: #bbb8af;
-  --foreground-subtlest: #9e9b92;
+  --foreground: #e6e6e9;
+  --foreground-subtle: #a3a3ac;
+  --foreground-subtlest: #878791;
 
-  --border: #302f2a;
-  --border-hover: #3e3d37;
-  --hover: #292925;
-  --selected: #32312c;
-  --accent: #1b302d;
-  --tag: #2d2c28;
+  --border: #2b2b31;
+  --border-hover: #3a3a42;
+  --hover: #26262b;
+  --selected: #2f2f36;
+  --accent: #1f2637;
+  --tag: #2a2a30;
   --find-highlight: #5a4a12;
 
-  --brand: #72c3b8;
-  --primary: #7cc4ba;
-  --primary-foreground: #10201e;
-  --destructive: #f07a70;
+  --brand: #8ea2ff;
+  --primary: #e6e6e9;
+  --primary-foreground: #1c1c1f;
+  --destructive: #f07070;
   --trace-model: #b69bdb;
   --trace-tool: #eab36d;
   --trace-context: #75c9a3;
