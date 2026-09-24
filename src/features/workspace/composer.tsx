@@ -1,24 +1,32 @@
-import { SendHorizontalIcon } from 'lucide-react'
+import { SendHorizontalIcon, SquareIcon } from 'lucide-react'
 import { useState, type FormEvent, type KeyboardEvent } from 'react'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
 
 interface ComposerProps {
-  onSubmit: (question: string) => void
+  onSubmit: (question: string) => boolean | void | Promise<boolean | void>
+  onStop?: () => void
   /** 上一条回答仍在加载时禁止再次提交 */
   busy?: boolean
 }
 
 /** 底部输入区：Enter 提交，Shift+Enter 换行，空白内容不可提交。 */
-export function Composer({ onSubmit, busy = false }: ComposerProps) {
+export function Composer({ onSubmit, busy = false, onStop }: ComposerProps) {
   const [value, setValue] = useState('')
-  const canSubmit = value.trim().length > 0 && !busy
+  const [sending, setSending] = useState(false)
+  const canSubmit = value.trim().length > 0 && !busy && !sending
 
-  const submit = (e?: FormEvent) => {
+  const submit = async (e?: FormEvent) => {
     e?.preventDefault()
     if (!canSubmit) return
-    onSubmit(value.trim())
-    setValue('')
+    const draft = value
+    setSending(true)
+    try {
+      if ((await onSubmit(draft.trim())) !== false)
+        setValue((current) => (current === draft ? '' : current))
+    } finally {
+      setSending(false)
+    }
   }
 
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -29,7 +37,7 @@ export function Composer({ onSubmit, busy = false }: ComposerProps) {
       e.nativeEvent.keyCode !== 229
     ) {
       e.preventDefault()
-      submit()
+      void submit()
     }
   }
 
@@ -43,20 +51,33 @@ export function Composer({ onSubmit, busy = false }: ComposerProps) {
         aria-label="研究问题"
         placeholder="输入研究问题…"
         rows={2}
+        maxLength={8000}
         value={value}
         onChange={(e) => setValue(e.target.value)}
         onKeyDown={onKeyDown}
         className="max-h-40 min-h-0 border-0 bg-transparent px-1 py-1 field-sizing-content hover:border-0 focus-visible:bg-transparent"
       />
-      <Button
-        type="submit"
-        size="icon"
-        aria-label="发送"
-        disabled={!canSubmit}
-        className="rounded-md"
-      >
-        <SendHorizontalIcon />
-      </Button>
+      {onStop ? (
+        <Button
+          type="button"
+          size="icon"
+          aria-label="停止生成"
+          onClick={onStop}
+          className="rounded-md"
+        >
+          <SquareIcon />
+        </Button>
+      ) : (
+        <Button
+          type="submit"
+          size="icon"
+          aria-label="发送"
+          disabled={!canSubmit}
+          className="rounded-md"
+        >
+          <SendHorizontalIcon />
+        </Button>
+      )}
     </form>
   )
 }

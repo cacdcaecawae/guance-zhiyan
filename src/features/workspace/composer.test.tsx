@@ -1,9 +1,26 @@
-import { fireEvent, render, screen } from '@testing-library/react'
+import { act, fireEvent, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
 import { Composer } from './composer'
 
 describe('Composer', () => {
+  it('请求等待期间输入的新草稿不会被成功确认清空', async () => {
+    let finish = (_value: boolean) => {}
+    const response = new Promise<boolean>((resolve) => {
+      finish = resolve
+    })
+    render(<Composer onSubmit={() => response} />)
+    const box = screen.getByRole('textbox', { name: '研究问题' })
+    await userEvent.type(box, '第一条')
+    await userEvent.keyboard('{Enter}')
+    await userEvent.clear(box)
+    await userEvent.type(box, '下一条草稿')
+    await act(async () => {
+      finish(true)
+      await response
+    })
+    expect(box).toHaveValue('下一条草稿')
+  })
   it('空白内容不可提交', async () => {
     const onSubmit = vi.fn()
     render(<Composer onSubmit={onSubmit} />)

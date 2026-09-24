@@ -1,66 +1,66 @@
-/** 当前界面实际用到的共享类型，接口名与 CONTEXT.md 的术语对应。接入真实数据时按接口补充或调整，不为未实现功能预留字段。 */
-
-/** 文献 */
-export interface Document {
+export interface User {
   id: string
-  title: string
-  /** 来源说明，演示阶段固定为虚构标注 */
-  source: string
+  name: string
 }
-
-/** 片段 */
-export interface Passage {
+export interface Artifact {
   id: string
-  documentId: string
-  section: string
-  /** 片段在文献中的编号 */
-  index: number
-  text: string
-  /** text 中需要高亮的子串 */
-  highlight: string
+  sessionId: string
+  name: string
+  format: string
+  size: number
 }
-
-/** 引用 */
-export interface Citation {
-  id: string
-  /** 回答文本中的角标序号，对应 `[n]` */
-  marker: number
-  passageId: string
-}
-
-/** 问题 */
-export interface UserMessage {
-  id: string
-  role: 'user'
-  text: string
-}
-
-export type AnswerStatus = 'loading' | 'done' | 'empty' | 'error'
-
-/** 回答 */
+export type AnswerPart =
+  | { id: string; type: 'text'; text: string; step: number }
+  | { id: string; type: 'reasoning'; text: string; step: number }
+  | {
+      id: string
+      type: 'tool'
+      name: string
+      input: string
+      output: string
+      status: 'running' | 'done' | 'error'
+    }
 export interface AssistantMessage {
   id: string
   role: 'assistant'
-  status: AnswerStatus
-  /** 发起本条回答的问题，用于重试 */
   question: string
-  /** 回答正文，内含 `[n]` 引用角标 */
-  text: string
-  citations: Citation[]
+  status: 'loading' | 'done' | 'error' | 'stopped'
+  parts: AnswerPart[]
   error?: string
 }
-
-export type Message = UserMessage | AssistantMessage
-
-/** 会话 */
-export interface Session {
+export type Message = { id: string; role: 'user'; text: string } | AssistantMessage
+export interface SessionSummary {
   id: string
   title: string
-  messages: Message[]
 }
-
-/** 数据源返回的回答载荷（不含界面状态） */
-export interface AnswerPayload {
+export interface ModelSelection {
+  provider: string
+  model: string
+}
+export interface ModelCatalog {
+  providers: {
+    id: string
+    name: string
+    configured: boolean
+    models: { id: string; name: string }[]
+  }[]
+  defaultSelection: ModelSelection
+}
+export interface Session extends SessionSummary, ModelSelection {
+  messages: Message[]
+  artifacts: Artifact[]
+  running: boolean
+  trace: TraceEntry[]
+}
+export interface TraceEntry {
+  id: string
+  turn: number
+  step?: number
+  kind: 'system' | 'user' | 'context' | 'assistant' | 'tool'
+  label: string
   text: string
-  citations: Citation[]
+  input?: string
+  time: number
+  end?: number
+  status?: 'running' | 'done' | 'error' | 'stopped'
 }

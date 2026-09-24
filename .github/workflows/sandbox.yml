@@ -1,0 +1,54 @@
+name: Sandbox acceptance
+on:
+  pull_request:
+    paths:
+      - 'server/**'
+      - 'package.json'
+      - 'pnpm-lock.yaml'
+      - '.github/workflows/sandbox.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: sandbox-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  docker:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      SANDBOX_URL: http://127.0.0.1:8080
+      SANDBOX_IMAGE: guance-workspace:1
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Create ephemeral sandbox service credential
+        shell: bash
+        run: |
+          key=$(openssl rand -hex 32)
+          echo "::add-mask::$key"
+          echo "SANDBOX_API_KEY=$key" >> "$GITHUB_ENV"
+      - run: docker build -t guance-workspace:1 -f server/sandbox/Dockerfile .
+      - run: docker build -t guance-egress:1 -f server/sandbox/egress.Dockerfile .
+      - run: docker compose -f server/sandbox/compose.yaml up -d --build
+      - name: Wait for management API
+        shell: bash
+        run: |
+          for attempt in $(seq 1 60); do
+            if curl --fail --silent -H "OPEN-SANDBOX-API-KEY: $SANDBOX_API_KEY" http://127.0.0.1:8080/v1/sandboxes >/dev/null; then exit 0; fi
+            sleep 2
+          done
+          exit 1
+      - run: pnpm test:sandbox
+      - name: Sandbox service diagnostics
+        if: failure()
+        run: |
+          docker ps -a --format '{{.Names}} {{.Status}} {{.Ports}}'
+          docker compose -f server/sandbox/compose.yaml logs --no-color --tail 80
+      - if: always()
+        run: docker compose -f server/sandbox/compose.yaml down

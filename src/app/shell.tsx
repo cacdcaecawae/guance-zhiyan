@@ -1,12 +1,10 @@
 import { PanelLeftIcon } from 'lucide-react'
 import { createContext, useContext, useState, type ReactNode } from 'react'
 import { Outlet } from 'react-router'
-import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Sheet, SheetContent } from '@/components/ui/sheet'
 import { readPref, writePref } from '@/lib/storage'
 import { useMediaQuery } from '@/lib/use-media-query'
-import { DEMO_NOTICE } from '@/services/research'
 import { Sidebar } from './sidebar'
 
 const SIDEBAR_STORAGE_KEY = 'gczy.sidebar-collapsed'
@@ -53,7 +51,7 @@ export function AppShell() {
   )
 }
 
-/** 顶部栏：侧栏开关 + 页面标题 + 演示标注。 */
+/** 顶部栏：侧栏开关与页面标题。 */
 export function TopBar({ title, children }: { title: string; children?: ReactNode }) {
   const { toggle, expanded } = useContext(ShellContext)
   return (
@@ -70,7 +68,6 @@ export function TopBar({ title, children }: { title: string; children?: ReactNod
       <h1 className="min-w-0 flex-1 truncate text-ui-base font-medium" title={title}>
         {title}
       </h1>
-      <Badge>{DEMO_NOTICE}</Badge>
       {children}
     </header>
   )

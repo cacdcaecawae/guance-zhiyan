@@ -1,0 +1,9 @@
+{
+  "name": "guance-sandbox-worker",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@deepseek-ai/cordis": "4.0.4",
+    "@deepseek-ai/dsh-fs-local": "0.1.7-rc.1"
+  }
+}

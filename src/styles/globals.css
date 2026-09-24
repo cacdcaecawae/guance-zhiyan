@@ -10,12 +10,48 @@
     height: 100%;
   }
   body {
-    @apply bg-background text-foreground text-ui-base antialiased wrap-break-word;
+    @apply bg-background text-foreground font-sans text-ui-base antialiased wrap-break-word;
   }
   * {
     @apply border-border;
   }
   mark {
     @apply bg-find-highlight text-foreground rounded-sm px-0.5;
+  }
+}
+
+@layer components {
+  .answer-markdown > * + * {
+    @apply mt-3;
+  }
+  .answer-markdown h1,
+  .answer-markdown h2,
+  .answer-markdown h3,
+  .answer-markdown h4,
+  .answer-markdown h5,
+  .answer-markdown h6 {
+    @apply text-ui-base font-semibold;
+  }
+  .answer-markdown ul {
+    @apply list-disc pl-5;
+  }
+  .answer-markdown ol {
+    @apply list-decimal pl-5;
+  }
+  .answer-markdown li + li {
+    @apply mt-1;
+  }
+  .answer-markdown pre {
+    @apply overflow-x-auto rounded-lg bg-surface p-3 text-ui-caption;
+  }
+  .answer-markdown :not(pre) > code {
+    @apply rounded-sm bg-surface px-1 text-ui-caption;
+  }
+  .answer-markdown blockquote {
+    @apply border-l-2 border-border pl-3 text-foreground-subtle;
+  }
+  .answer-markdown th,
+  .answer-markdown td {
+    @apply border border-border px-3 py-2 text-left;
   }
 }

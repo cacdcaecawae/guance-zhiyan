@@ -39,6 +39,9 @@
   --primary: #26262b;
   --primary-foreground: #fafafa;
   --destructive: #c62828;
+  --trace-model: #8061ac;
+  --trace-tool: #a5620a;
+  --trace-context: #288259;
 }
 
 .dark {
@@ -73,9 +76,15 @@
   --primary: #e6e6e9;
   --primary-foreground: #1c1c1f;
   --destructive: #f07070;
+  --trace-model: #b69bdb;
+  --trace-tool: #eab36d;
+  --trace-context: #75c9a3;
 }
 
 @theme inline {
+  --color-trace-model: var(--trace-model);
+  --color-trace-tool: var(--trace-tool);
+  --color-trace-context: var(--trace-context);
   --color-background: var(--background);
   --color-sidebar: var(--sidebar);
   --color-surface: var(--surface);
