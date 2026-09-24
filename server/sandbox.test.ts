@@ -24,7 +24,7 @@ async function protocolFixture() {
   const uploads = new Map<string, string>()
   const commandStarted = new Set<() => void>()
   const errors: unknown[] = []
-  const state = { failDeletes: 0 }
+  const state: { failDeletes: number; officeWritten?: () => void } = { failDeletes: 0 }
   let origin = ''
   const server = createServer(async (request, response) => {
     const json = (value: unknown, status = 200) => {
@@ -120,6 +120,12 @@ async function protocolFixture() {
             assert.equal(data.argv[2], 'printf sandbox')
             files.set('/workspace/report.txt', 'sandbox report')
             event({ type: 'stdout', text: 'sandbox' })
+          } else if (data.argv[0] === 'python3') {
+            assert.ok(
+              files.has(data.argv[3]),
+              'Office temp file survives competing sandbox admission',
+            )
+            event({ type: 'stdout', text: 'fixture office' })
           } else {
             assert.deepEqual(data.argv.slice(0, 2), ['node', '/opt/gczy/fs-worker.mjs'])
             const { method, args } = JSON.parse(uploads.get(data.argv[2])!)
@@ -131,9 +137,10 @@ async function protocolFixture() {
               }
             else if (method === 'readBytes')
               value = Buffer.from(files.get(args[0].displayPath) ?? '').toString('base64')
-            else if (method === 'writeBytes')
+            else if (method === 'writeBytes') {
               files.set(args[0], Buffer.from(args[1], 'base64').toString())
-            else if (method === 'stat')
+              if (args[0].startsWith('/tmp/gczy-office-')) state.officeWritten?.()
+            } else if (method === 'stat')
               value = files.has(args[0].displayPath)
                 ? { type: 'file', size: files.get(args[0].displayPath)!.length, version: '1' }
                 : undefined
@@ -309,6 +316,12 @@ test('sandbox capacity waits, queued cancellation creates nothing, idle eviction
       '/workspace/kept.txt',
     ])
     assert.equal(await current.rpc('readText', [target]), 'persistent')
+    let competing: Promise<void> | undefined
+    fixture.state.officeWritten = () => {
+      competing = manager.use(user.id, a.id, undefined, async () => {})
+    }
+    assert.equal(await current.readOffice(Buffer.from('fixture office'), 'docx'), 'fixture office')
+    await competing
     assert.deepEqual(fixture.errors, [])
   } finally {
     await manager.close()

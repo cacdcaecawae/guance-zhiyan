@@ -157,10 +157,12 @@ export class SessionSandbox {
     )
   }
   async readOffice(data: Uint8Array, format: 'docx' | 'xlsx', signal?: AbortSignal) {
-    const path = `/tmp/gczy-office-${randomUUID()}.${format}`
-    await this.rpc('writeBytes', [path, Buffer.from(data).toString('base64')], signal)
-    let output = ''
-    const code = `import sys, itertools
+    return this.use(signal, async (remote) => {
+      const entry = this.manager.entries.get(this.sessionId)
+      const path = `/tmp/gczy-office-${randomUUID()}.${format}`
+      await this.rpc('writeBytes', [path, Buffer.from(data).toString('base64')], signal)
+      let output = ''
+      const code = `import sys
 if sys.argv[2] == 'docx':
     from docx import Document
     lines = (p.text for p in Document(sys.argv[1]).paragraphs)
@@ -177,27 +179,27 @@ for line in lines:
         sys.stdout.write('\\n[内容已截断]')
         break
 `
-    try {
-      const result = await this.command(
-        ['python3', '-c', code, path, format],
-        { workingDirectory: '/workspace' },
-        {
-          skipAccumulation: true,
-          onStdout: (message) => {
-            output = (output + message.text).slice(0, 32100)
+      try {
+        const result = await this.command(
+          ['python3', '-c', code, path, format],
+          { workingDirectory: '/workspace' },
+          {
+            skipAccumulation: true,
+            onStdout: (message) => {
+              output = (output + message.text).slice(0, 32100)
+            },
           },
-        },
-        signal,
-      )
-      if (result.exitCode !== 0)
-        throw new Error('沙箱无法读取此 Office 文件，请检查格式或文件内容。')
-      return output
-    } finally {
-      // Cleanup through the current lease only; never recreate a stopped container for a temp file.
-      const entry = this.manager.entries.get(this.sessionId)
-      if (entry && !entry.fenced)
-        await (await entry.remote).files.deleteFiles([path]).catch(() => {})
-    }
+          signal,
+        )
+        if (result.exitCode !== 0)
+          throw new Error('沙箱无法读取此 Office 文件，请检查格式或文件内容。')
+        return output
+      } finally {
+        // Cleanup through the current lease only; never recreate a stopped container for a temp file.
+        if (entry && this.manager.entries.get(this.sessionId) === entry && !entry.fenced)
+          await remote.files.deleteFiles([path]).catch(() => {})
+      }
+    })
   }
 }
 

@@ -7,7 +7,7 @@ resolve_internal = false
 
 [runtime]
 type = "docker"
-execd_image = "opensandbox/execd:v1.1.0"
+execd_image = "opensandbox/execd:release-1.1.0@sha256:e11fdd6fa641329a1fe5298e71c8dd2afca742674fe48bc855b2ff6715512829"
 
 [store]
 type = "sqlite"

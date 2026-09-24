@@ -23,6 +23,8 @@ docker compose --env-file server/sandbox/.env -f server/sandbox/compose.yaml up 
 
 管理镜像从固定上游提交构建，可能需要数分钟。配置位于 `server/sandbox/server.toml`：管理端与执行端口均绑定 127.0.0.1；管理服务使用 host 网络，被创建的工作负载仍使用 bridge 网络。Docker socket 只交给管理服务。
 
+执行镜像固定为 `opensandbox/execd:release-1.1.0` 及其 digest。旧的 `v1.1.0` 是另一套历史版本号，不支持当前 SDK 的 argv 命令接口，不能互换。
+
 在应用 `server/.env` 设置：
 
 ```dotenv
