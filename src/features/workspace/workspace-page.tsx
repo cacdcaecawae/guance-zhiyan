@@ -13,9 +13,11 @@ import {
 import { Composer } from './composer'
 import { MessageList } from './message-list'
 import { Welcome } from './welcome'
+import type { ModelSelection } from '@/types'
 
 export function WorkspacePage({ sessionId }: { sessionId?: string }) {
-  const { current, loading, error, connectionError } = useResearch()
+  const { current, catalog, loading, error, connectionError } = useResearch()
+  const [chosen, setChosen] = useState<ModelSelection | null>(null)
   const [operationError, setOperationError] = useState<string | null>(null)
   const [posting, setPosting] = useState(false)
   const [reconnect, setReconnect] = useState(0)
@@ -31,6 +33,10 @@ export function WorkspacePage({ sessionId }: { sessionId?: string }) {
   useEffect(() => watchSession(sessionId), [sessionId, reconnect])
   const session = current?.id === sessionId ? current : null
   const busy = posting || !!session?.running
+  const selection =
+    chosen ??
+    (session ? { provider: session.provider, model: session.model } : catalog?.defaultSelection)
+  const provider = catalog?.providers.find((item) => item.id === selection?.provider)
   const submit = async (question: string) => {
     setPosting(true)
     setOperationError(null)
@@ -38,7 +44,7 @@ export function WorkspacePage({ sessionId }: { sessionId?: string }) {
       const id = sessionId ?? createdSession.current ?? (await createSession()).id
       createdSession.current = id
       // Admit the request before navigation, preserving the draft on failure.
-      await askQuestion(id, question)
+      await askQuestion(id, question, selection)
       if (!sessionId && mounted.current) navigate(`/workspace/${id}`)
       return true
     } catch (failure) {
@@ -128,6 +134,52 @@ export function WorkspacePage({ sessionId }: { sessionId?: string }) {
               <p role="alert" className="mb-2 text-ui-caption text-destructive">
                 {operationError}
               </p>
+            )}
+            {!error && (
+              <div className="mb-2 flex flex-wrap gap-2">
+                <label className="flex min-w-0 flex-1 flex-col gap-1 text-ui-sm text-foreground-subtle">
+                  供应商
+                  <select
+                    aria-label="供应商"
+                    disabled={busy || loading}
+                    value={selection?.provider ?? ''}
+                    className="h-8 min-w-0 rounded-lg border border-input-border bg-input px-2 text-ui-caption text-foreground outline-none hover:border-input-border-hover focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
+                    onChange={(event) => {
+                      const next = catalog?.providers.find((item) => item.id === event.target.value)
+                      if (next) setChosen({ provider: next.id, model: next.models[0].id })
+                    }}
+                  >
+                    {catalog?.providers.map((item) => (
+                      <option key={item.id} value={item.id}>
+                        {item.name}
+                        {item.configured ? '' : '（未配置密钥）'}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="flex min-w-0 flex-1 flex-col gap-1 text-ui-sm text-foreground-subtle">
+                  模型
+                  <select
+                    aria-label="模型"
+                    disabled={busy || loading}
+                    value={selection?.model ?? ''}
+                    className="h-8 min-w-0 rounded-lg border border-input-border bg-input px-2 text-ui-caption text-foreground outline-none hover:border-input-border-hover focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
+                    onChange={(event) => {
+                      if (selection)
+                        setChosen({ provider: selection.provider, model: event.target.value })
+                    }}
+                  >
+                    {provider?.models.map((item) => (
+                      <option key={item.id} value={item.id}>
+                        {item.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <p className="w-full text-ui-sm text-foreground-subtlest">
+                  所选平台将接收本会话历史并提供回答与联网搜索。
+                </p>
+              </div>
             )}
             {!error && (
               <Composer

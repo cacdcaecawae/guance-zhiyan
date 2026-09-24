@@ -33,7 +33,20 @@ export interface SessionSummary {
   id: string
   title: string
 }
-export interface Session extends SessionSummary {
+export interface ModelSelection {
+  provider: string
+  model: string
+}
+export interface ModelCatalog {
+  providers: {
+    id: string
+    name: string
+    configured: boolean
+    models: { id: string; name: string }[]
+  }[]
+  defaultSelection: ModelSelection
+}
+export interface Session extends SessionSummary, ModelSelection {
   messages: Message[]
   artifacts: Artifact[]
   running: boolean

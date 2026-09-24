@@ -8,12 +8,13 @@ import SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
 import SessionPersistence from '@deepseek-ai/dsh-session-persistence-jsonl'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import ToolRuntime from '@deepseek-ai/dsh-tools'
-import * as DeepSeek from '@deepseek-ai/dsh-llm-deepseek'
 import WebRuntime from '@deepseek-ai/dsh-web'
 import * as WebFetch from '@deepseek-ai/dsh-web-fetch-http'
 import * as WebSearch from '@deepseek-ai/dsh-web-search-deepseek'
 import * as WebTools from '@deepseek-ai/dsh-tool-web'
-import type { Session } from '../src/types/index.ts'
+import type { ModelSelection, Session } from '../src/types/index.ts'
+import { connection, modelAdapter, modelCatalog, validateSelection } from './models.ts'
+import { qianwenSearch } from './qianwen-search.ts'
 import { Store, HttpError } from './store.ts'
 import { Artifacts } from './artifacts.ts'
 import { messagesFromEvents, type LiveAttempt } from './view.ts'
@@ -33,7 +34,6 @@ interface ActiveRun {
   done?: Promise<void>
 }
 export interface AgentOptions {
-  model?: string
   adapter?: LlmAdapter // Test injection only; never selected by an environment variable.
   maxSteps?: number
   timeoutMs?: number
@@ -66,16 +66,8 @@ export class Agents {
       compression: 'none',
     })
     await ctx.plugin(AgentLoop, { agents: [], maxParallelToolCalls: 2 })
-    if (this.options.adapter) ctx.llm.registerAdapter(['deepseek-official'], this.options.adapter)
-    else await ctx.plugin(DeepSeek, { maxTokens: 8192, streamIdleTimeoutMs: 60000 })
-    await ctx.plugin(WebRuntime)
-    await ctx.plugin(WebFetch, {
-      maxResponseBytes: 1_000_000,
-      maxBodyChars: 32000,
-      timeoutMs: 20000,
-    })
-    await ctx.plugin(WebSearch, { maxUses: 3, maxTokens: 2048 })
-    await ctx.plugin(WebTools, { fetch: true, search: true })
+    for (const provider of modelCatalog().providers)
+      ctx.llm.registerAdapter([provider.id], this.options.adapter ?? modelAdapter(provider.id))
     ctx.on('session/event', (session) => this.notify(session.id))
     ctx.on('agent/assistant-stream', ({ agent, frame }) => {
       const run = this.active.get(agent.session.id)
@@ -126,8 +118,10 @@ export class Agents {
       running: !!run,
     }
   }
-  async start(userId: string, id: string, question: string) {
-    this.store.session(userId, id)
+  async start(userId: string, id: string, question: string, requested?: ModelSelection) {
+    const session = this.store.session(userId, id)
+    const selection = validateSelection(requested ?? session)
+    const config = connection(selection)
     if (this.closing) throw new HttpError(503, '服务正在关闭，请稍后重试。')
     if (this.failed.has(id)) throw new HttpError(500, '会话保存失败，暂时无法继续生成。')
     if (this.active.has(id)) throw new HttpError(409, '当前会话仍在生成，请先停止。')
@@ -136,15 +130,38 @@ export class Agents {
       [...this.active.values()].filter((run) => run.userId === userId).length >= 2
     )
       throw new HttpError(429, '正在执行的任务较多，请稍后重试。')
-    if (!this.options.adapter && !process.env.DEEPSEEK_API_KEY)
-      throw new HttpError(503, '后端尚未配置 DeepSeek 密钥。')
+    if (!this.options.adapter && !config.apiKey)
+      throw new HttpError(503, `后端尚未配置${config.name}密钥（${config.key}）。`)
     const ready = Promise.withResolvers<void>()
     const run: ActiveRun = { userId, ready: ready.promise, stopped: false }
     this.active.set(id, run)
     try {
       let steps = 0
       let calls = 0
-      const setup = (ctx: Context) => {
+      const setup = async (ctx: Context) => {
+        const web = ctx.isolate('web')
+        await web.plugin(WebRuntime)
+        await web.plugin(WebFetch, {
+          maxResponseBytes: 1_000_000,
+          maxBodyChars: 32000,
+          timeoutMs: 20000,
+        })
+        if (selection.provider === 'qianwen')
+          await web.plugin({
+            name: 'qianwen-search',
+            inject: ['web'],
+            apply: (scope: Context) => {
+              scope.web.registerSearchProvider(qianwenSearch(selection.model))
+            },
+          })
+        else
+          await web.plugin(WebSearch, {
+            apiKeyEnv: config.key,
+            model: selection.model,
+            maxUses: 3,
+            maxTokens: 2048,
+          })
+        await web.plugin(WebTools, { fetch: true, search: true })
         this.files.register(ctx, userId, id)
         ctx.on('agent/pre-step', async ({ agent }, next) => {
           if (
@@ -161,8 +178,8 @@ export class Agents {
         ctx.tools.guard(() => (++calls > 24 ? '达到工具调用次数限制。' : undefined))
       }
       const agentOptions = {
-        provider: 'deepseek-official',
-        model: this.options.model ?? process.env.DEEPSEEK_MODEL ?? 'deepseek-v4-flash',
+        provider: selection.provider,
+        model: selection.model,
         maxTokens: 8192,
       }
       run.handle = (await this.ctx.sessionPersistence.stat(SessionId(id)))
@@ -173,6 +190,7 @@ export class Agents {
         this.active.delete(id)
         return
       }
+      this.store.selectModel(userId, id, selection)
       this.store.title(userId, id, question)
       run.handle.agent.followup(
         createUserMessage({

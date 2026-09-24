@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises'
 import { resolve, sep, extname } from 'node:path'
 import { Store, HttpError } from './store.ts'
 import { Agents } from './agent.ts'
+import { modelCatalog, validateSelection } from './models.ts'
 import { MIME } from './artifacts.ts'
 import { authenticate as defaultAuthenticate, type Authenticate } from './auth.ts'
 
@@ -89,6 +90,8 @@ export function createApp(
         }
       }
       if (path === '/api/me' && request.method === 'GET') return json(response, 200, user)
+      if (path === '/api/models' && request.method === 'GET')
+        return json(response, 200, modelCatalog(!!agents.options.adapter))
       if (path === '/api/sessions') {
         if (request.method === 'GET') return json(response, 200, store.list(user.id))
         if (request.method === 'POST') return json(response, 201, store.create(user.id))
@@ -121,7 +124,8 @@ export function createApp(
           input.question.length > 8000
         )
           throw new HttpError(400, '问题须为 1–8000 个字符。')
-        await agents.start(user.id, id, input.question.trim())
+        const selection = 'selection' in input ? validateSelection(input.selection) : undefined
+        await agents.start(user.id, id, input.question.trim(), selection)
         return json(response, 202, await agents.snapshot(user.id, id))
       }
       if (action === 'stop' && request.method === 'POST') {

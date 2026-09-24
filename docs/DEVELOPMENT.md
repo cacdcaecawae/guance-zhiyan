@@ -23,6 +23,8 @@
 
 会话归属、SSE、停止与文件下载行为变动需覆盖相应回归。受控协议测试不能替代真实 DeepSeek 与搜索端点验收，交付时分别说明。启动配置、备份和部署限制见 README。
 
+后端测试启用 `--expose-gc --test-isolation=none`，在单个测试进程中强制垃圾回收，验证两家供应商的原生 SSE 仍能及时停止。DSH 的解析流取消补丁通过 `pnpm-workspace.yaml` 固定，见 `THIRD_PARTY_NOTICES.md`；升级依赖时须保留该回归。
+
 ## 多人并行
 
 - 已知有人在改同一接口（`src/types/`、`src/services/`）时先协调；否则直接改，在 PR 中列出接口变化

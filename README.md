@@ -19,7 +19,7 @@
 ```bash
 pnpm install
 pnpm exec playwright install chromium   # Linux 首次加 --with-deps
-# 复制 server/.env.example 为 server/.env，填写 DEEPSEEK_API_KEY
+# 复制 server/.env.example 为 server/.env，填写 DEEPSEEK_API_KEY 和/或 QIANWEN_API_KEY
 pnpm chat                              # 构建并启动本机聊天 http://127.0.0.1:3001
 ```
 
@@ -32,14 +32,24 @@ pnpm chat                              # 构建并启动本机聊天 http://127.
 | 配置                       | 用途                                                       |
 | -------------------------- | ---------------------------------------------------------- |
 | `DEEPSEEK_API_KEY`         | 仅后端使用的模型与搜索密钥                                 |
-| `DEEPSEEK_MODEL`           | 会话模型，默认 `deepseek-v4-flash`                         |
+| `QIANWEN_API_KEY`          | 千问 AI 平台按量付费密钥，用于该平台的 DeepSeek 对话与搜索 |
+| `QIANWEN_BASE_URL`         | 默认 `https://maas.qianwenaiapi.com/apps/anthropic`        |
 | `DEEPSEEK_BASE_URL`        | 对话端点，默认 `https://api.deepseek.com/anthropic`        |
 | `DEEPSEEK_SEARCH_BASE_URL` | 独立搜索端点，默认 `https://api.deepseek.com/anthropic/v1` |
 | `APP_ORIGIN`               | 浏览器访问的准确来源，开发默认 `http://localhost:5173`     |
 | `HOST` / `PORT`            | 后端绑定地址与端口，默认 `127.0.0.1:3001`                  |
 | `DATA_DIR`                 | 私有数据目录，默认 `server/data`                           |
 
-锁定的 DSH `0.1.7-rc.1` 使用 Anthropic-compatible Messages 协议，不是 OpenAI Chat Completions。联网搜索使用 DSH 默认搜索模型 `deepseek-v4-flash`，端点须支持原生 `web_search_20250305`；不支持时会明确显示工具失败。更改对话端点不会自动更改搜索端点。密钥不得写入 `VITE_` 环境变量。
+网页可分别选择供应商和模型，两家均运行 DeepSeek，不包含 Qwen 模型。发送成功后按会话保存选择，刷新和服务重启后恢复；生成期间禁止切换。切换供应商会将会话历史发送至所选平台，联网搜索也使用该平台与所选模型。密钥未配置时明确提示，不自动换供应商。模型由后端允许列表提供，不接受浏览器传入端点或密钥；原 `DEEPSEEK_MODEL` 配置已由网页选择替代。
+
+| 供应商        | Flash                    | Pro                    |
+| ------------- | ------------------------ | ---------------------- |
+| DeepSeek 官方 | `deepseek-flash`（V4.1） | `deepseek-v4-pro`      |
+| 千问 AI 平台  | `deepseek-v4.1-flash`    | `deepseek-v4-pro-0813` |
+
+模型名称和参数核对于 2026-09-24：[DeepSeek 模型列表](https://api-docs.deepseek.com/api/list-models/)、[官方 Anthropic 接口](https://api-docs.deepseek.com/guides/anthropic_api/)、[千问 Anthropic 接口](https://platform.qianwenai.com/docs/api-reference/chat/anthropic)。两家对话均复用 DSH `0.1.7-rc.1` 的 Anthropic Messages 适配器与流式协议，开启思考，`output_config.effort=high`，`max_tokens=8192`（包含思考与正文），不发送 `budget_tokens` 或采样参数。模型列表按已核对文档维护，不能保证自动跟随将来的命名变化。
+
+官方联网搜索复用 DSH 工具，显式使用当前模型，保留独立 `DEEPSEEK_SEARCH_BASE_URL`；更改官方对话端点不会自动更改其搜索端点。千问搜索使用同一 `QIANWEN_BASE_URL` 下的 Messages 接口，按[平台联网搜索文档](https://platform.qianwenai.com/docs/developer-guides/tool-calling/web-search)附加所需 system 标识，关闭辅助搜索的思考；两家搜索均最多 3 次原生搜索、2048 输出 tokens。没有实际搜索结果块或请求失败时显示工具失败。两家密钥独立，只放后端，不得写入 `VITE_` 环境变量。
 
 | 命令                              | 说明                                                              |
 | --------------------------------- | ----------------------------------------------------------------- |

@@ -5,10 +5,45 @@ import { tmpdir } from 'node:os'
 import { join, resolve, sep } from 'node:path'
 import { once } from 'node:events'
 import { createServer } from 'node:http'
+import { DatabaseSync } from 'node:sqlite'
 import { TestModel, textChunks, toolChunks } from '../tests/support/model.ts'
 import { Store } from './store.ts'
 import { Agents } from './agent.ts'
 import { createApp } from './http.ts'
+
+test('existing SQLite sessions migrate without losing ownership and keep model selection on reopen', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'gczy-migration-test-'))
+  const old = new DatabaseSync(join(root, 'app.sqlite'))
+  old.exec(`CREATE TABLE users(id TEXT PRIMARY KEY, subject TEXT UNIQUE NOT NULL, name TEXT NOT NULL);
+    CREATE TABLE sessions(id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), title TEXT NOT NULL, created INTEGER NOT NULL);
+    INSERT INTO users VALUES('user', 'existing-user', 'Test');
+    INSERT INTO sessions VALUES('session', 'user', '已有会话', 1);`)
+  old.close()
+  let store = new Store(root)
+  try {
+    assert.deepEqual(
+      { ...store.session('user', 'session') },
+      {
+        id: 'session',
+        title: '已有会话',
+        provider: 'deepseek-official',
+        model: 'deepseek-flash',
+      },
+    )
+    store.selectModel('user', 'session', { provider: 'qianwen', model: 'deepseek-v4.1-flash' })
+    assert.throws(() => store.session('other', 'session'), /没有找到/)
+    store.close()
+    store = new Store(root)
+    assert.equal(store.session('user', 'session').provider, 'qianwen')
+    assert.equal(store.list('user')[0].title, '已有会话')
+  } finally {
+    store.close()
+    assert.ok(
+      resolve(root).startsWith(resolve(tmpdir()) + sep) && root.includes('gczy-migration-test-'),
+    )
+    await rm(root, { recursive: true })
+  }
+})
 
 test('native DSH: scoped tools, persistent history, cancellation, errors and budgets', async () => {
   const root = await mkdtemp(join(tmpdir(), 'gczy-agent-test-'))
@@ -145,35 +180,82 @@ test('native Messages streaming and search protocol with cited sources and expli
   const savedBase = process.env.DEEPSEEK_SEARCH_BASE_URL
   const savedChatBase = process.env.DEEPSEEK_BASE_URL
   const savedDshHome = process.env.DSH_HOME
+  const savedQianwen = [process.env.QIANWEN_API_KEY, process.env.QIANWEN_BASE_URL]
+  const received: { provider: string; model: string; stream: boolean; users: number }[] = []
+  const qianwen = { provider: 'qianwen', model: 'deepseek-v4.1-flash' }
   let valid = true
   let calls = 0
   const upstream = createServer(async (request, response) => {
-    assert.equal(request.headers['x-api-key'], 'test-only')
+    const isQianwen = request.url === '/qianwen/v1/messages'
+    assert.equal(request.headers['x-api-key'], isQianwen ? 'qianwen-test-only' : 'test-only')
     const chunks: Buffer[] = []
     for await (const chunk of request) chunks.push(chunk)
     const body = JSON.parse(Buffer.concat(chunks).toString())
-    if (request.url === '/v1/messages') {
+    received.push({
+      provider: isQianwen ? 'qianwen' : 'deepseek-official',
+      model: body.model,
+      stream: !!body.stream,
+      users: body.messages.filter((item: { role: string }) => item.role === 'user').length,
+    })
+    assert.ok(
+      isQianwen
+        ? ['deepseek-v4.1-flash', 'deepseek-v4-pro-0813'].includes(body.model)
+        : ['deepseek-flash', 'deepseek-v4-pro'].includes(body.model),
+    )
+    if (body.stream) {
+      assert.equal(request.url, isQianwen ? '/qianwen/v1/messages' : '/v1/messages')
       assert.equal(body.stream, true)
       assert.equal(body.max_tokens, 8192)
+      assert.deepEqual(body.thinking, { type: 'enabled' })
+      assert.deepEqual(body.output_config, { effort: 'high' })
+      assert.equal(body.temperature, undefined)
+      assert.ok(
+        !JSON.stringify(body.messages).includes(isQianwen ? 'sig-official' : 'sig-qianwen'),
+        "never replay the other provider's thinking signature",
+      )
       response.setHeader('Content-Type', 'text/event-stream')
       const events = [
         { type: 'message_start', message: { usage: { input_tokens: 10, output_tokens: 0 } } },
-        { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } },
+        {
+          type: 'content_block_start',
+          index: 0,
+          content_block: { type: 'thinking', thinking: '' },
+        },
         {
           type: 'content_block_delta',
           index: 0,
-          delta: { type: 'text_delta', text: '原生适配器测试' },
+          delta: { type: 'thinking_delta', thinking: '测试思考' },
+        },
+        {
+          type: 'content_block_delta',
+          index: 0,
+          delta: { type: 'signature_delta', signature: isQianwen ? 'sig-qianwen' : 'sig-official' },
         },
         { type: 'content_block_stop', index: 0 },
+        { type: 'content_block_start', index: 1, content_block: { type: 'text', text: '' } },
+        {
+          type: 'content_block_delta',
+          index: 1,
+          delta: { type: 'text_delta', text: '原生适配器测试' },
+        },
+        { type: 'content_block_stop', index: 1 },
         { type: 'message_delta', delta: { stop_reason: 'end_turn' }, usage: { output_tokens: 8 } },
         { type: 'message_stop' },
       ]
-      response.end(
-        events.map((event) => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`).join(''),
+      const hanging = JSON.stringify(body.messages.at(-1)).includes('停止协议测试')
+      response.write(
+        (hanging ? events.slice(0, 7) : events)
+          .map((event) => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`)
+          .join(''),
       )
+      if (!hanging) response.end()
       return
     }
-    assert.equal(request.url, '/messages')
+    assert.equal(request.url, isQianwen ? '/qianwen/v1/messages' : '/messages')
+    if (isQianwen) {
+      assert.equal(body.system, 'x-anthropic-billing-header: cc_entrypoint=cli;')
+      assert.deepEqual(body.thinking, { type: 'disabled' })
+    }
     assert.equal(body.tools[0].name, 'web_search')
     calls++
     response.setHeader('Content-Type', 'application/json')
@@ -219,6 +301,8 @@ test('native Messages streaming and search protocol with cited sources and expli
   process.env.DEEPSEEK_SEARCH_BASE_URL = `http://127.0.0.1:${address.port}`
   process.env.DEEPSEEK_BASE_URL = `http://127.0.0.1:${address.port}`
   process.env.DSH_HOME = join(root, 'dsh')
+  process.env.QIANWEN_API_KEY = 'qianwen-test-only'
+  process.env.QIANWEN_BASE_URL = `http://127.0.0.1:${address.port}/qianwen`
   const store = new Store(root)
   const model = new TestModel((request) =>
     request.messages.at(-1)?.role === 'tool'
@@ -238,6 +322,22 @@ test('native Messages streaming and search protocol with cited sources and expli
     assert.match(search.output, /https:\/\/example.org\/source/)
     assert.match(search.output, /Test excerpt/)
     assert.equal(calls, 1)
+    const parallel = store.create(user.id)
+    await Promise.all([
+      agents.start(user.id, session.id, '换供应商搜索', qianwen),
+      agents.start(user.id, parallel.id, '官方搜索'),
+    ])
+    await Promise.all([agents.active.get(session.id)?.done, agents.active.get(parallel.id)?.done])
+    assert.equal(calls, 3)
+    assert.equal(store.session(user.id, session.id).provider, 'qianwen')
+    const qianwenAnswer = (await agents.snapshot(user.id, session.id)).messages.at(-1)!
+    assert.ok(
+      qianwenAnswer.role === 'assistant' &&
+        qianwenAnswer.parts.some(
+          (part) =>
+            part.type === 'tool' && part.status === 'done' && part.output.includes('Test excerpt'),
+        ),
+    )
     valid = false
     const failure = store.create(user.id)
     await agents.start(user.id, failure.id, 'search')
@@ -246,6 +346,13 @@ test('native Messages streaming and search protocol with cited sources and expli
     assert.ok(
       failed.role === 'assistant' &&
         failed.parts.some((part) => part.type === 'tool' && part.status === 'error'),
+    )
+    await agents.start(user.id, failure.id, '千问搜索失败', qianwen)
+    await agents.active.get(failure.id)?.done
+    const qianwenFailed = (await agents.snapshot(user.id, failure.id)).messages.at(-1)!
+    assert.ok(
+      qianwenFailed.role === 'assistant' &&
+        qianwenFailed.parts.some((part) => part.type === 'tool' && part.status === 'error'),
     )
     await agents.close()
     agents = await new Agents(store).init()
@@ -257,10 +364,77 @@ test('native Messages streaming and search protocol with cited sources and expli
     assert.ok(
       nativeAnswer.parts.some((part) => part.type === 'text' && part.text === '原生适配器测试'),
     )
+    await agents.start(user.id, native.id, '换千问继续', qianwen)
+    await agents.active.get(native.id)?.done
+    assert.deepEqual(received.at(-1), {
+      provider: 'qianwen',
+      model: qianwen.model,
+      stream: true,
+      users: 2,
+    })
+    await agents.close()
+    agents = await new Agents(store).init()
+    await agents.start(user.id, native.id, '重启继续')
+    await agents.active.get(native.id)?.done
+    assert.deepEqual(received.at(-1), {
+      provider: 'qianwen',
+      model: qianwen.model,
+      stream: true,
+      users: 3,
+    })
+    for (const selection of [
+      { provider: 'deepseek-official', model: 'deepseek-v4-pro' },
+      { provider: 'qianwen', model: 'deepseek-v4-pro-0813' },
+    ]) {
+      await agents.start(user.id, native.id, '换 Pro', selection)
+      await agents.active.get(native.id)?.done
+      assert.equal(received.at(-1)?.model, selection.model)
+    }
+    for (const selection of [{ provider: 'deepseek-official', model: 'deepseek-flash' }, qianwen]) {
+      const cancel = store.create(user.id)
+      await agents.start(user.id, cancel.id, '停止协议测试', selection)
+      await new Promise<void>((ready) => {
+        const check = () => {
+          if (
+            agents.active.get(cancel.id)?.live?.chunks.some((chunk) => chunk.type === 'text-delta')
+          ) {
+            unsubscribe()
+            ready()
+          }
+        }
+        const unsubscribe = agents.subscribe(user.id, cancel.id, check)
+        check()
+      })
+      // Move to a new job before collecting weak references in the live SSE transport.
+      await new Promise<void>((done) => setImmediate(done))
+      assert.ok(globalThis.gc, 'test:server must run with --expose-gc')
+      globalThis.gc()
+      await new Promise<void>((done) => setImmediate(done))
+      let timer: ReturnType<typeof setTimeout> | undefined
+      try {
+        await Promise.race([
+          agents.stop(user.id, cancel.id),
+          new Promise((_, reject) => {
+            timer = setTimeout(
+              () => reject(new Error('stream cancellation stalled after GC')),
+              2000,
+            )
+          }),
+        ])
+      } finally {
+        clearTimeout(timer)
+      }
+      const stopped = (await agents.snapshot(user.id, cancel.id)).messages.at(-1)!
+      assert.ok(stopped.role === 'assistant' && stopped.status === 'stopped')
+    }
+    delete process.env.QIANWEN_API_KEY
+    const count = received.length
+    await assert.rejects(agents.start(user.id, native.id, '没有千问密钥'), /QIANWEN_API_KEY/)
+    assert.equal(received.length, count, 'must not fall back to the official key')
   } finally {
+    upstream.closeAllConnections()
     await agents.close()
     store.close()
-    upstream.closeAllConnections()
     await new Promise<void>((done) => upstream.close(() => done()))
     if (savedKey === undefined) delete process.env.DEEPSEEK_API_KEY
     else process.env.DEEPSEEK_API_KEY = savedKey
@@ -270,6 +444,10 @@ test('native Messages streaming and search protocol with cited sources and expli
     else process.env.DEEPSEEK_BASE_URL = savedChatBase
     if (savedDshHome === undefined) delete process.env.DSH_HOME
     else process.env.DSH_HOME = savedDshHome
+    for (const [index, key] of ['QIANWEN_API_KEY', 'QIANWEN_BASE_URL'].entries()) {
+      if (savedQianwen[index] === undefined) delete process.env[key]
+      else process.env[key] = savedQianwen[index]
+    }
     assert.ok(
       resolve(root).startsWith(resolve(tmpdir()) + sep) && root.includes('gczy-search-test-'),
     )
@@ -299,9 +477,32 @@ test('HTTP: authentication, ownership, request boundaries and file download', as
     assert.equal((await fetch(base + '/api/me')).status, 401)
     assert.equal((await fetch(base + '/api/health')).headers.get('x-frame-options'), 'DENY')
     const headers = { 'x-test-user': 'alice', 'Content-Type': 'application/json' }
+    const catalog = (await (await fetch(base + '/api/models', { headers })).json()) as {
+      providers: { id: string }[]
+    }
+    assert.deepEqual(
+      catalog.providers.map((item) => item.id),
+      ['deepseek-official', 'qianwen'],
+    )
     const created = await fetch(base + '/api/sessions', { method: 'POST', headers })
     const { id } = (await created.json()) as { id: string }
     assert.equal(created.status, 201)
+    for (const selection of [
+      null,
+      { provider: 'qianwen', model: 'deepseek-flash' },
+      { provider: 'https://evil.test', model: 'deepseek-flash' },
+    ]) {
+      assert.equal(
+        (
+          await fetch(`${base}/api/sessions/${id}/messages`, {
+            method: 'POST',
+            headers,
+            body: JSON.stringify({ question: 'hello', selection }),
+          })
+        ).status,
+        400,
+      )
+    }
     assert.equal(
       (await fetch(`${base}/api/sessions/${id}`, { headers: { 'x-test-user': 'bob' } })).status,
       404,

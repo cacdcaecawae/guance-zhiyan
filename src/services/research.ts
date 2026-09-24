@@ -1,8 +1,9 @@
 import { useSyncExternalStore } from 'react'
-import type { Artifact, Session, SessionSummary, User } from '@/types'
+import type { Artifact, ModelCatalog, ModelSelection, Session, SessionSummary, User } from '@/types'
 
 interface State {
   user: User | null
+  catalog: ModelCatalog | null
   sessions: SessionSummary[]
   current: Session | null
   loading: boolean
@@ -11,6 +12,7 @@ interface State {
 }
 let state: State = {
   user: null,
+  catalog: null,
   sessions: [],
   current: null,
   loading: true,
@@ -48,12 +50,14 @@ export async function initialize() {
   try {
     const user = await request<User>('/me')
     const sessions = await request<SessionSummary[]>('/sessions')
+    const catalog = await request<ModelCatalog>('/models')
     if (version !== initialization) return
-    update({ user, sessions, current: null, loading: false })
+    update({ user, catalog, sessions, current: null, loading: false })
   } catch (error) {
     if (version === initialization)
       update({
         user: null,
+        catalog: null,
         sessions: [],
         current: null,
         loading: false,
@@ -123,7 +127,10 @@ export function watchSession(id?: string) {
 }
 
 // POST acknowledgements never overwrite a newer stream snapshot.
-export const askQuestion = (id: string, question: string) =>
-  request(`/sessions/${id}/messages`, { method: 'POST', body: JSON.stringify({ question }) })
+export const askQuestion = (id: string, question: string, selection?: ModelSelection) =>
+  request(`/sessions/${id}/messages`, {
+    method: 'POST',
+    body: JSON.stringify({ question, selection }),
+  })
 export const stopAnswer = (id: string) => request(`/sessions/${id}/stop`, { method: 'POST' })
 export const artifactUrl = (file: Artifact) => `/api/files/${encodeURIComponent(file.id)}`

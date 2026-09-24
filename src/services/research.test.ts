@@ -24,6 +24,8 @@ it('会话切换丢弃过时读取；HTTP 确认不覆盖较新的流式状态',
   const session = (id: string, title: string): Session => ({
     id,
     title,
+    provider: 'deepseek-official',
+    model: 'deepseek-flash',
     messages: [],
     artifacts: [],
     running: false,

@@ -4,6 +4,11 @@ settings:
   autoInstallPeers: true
   excludeLinksFromLockfile: false
 
+patchedDependencies:
+  '@deepseek-ai/dsh-llm-deepseek@0.1.7-rc.1':
+    hash: 6108847f168f5e3505cd961118b56181bafcecd762b3bce4b0ee5765b1e32570
+    path: patches/@deepseek-ai__dsh-llm-deepseek@0.1.7-rc.1.patch
+
 importers:
 
   .:
@@ -22,7 +27,7 @@ importers:
         version: 0.1.7-rc.1(@deepseek-ai/cordis@4.0.4)
       '@deepseek-ai/dsh-llm-deepseek':
         specifier: 0.1.7-rc.1
-        version: 0.1.7-rc.1(ed42f5a0cc111b6d2b472866e7a4651c)
+        version: 0.1.7-rc.1(patch_hash=6108847f168f5e3505cd961118b56181bafcecd762b3bce4b0ee5765b1e32570)(ed42f5a0cc111b6d2b472866e7a4651c)
       '@deepseek-ai/dsh-session':
         specifier: 0.1.7-rc.1
         version: 0.1.7-rc.1(@deepseek-ai/cordis@4.0.4)(@deepseek-ai/dsh-scope@0.1.7-rc.1(@deepseek-ai/cordis@4.0.4)(@deepseek-ai/dsh-invariants@0.1.7-rc.1(@deepseek-ai/cordis@4.0.4)))
@@ -2775,7 +2780,7 @@ snapshots:
     dependencies:
       '@deepseek-ai/cordis': 4.0.4
 
-  '@deepseek-ai/dsh-llm-deepseek@0.1.7-rc.1(ed42f5a0cc111b6d2b472866e7a4651c)':
+  '@deepseek-ai/dsh-llm-deepseek@0.1.7-rc.1(patch_hash=6108847f168f5e3505cd961118b56181bafcecd762b3bce4b0ee5765b1e32570)(ed42f5a0cc111b6d2b472866e7a4651c)':
     dependencies:
       '@deepseek-ai/cordis': 4.0.4
       '@deepseek-ai/cosmokit': 1.8.5

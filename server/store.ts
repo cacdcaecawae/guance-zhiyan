@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
-import type { Artifact, SessionSummary, User } from '../src/types/index.ts'
+import type { Artifact, ModelSelection, SessionSummary, User } from '../src/types/index.ts'
 
 export class HttpError extends Error {
   status: number
@@ -29,6 +29,13 @@ export class Store {
       CREATE TABLE IF NOT EXISTS artifacts(id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES sessions(id), name TEXT NOT NULL, format TEXT NOT NULL, size INTEGER NOT NULL);
       CREATE INDEX IF NOT EXISTS artifacts_session ON artifacts(session_id);
     `)
+    const columns = this.db.prepare('PRAGMA table_info(sessions)').all()
+    if (!columns.some((column) => column.name === 'provider')) {
+      this.db.exec(`BEGIN;
+        ALTER TABLE sessions ADD COLUMN provider TEXT NOT NULL DEFAULT 'deepseek-official';
+        ALTER TABLE sessions ADD COLUMN model TEXT NOT NULL DEFAULT 'deepseek-flash';
+        COMMIT;`)
+    }
   }
   user(subject: string, name: string): User {
     this.db.prepare('INSERT OR IGNORE INTO users VALUES(?, ?, ?)').run(randomUUID(), subject, name)
@@ -41,19 +48,25 @@ export class Store {
       .prepare('SELECT id, title FROM sessions WHERE user_id=? ORDER BY created DESC LIMIT 100')
       .all(userId) as unknown as SessionSummary[]
   }
-  session(userId: string, id: string): SessionSummary {
+  session(userId: string, id: string): SessionSummary & ModelSelection {
     const row = this.db
-      .prepare('SELECT id, title FROM sessions WHERE id=? AND user_id=?')
+      .prepare('SELECT id, title, provider, model FROM sessions WHERE id=? AND user_id=?')
       .get(id, userId)
     if (!row) throw new HttpError(404, '没有找到会话。')
-    return row as unknown as SessionSummary
+    return row as unknown as SessionSummary & ModelSelection
   }
   create(userId: string): SessionSummary {
     const session = { id: randomUUID(), title: '新研究' }
     this.db
-      .prepare('INSERT INTO sessions VALUES(?, ?, ?, ?)')
+      .prepare('INSERT INTO sessions(id, user_id, title, created) VALUES(?, ?, ?, ?)')
       .run(session.id, userId, session.title, Date.now())
     return session
+  }
+  selectModel(userId: string, id: string, selection: ModelSelection) {
+    this.session(userId, id)
+    this.db
+      .prepare('UPDATE sessions SET provider=?, model=? WHERE id=? AND user_id=?')
+      .run(selection.provider, selection.model, id, userId)
   }
   title(userId: string, id: string, question: string) {
     this.session(userId, id)
