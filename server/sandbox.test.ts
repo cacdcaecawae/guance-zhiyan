@@ -87,6 +87,9 @@ async function protocolFixture() {
             headers: { 'content-type': request.headers['content-type']! },
           }).formData()
           const meta = JSON.parse(await (form.get('metadata') as Blob).text())
+          assert.equal(meta.mode, 600)
+          assert.equal(meta.owner, 'node')
+          assert.equal(meta.group, 'node')
           uploads.set(meta.path, await (form.get('file') as Blob).text())
           response.writeHead(204)
           return response.end()
@@ -231,11 +234,11 @@ test('DSH tools use isolated OpenSandbox SDK sessions, persist exports and kill 
     )
     const output = await process.result()
     assert.equal(output.stdout.truncated, true)
-    assert.ok(output.stdout.text.endsWith('TAIL-MARKER'))
+    assert.ok(output.stdout.text.endsWith('\nTAIL-MARKER\n'))
     const observed = process.observed.stdout.readFrom(1024)
-    assert.equal(observed.nextOffset, 200011)
+    assert.equal(observed.nextOffset, 200013)
     assert.equal(observed.lossy, true)
-    assert.ok(observed.text.endsWith('TAIL-MARKER'))
+    assert.ok(observed.text.endsWith('\nTAIL-MARKER\n'))
     assert.equal(process.observed.stdout.readFrom(observed.nextOffset).text, '')
     await ctx.fiber.dispose()
     await assert.rejects(session.exportFile('/etc/passwd', agents.files), /只能导出/)
@@ -320,7 +323,10 @@ test('sandbox capacity waits, queued cancellation creates nothing, idle eviction
     fixture.state.officeWritten = () => {
       competing = manager.use(user.id, a.id, undefined, async () => {})
     }
-    assert.equal(await current.readOffice(Buffer.from('fixture office'), 'docx'), 'fixture office')
+    assert.equal(
+      await current.readOffice(Buffer.from('fixture office'), 'docx'),
+      'fixture office\n',
+    )
     await competing
     assert.deepEqual(fixture.errors, [])
   } finally {

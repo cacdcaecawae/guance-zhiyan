@@ -88,10 +88,13 @@ PY`,
       assert.equal(await readFile(files.path(artifact.id), 'utf8'), 'native filesystem')
       await run(
         first,
-        "python3 - <<'PY'\nfrom docx import Document\nd = Document(); d.add_paragraph('Real sandbox report'); d.save('/workspace/report.docx')\nPY",
+        "python3 - <<'PY'\nfrom docx import Document\nd = Document(); d.add_paragraph('Real sandbox report'); d.add_paragraph('Second paragraph'); d.save('/workspace/report.docx')\nPY",
       )
       const word = await first.exportFile('report.docx', files)
-      assert.match(await files.read(alice.id, a.id, word.id, first), /Real sandbox report/)
+      assert.match(
+        await files.read(alice.id, a.id, word.id, first),
+        /Real sandbox report\nSecond paragraph/,
+      )
       await run(
         first,
         "setsid bash -c 'while true; do echo tick >> /workspace/ticks; sleep 0.1; done' >/dev/null 2>&1 &\nwhile [ ! -s ticks ]; do sleep 0.05; done",

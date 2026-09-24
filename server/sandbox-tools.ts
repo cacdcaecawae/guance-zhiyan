@@ -30,6 +30,9 @@ import { Artifacts } from './artifacts.ts'
 const cwd = (value?: string) =>
   value?.startsWith('/') ? posix.normalize(value.replaceAll('\\', '/')) : '/workspace'
 
+// execd emits lines without their terminators (including the final partial line).
+const outputLine = (text: string) => (text.endsWith('\n') ? text : text + '\n')
+
 export class SessionSandbox {
   mutation = Promise.resolve()
   manager: Sandboxes
@@ -104,9 +107,10 @@ export class SessionSandbox {
           {
             path: request,
             data: JSON.stringify({ method, args }),
-            mode: 0o600,
-            owner: '1000',
-            group: '1000',
+            // OpenSandbox expects octal digits encoded as a decimal number, not a JS bitmask.
+            mode: 600,
+            owner: 'node',
+            group: 'node',
           },
         ])
         try {
@@ -186,7 +190,7 @@ for line in lines:
           {
             skipAccumulation: true,
             onStdout: (message) => {
-              output = (output + message.text).slice(0, 32100)
+              output = (output + outputLine(message.text)).slice(0, 32100)
             },
           },
           signal,
@@ -384,8 +388,8 @@ export class RemoteShell extends ShellExecutor {
           { workingDirectory: spec.workdir },
           {
             skipAccumulation: true,
-            onStdout: (m) => stdout.append(m.text),
-            onStderr: (m) => stderr.append(m.text),
+            onStdout: (m) => stdout.append(outputLine(m.text)),
+            onStderr: (m) => stderr.append(outputLine(m.text)),
           },
           abort.signal,
         )
