@@ -9,6 +9,9 @@ on:
   workflow_dispatch:
 permissions:
   contents: read
+concurrency:
+  group: sandbox-${{ github.ref }}
+  cancel-in-progress: true
 jobs:
   docker:
     runs-on: ubuntu-latest

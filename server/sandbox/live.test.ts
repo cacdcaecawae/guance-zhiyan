@@ -77,7 +77,7 @@ PY`,
       )
       await run(
         first,
-        'test ! -r /etc/shadow; test ! -e /var/run/docker.sock; test -z "$DEEPSEEK_API_KEY$QIANWEN_API_KEY$SANDBOX_API_KEY"',
+        'test ! -r /etc/shadow; test ! -e /var/run/docker.sock; test -z "${DEEPSEEK_API_KEY-}${QIANWEN_API_KEY-}${SANDBOX_API_KEY-}"',
       )
       await run(
         first,
