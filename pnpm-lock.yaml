@@ -22,6 +22,9 @@ importers:
       '@deepseek-ai/dsh-agent-loop':
         specifier: 0.1.7-rc.1
         version: 0.1.7-rc.1(40f837ed43b96473b71298ccf7ab0548)
+      '@deepseek-ai/dsh-http-proxy':
+        specifier: 0.1.7-rc.1
+        version: 0.1.7-rc.1(@deepseek-ai/cordis@4.0.4)
       '@deepseek-ai/dsh-llm':
         specifier: 0.1.7-rc.1
         version: 0.1.7-rc.1(@deepseek-ai/cordis@4.0.4)

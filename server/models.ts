@@ -72,8 +72,6 @@ export function modelAdapter(provider: string) {
         baseURL: config.baseURL,
         thinking: 'enabled',
         reasoningEffort: 'high',
-        maxTokens: 8192,
-        streamIdleTimeoutMs: 60000,
       })
     },
     resolveApiKey: async (config) => {

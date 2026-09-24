@@ -10,7 +10,7 @@
     height: 100%;
   }
   body {
-    @apply bg-background text-foreground text-ui-base antialiased wrap-break-word;
+    @apply bg-background text-foreground font-sans text-ui-base antialiased wrap-break-word;
   }
   * {
     @apply border-border;

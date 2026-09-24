@@ -28,6 +28,7 @@ it('会话切换丢弃过时读取；HTTP 确认不覆盖较新的流式状态',
     model: 'deepseek-flash',
     messages: [],
     artifacts: [],
+    trace: [],
     running: false,
   })
   let stopOld = () => {}

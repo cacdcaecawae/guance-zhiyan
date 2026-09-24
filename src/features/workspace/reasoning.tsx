@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { ChevronDownIcon } from 'lucide-react'
+import { AtomIcon, ChevronDownIcon } from 'lucide-react'
 import { Markdown } from './markdown'
 
 /** Adapted from DSH ReasoningRow (MIT); provenance in THIRD_PARTY_NOTICES.md. */
@@ -30,14 +30,19 @@ export function Reasoning({ text, running }: { text: string; running: boolean })
     <details
       open={open}
       onToggle={(event) => setOpen(event.currentTarget.open)}
-      className="text-foreground-subtle"
+      className="group/reasoning min-w-0 text-foreground-subtle"
     >
-      <summary className="flex min-w-0 cursor-pointer items-center gap-2 rounded-md py-1 outline-none hover:bg-hover focus-visible:ring-2 focus-visible:ring-ring">
-        <ChevronDownIcon className="size-4 shrink-0" aria-hidden />
+      <summary className="flex min-w-0 cursor-pointer list-none items-center gap-2 rounded-md py-2 outline-none hover:bg-hover focus-visible:ring-2 focus-visible:ring-ring [&::-webkit-details-marker]:hidden">
+        <AtomIcon className="size-3.5 shrink-0" aria-hidden />
         <span className="shrink-0 text-ui-caption">思考过程{running ? ' · 生成中' : ''}</span>
-        {!open && <span className="truncate text-ui-sm">{summary}</span>}
+        <span aria-hidden>·</span>
+        {!open && <span className="min-w-0 flex-1 truncate text-ui-sm">{summary}</span>}
+        <ChevronDownIcon
+          className="ml-auto size-3 shrink-0 group-open/reasoning:rotate-180"
+          aria-hidden
+        />
       </summary>
-      <div className="mt-2 border-l border-border pl-3">
+      <div className="mb-2 ml-5 rounded-md bg-surface-hover p-3 text-ui-caption">
         <Markdown text={text} />
       </div>
     </details>

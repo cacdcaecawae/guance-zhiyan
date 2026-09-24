@@ -14,6 +14,13 @@ only after an upstream update passes the forced-GC cancellation regression.
 `src/features/workspace/reasoning.tsx` adapts the completed-paragraph summary
 algorithm from [ReasoningRow.tsx](https://github.com/deepseek-ai/deepseek-harness/blob/46a7f68b0922371ce7144b668b90e377d8e799f4/packages/client/ui-chat/src/client/chat/ReasoningRow.tsx).
 The disclosure markup and styling use this project's components and tokens.
+`execution-process.tsx` adapts the process/final-answer boundary and disclosure
+layout from `packages/client/ui-chat/src/client/conversation-nodes/turn-process.ts`
+and `chat/TurnProcessNodeView.tsx`. `trajectory.tsx` adapts the timeline lanes,
+turn grouping and event disclosure layout from `packages/client/ui-trajectory`.
+These views use this project's React data service and semantic tokens instead
+of the upstream client plugin runtime. `server/network.ts` directly reuses
+`@deepseek-ai/dsh-http-proxy` at the same pinned version.
 Upstream commit: `46a7f68b0922371ce7144b668b90e377d8e799f4`.
 
 Upstream [license](https://github.com/deepseek-ai/deepseek-harness/blob/46a7f68b0922371ce7144b668b90e377d8e799f4/LICENSE):

@@ -18,6 +18,7 @@ import { qianwenSearch } from './qianwen-search.ts'
 import { Store, HttpError } from './store.ts'
 import { Artifacts } from './artifacts.ts'
 import { messagesFromEvents, type LiveAttempt } from './view.ts'
+import { traceFromEvents } from './trace.ts'
 
 const PERSONA = `你是管策智研的政策研究助手。根据真实资料回答，区分原文事实与分析，不编造政策条款或研究结论。
 必要时使用联网搜索和网页读取，附上能核对的来源链接；这不代表已检索用户的文献库，自有文献库 RAG 尚未实现。
@@ -26,7 +27,6 @@ const PERSONA = `你是管策智研的政策研究助手。根据真实资料回
 多步骤任务简要说明进度；失败如实说明，不伪造成功。`
 
 interface ActiveRun {
-  userId: string
   ready: Promise<void>
   handle?: AgentHandle
   live?: LiveAttempt
@@ -35,8 +35,6 @@ interface ActiveRun {
 }
 export interface AgentOptions {
   adapter?: LlmAdapter // Test injection only; never selected by an environment variable.
-  maxSteps?: number
-  timeoutMs?: number
 }
 
 export class Agents {
@@ -65,7 +63,7 @@ export class Agents {
       root: join(this.store.root, 'sessions'),
       compression: 'none',
     })
-    await ctx.plugin(AgentLoop, { agents: [], maxParallelToolCalls: 2 })
+    await ctx.plugin(AgentLoop, { agents: [] })
     for (const provider of modelCatalog().providers)
       ctx.llm.registerAdapter([provider.id], this.options.adapter ?? modelAdapter(provider.id))
     ctx.on('session/event', (session) => this.notify(session.id))
@@ -73,11 +71,8 @@ export class Agents {
       const run = this.active.get(agent.session.id)
       if (!run) return
       if (frame.type === 'start') run.live = { turn: frame.turn, step: frame.step, chunks: [] }
-      else if (frame.type === 'chunk') {
-        run.live?.chunks.push(frame.chunk)
-        if ((run.live?.chunks.length ?? 0) > 20000)
-          agent.cancel({ kind: 'hook', reason: '回答达到流式输出限制。' })
-      } else run.live = undefined
+      else if (frame.type === 'chunk') run.live?.chunks.push(frame.chunk)
+      else run.live = undefined
       this.notify(agent.session.id)
     })
     return this
@@ -116,6 +111,7 @@ export class Agents {
       messages: messagesFromEvents(events, !!run, run?.live),
       artifacts: this.store.artifacts(userId, id),
       running: !!run,
+      trace: traceFromEvents(events, !!run, run?.live),
     }
   }
   async start(userId: string, id: string, question: string, requested?: ModelSelection) {
@@ -125,27 +121,16 @@ export class Agents {
     if (this.closing) throw new HttpError(503, '服务正在关闭，请稍后重试。')
     if (this.failed.has(id)) throw new HttpError(500, '会话保存失败，暂时无法继续生成。')
     if (this.active.has(id)) throw new HttpError(409, '当前会话仍在生成，请先停止。')
-    if (
-      this.active.size >= 4 ||
-      [...this.active.values()].filter((run) => run.userId === userId).length >= 2
-    )
-      throw new HttpError(429, '正在执行的任务较多，请稍后重试。')
     if (!this.options.adapter && !config.apiKey)
       throw new HttpError(503, `后端尚未配置${config.name}密钥（${config.key}）。`)
     const ready = Promise.withResolvers<void>()
-    const run: ActiveRun = { userId, ready: ready.promise, stopped: false }
+    const run: ActiveRun = { ready: ready.promise, stopped: false }
     this.active.set(id, run)
     try {
-      let steps = 0
-      let calls = 0
       const setup = async (ctx: Context) => {
         const web = ctx.isolate('web')
         await web.plugin(WebRuntime)
-        await web.plugin(WebFetch, {
-          maxResponseBytes: 1_000_000,
-          maxBodyChars: 32000,
-          timeoutMs: 20000,
-        })
+        await web.plugin(WebFetch)
         if (selection.provider === 'qianwen')
           await web.plugin({
             name: 'qianwen-search',
@@ -158,29 +143,13 @@ export class Agents {
           await web.plugin(WebSearch, {
             apiKeyEnv: config.key,
             model: selection.model,
-            maxUses: 3,
-            maxTokens: 2048,
           })
         await web.plugin(WebTools, { fetch: true, search: true })
         this.files.register(ctx, userId, id)
-        ctx.on('agent/pre-step', async ({ agent }, next) => {
-          if (
-            ++steps > (this.options.maxSteps ?? 8) ||
-            JSON.stringify(agent.session.deriveMessages()).length > 200000
-          ) {
-            agent.cancel({
-              kind: 'hook',
-              reason: '达到任务步骤或上下文限制，请缩小任务或新建会话。',
-            })
-          }
-          return next()
-        })
-        ctx.tools.guard(() => (++calls > 24 ? '达到工具调用次数限制。' : undefined))
       }
       const agentOptions = {
         provider: selection.provider,
         model: selection.model,
-        maxTokens: 8192,
       }
       run.handle = (await this.ctx.sessionPersistence.stat(SessionId(id)))
         ? await this.ctx.agents.resume({ resumeSessionId: SessionId(id), agentOptions, setup })
@@ -198,15 +167,10 @@ export class Agents {
           source: { kind: 'user' },
         }),
       )
-      const timer = setTimeout(
-        () => run.handle?.agent.cancel({ kind: 'hook', reason: '任务超时，已停止。' }),
-        this.options.timeoutMs ?? 180000,
-      )
       run.done = (async () => {
         try {
           await run.handle!.agent.whenIdle()
         } finally {
-          clearTimeout(timer)
           await run.handle!.dispose()
           this.active.delete(id)
           this.notify(id)

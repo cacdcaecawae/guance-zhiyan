@@ -3,6 +3,7 @@ import { Store } from './store.ts'
 import { Agents } from './agent.ts'
 import { createApp } from './http.ts'
 import { localAuthenticate } from './auth.ts'
+import { configureNetwork } from './network.ts'
 
 const port = Number(process.env.PORT ?? 3001)
 const local = process.argv.includes('--local')
@@ -12,6 +13,7 @@ const origin = local
 if (!Number.isInteger(port) || port < 1 || port > 65535 || new URL(origin).origin !== origin)
   throw new Error('PORT 或 APP_ORIGIN 配置无效。')
 const store = new Store(resolve(process.env.DATA_DIR ?? 'server/data'))
+const disposeNetwork = await configureNetwork()
 process.env.DSH_HOME = resolve(store.root, 'dsh')
 const agents = await new Agents(store).init()
 const server = createApp(store, agents, {
@@ -37,6 +39,7 @@ async function shutdown() {
   server.close()
   server.closeAllConnections()
   await agents.close()
+  await disposeNetwork()
   store.close()
 }
 process.once('SIGINT', () => {

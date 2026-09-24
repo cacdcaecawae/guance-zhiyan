@@ -1,4 +1,9 @@
 import type { WebSearchProvider, WebSearchSource } from '@deepseek-ai/dsh-web'
+import { WebError } from '@deepseek-ai/dsh-web'
+import {
+  DEEPSEEK_DEFAULT_MAX_TOKENS,
+  DEEPSEEK_DEFAULT_MAX_USES,
+} from '@deepseek-ai/dsh-web-search-deepseek'
 import { connection } from './models.ts'
 
 const record = (value: unknown): Record<string, unknown> =>
@@ -17,7 +22,7 @@ export function qianwenSearch(model: string): WebSearchProvider {
       const response = await fetch(`${config.baseURL.replace(/\/v1$/, '')}/v1/messages`, {
         method: 'POST',
         redirect: 'error',
-        signal: AbortSignal.any([AbortSignal.timeout(30000), ...(signal ? [signal] : [])]),
+        signal,
         headers: {
           'Content-Type': 'application/json',
           'x-api-key': config.apiKey,
@@ -25,30 +30,29 @@ export function qianwenSearch(model: string): WebSearchProvider {
         },
         body: JSON.stringify({
           model,
-          max_tokens: 2048,
+          max_tokens: DEEPSEEK_DEFAULT_MAX_TOKENS,
           thinking: { type: 'disabled' },
-          system: 'x-anthropic-billing-header: cc_entrypoint=cli;',
+          system: [{ type: 'text', text: 'x-anthropic-billing-header: cc_entrypoint=cli;' }],
           messages: [{ role: 'user', content: `请联网搜索：${request.query}` }],
-          tools: [{ type: 'web_search_20250305', name: 'web_search', max_uses: 3 }],
+          tools: [
+            {
+              type: 'web_search_20250305',
+              name: 'web_search',
+              max_uses: DEEPSEEK_DEFAULT_MAX_USES,
+            },
+          ],
         }),
       })
       if (!response.ok) {
         await response.body?.cancel()
         throw new Error(`千问联网搜索请求失败（${response.status}）。`)
       }
-      const chunks: Uint8Array[] = []
-      let size = 0
-      for await (const chunk of response.body!) {
-        size += chunk.length
-        if (size > 1_000_000) throw new Error('联网搜索响应过大。')
-        chunks.push(chunk)
-      }
-      const content = record(JSON.parse(Buffer.concat(chunks).toString())).content
+      const content = record(await response.json()).content
       if (!Array.isArray(content)) throw new Error('联网搜索响应格式无效。')
       const blocks = content.map(record)
       const results = blocks.filter((block) => block.type === 'web_search_tool_result')
       if (!results.length || results.some((block) => !Array.isArray(block.content)))
-        throw new Error('供应商未返回有效联网搜索结果。')
+        throw new WebError('供应商未返回有效联网搜索结果。', 'WEB_PROVIDER_ERROR')
       const snippets = new Map<string, string>()
       for (const block of blocks) {
         if (block.type !== 'text' || !Array.isArray(block.citations)) continue

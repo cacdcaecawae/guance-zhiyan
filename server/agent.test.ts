@@ -6,6 +6,10 @@ import { join, resolve, sep } from 'node:path'
 import { once } from 'node:events'
 import { createServer } from 'node:http'
 import { DatabaseSync } from 'node:sqlite'
+import { createUserMessage } from '@deepseek-ai/dsh-llm'
+import { DEFAULT_MAX_TOKENS } from '@deepseek-ai/dsh-llm-deepseek'
+import { SessionId, type SessionEvent } from '@deepseek-ai/dsh-session'
+import { traceFromEvents } from './trace.ts'
 import { TestModel, textChunks, toolChunks } from '../tests/support/model.ts'
 import { Store } from './store.ts'
 import { Agents } from './agent.ts'
@@ -45,11 +49,11 @@ test('existing SQLite sessions migrate without losing ownership and keep model s
   }
 })
 
-test('native DSH: scoped tools, persistent history, cancellation, errors and budgets', async () => {
+test('native DSH: scoped tools, persistent history, cancellation and long-running tasks', async () => {
   const root = await mkdtemp(join(tmpdir(), 'gczy-agent-test-'))
   const store = new Store(root)
   const model = new TestModel()
-  let agents = await new Agents(store, { adapter: model, maxSteps: 2 }).init()
+  let agents = await new Agents(store, { adapter: model }).init()
   try {
     const alice = store.user('test:alice', 'Alice')
     const bob = store.user('test:bob', 'Bob')
@@ -57,6 +61,17 @@ test('native DSH: scoped tools, persistent history, cancellation, errors and bud
     await agents.start(alice.id, first.id, '生成报告')
     await agents.active.get(first.id)?.done
     const view = await agents.snapshot(alice.id, first.id)
+    assert.deepEqual(
+      view.trace.map((entry) => entry.kind),
+      ['system', 'user', 'assistant', 'tool', 'assistant'],
+    )
+    assert.ok(view.trace.every((entry) => entry.turn === 1))
+    assert.ok(
+      view.trace
+        .filter((entry) => entry.kind === 'tool' || entry.kind === 'assistant')
+        .every((entry) => entry.end !== undefined && entry.end >= entry.time),
+    )
+    assert.equal(view.trace.find((entry) => entry.kind === 'tool')?.status, 'done')
     assert.equal(view.messages.at(-1)?.role, 'assistant')
     const answer = view.messages.at(-1)!
     assert.ok(answer.role === 'assistant' && answer.status === 'done')
@@ -97,7 +112,7 @@ test('native DSH: scoped tools, persistent history, cancellation, errors and bud
     assert.throws(() => store.artifact(alice.id, filesB[0].id), /没有找到/)
 
     await agents.close()
-    agents = await new Agents(store, { adapter: model, maxSteps: 2 }).init()
+    agents = await new Agents(store, { adapter: model }).init()
     assert.deepEqual((await agents.snapshot(alice.id, first.id)).messages, view.messages)
     await agents.start(alice.id, first.id, '继续回答')
     await agents.active.get(first.id)?.done
@@ -122,6 +137,9 @@ test('native DSH: scoped tools, persistent history, cancellation, errors and bud
     const stopped = (await agents.snapshot(alice.id, cancel.id)).messages.at(-1)!
     assert.ok(stopped.role === 'assistant' && stopped.status === 'stopped')
     assert.ok(stopped.parts.some((part) => part.type === 'text' && part.text.includes('部分内容')))
+    const stoppedTrace = (await agents.snapshot(alice.id, cancel.id)).trace.at(-1)!
+    assert.equal(stoppedTrace.status, 'stopped')
+    assert.match(stoppedTrace.text, /部分内容/)
 
     const early = store.create(alice.id)
     const starting = agents.start(alice.id, early.id, '持续生成')
@@ -134,6 +152,17 @@ test('native DSH: scoped tools, persistent history, cancellation, errors and bud
     await agents.active.get(failed.id)?.done
     const error = (await agents.snapshot(alice.id, failed.id)).messages.at(-1)!
     assert.ok(error.role === 'assistant' && error.status === 'error')
+    const failedEvents = await agents.events(failed.id)
+    assert.equal(traceFromEvents(failedEvents, false).at(-1)?.status, 'error')
+    const stoppedBeforeText: SessionEvent[] = failedEvents.map((event) =>
+      event.type === 'turn/end'
+        ? {
+            ...event,
+            data: { ...event.data, reason: { kind: 'aborted', reason: { kind: 'user' } } },
+          }
+        : event,
+    )
+    assert.equal(traceFromEvents(stoppedBeforeText, false).at(-1)?.status, 'stopped')
 
     const sheet = await agents.files.create(
       alice.id,
@@ -157,13 +186,44 @@ test('native DSH: scoped tools, persistent history, cancellation, errors and bud
     await assert.rejects(agents.files.create(alice.id, first.id, '../other', 'md', 'test'), /名称/)
     await assert.rejects(agents.files.read(alice.id, cancel.id, sheet.id), /当前会话/)
 
-    model.respond = () => toolChunks('web_fetch', { url: 'http://127.0.0.1:1' })
+    const concurrent = Array.from({ length: 5 }, () => store.create(alice.id))
+    await Promise.all(concurrent.map((item) => agents.start(alice.id, item.id, '持续生成')))
+    assert.equal(agents.active.size, 5)
+    await Promise.all(concurrent.map((item) => agents.stop(alice.id, item.id)))
+
+    let steps = 0
+    model.respond = () =>
+      ++steps <= 25 ? toolChunks('list_files', {}) : textChunks('完成'.repeat(10001))
     const loop = store.create(alice.id)
     await agents.start(alice.id, loop.id, 'repeat')
     await agents.active.get(loop.id)?.done
-    const limited = (await agents.snapshot(alice.id, loop.id)).messages.at(-1)!
-    assert.ok(limited.role === 'assistant' && limited.status === 'stopped')
-    assert.ok(limited.parts.some((part) => part.type === 'tool' && part.status === 'error'))
+    const completed = (await agents.snapshot(alice.id, loop.id)).messages.at(-1)!
+    assert.equal(steps, 26)
+    assert.ok(completed.role === 'assistant' && completed.status === 'done')
+    assert.equal(
+      completed.parts.filter((part) => part.type === 'tool' && part.status === 'done').length,
+      25,
+    )
+    assert.ok(
+      completed.parts.some((part) => part.type === 'text' && part.text === '完成'.repeat(10001)),
+    )
+
+    const longText = '资料'.repeat(100001)
+    model.respond = () => [
+      { type: 'block-start', index: 0, blockType: 'text' },
+      { type: 'text-delta', index: 0, text: longText },
+      { type: 'block-end', index: 0, block: { type: 'text', text: longText } },
+      { type: 'finish', reason: { kind: 'stop' } },
+    ]
+    const long = store.create(alice.id)
+    await agents.start(alice.id, long.id, '长资料')
+    await agents.active.get(long.id)?.done
+    model.respond = () => textChunks('继续完成')
+    await agents.start(alice.id, long.id, '继续')
+    await agents.active.get(long.id)?.done
+    const continued = (await agents.snapshot(alice.id, long.id)).messages.at(-1)!
+    assert.ok(continued.role === 'assistant' && continued.status === 'done')
+    assert.ok(JSON.stringify(model.requests.at(-1)!.messages).includes(longText))
   } finally {
     await agents.close()
     store.close()
@@ -185,6 +245,7 @@ test('native Messages streaming and search protocol with cited sources and expli
   const qianwen = { provider: 'qianwen', model: 'deepseek-v4.1-flash' }
   let valid = true
   let calls = 0
+  let expectedMaxTokens = DEFAULT_MAX_TOKENS
   const upstream = createServer(async (request, response) => {
     const isQianwen = request.url === '/qianwen/v1/messages'
     assert.equal(request.headers['x-api-key'], isQianwen ? 'qianwen-test-only' : 'test-only')
@@ -205,7 +266,7 @@ test('native Messages streaming and search protocol with cited sources and expli
     if (body.stream) {
       assert.equal(request.url, isQianwen ? '/qianwen/v1/messages' : '/v1/messages')
       assert.equal(body.stream, true)
-      assert.equal(body.max_tokens, 8192)
+      assert.equal(body.max_tokens, expectedMaxTokens)
       assert.deepEqual(body.thinking, { type: 'enabled' })
       assert.deepEqual(body.output_config, { effort: 'high' })
       assert.equal(body.temperature, undefined)
@@ -253,10 +314,14 @@ test('native Messages streaming and search protocol with cited sources and expli
     }
     assert.equal(request.url, isQianwen ? '/qianwen/v1/messages' : '/messages')
     if (isQianwen) {
-      assert.equal(body.system, 'x-anthropic-billing-header: cc_entrypoint=cli;')
+      assert.deepEqual(body.system, [
+        { type: 'text', text: 'x-anthropic-billing-header: cc_entrypoint=cli;' },
+      ])
       assert.deepEqual(body.thinking, { type: 'disabled' })
     }
     assert.equal(body.tools[0].name, 'web_search')
+    assert.equal(body.tools[0].max_uses, 5)
+    assert.equal(body.max_tokens, 4096)
     calls++
     response.setHeader('Content-Type', 'application/json')
     response.end(
@@ -271,7 +336,7 @@ test('native Messages streaming and search protocol with cited sources and expli
                     type: 'web_search_result',
                     url: 'https://example.org/source',
                     title: 'Test source',
-                    encrypted_content: '',
+                    encrypted_content: isQianwen ? 'x'.repeat(1_000_001) : '',
                   },
                 ],
               },
@@ -357,10 +422,24 @@ test('native Messages streaming and search protocol with cited sources and expli
     await agents.close()
     agents = await new Agents(store).init()
     const native = store.create(user.id)
+    // Persist the previous release's cap, then resume through the application.
+    expectedMaxTokens = 8192
+    const legacy = await agents.ctx.agents.create({
+      sessionId: SessionId(native.id),
+      agentOptions: { provider: 'deepseek-official', model: 'deepseek-flash', maxTokens: 8192 },
+    })
+    legacy.agent.followup(
+      createUserMessage({ content: [{ type: 'text', text: '旧配置' }], source: { kind: 'user' } }),
+    )
+    await legacy.agent.whenIdle()
+    await legacy.dispose()
+    expectedMaxTokens = DEFAULT_MAX_TOKENS
     await agents.start(user.id, native.id, '协议测试')
     await agents.active.get(native.id)?.done
     const nativeAnswer = (await agents.snapshot(user.id, native.id)).messages.at(-1)!
     assert.ok(nativeAnswer.role === 'assistant' && nativeAnswer.status === 'done')
+    const publicTrace = JSON.stringify((await agents.snapshot(user.id, native.id)).trace)
+    assert.ok(!publicTrace.includes('sig-official') && !publicTrace.includes('test-only'))
     assert.ok(
       nativeAnswer.parts.some((part) => part.type === 'text' && part.text === '原生适配器测试'),
     )
@@ -370,7 +449,7 @@ test('native Messages streaming and search protocol with cited sources and expli
       provider: 'qianwen',
       model: qianwen.model,
       stream: true,
-      users: 2,
+      users: 3,
     })
     await agents.close()
     agents = await new Agents(store).init()
@@ -380,7 +459,7 @@ test('native Messages streaming and search protocol with cited sources and expli
       provider: 'qianwen',
       model: qianwen.model,
       stream: true,
-      users: 3,
+      users: 4,
     })
     for (const selection of [
       { provider: 'deepseek-official', model: 'deepseek-v4-pro' },

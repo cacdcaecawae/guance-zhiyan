@@ -47,9 +47,9 @@ pnpm chat                              # 构建并启动本机聊天 http://127.
 | DeepSeek 官方 | `deepseek-flash`（V4.1） | `deepseek-v4-pro`      |
 | 千问 AI 平台  | `deepseek-v4.1-flash`    | `deepseek-v4-pro-0813` |
 
-模型名称和参数核对于 2026-09-24：[DeepSeek 模型列表](https://api-docs.deepseek.com/api/list-models/)、[官方 Anthropic 接口](https://api-docs.deepseek.com/guides/anthropic_api/)、[千问 Anthropic 接口](https://platform.qianwenai.com/docs/api-reference/chat/anthropic)。两家对话均复用 DSH `0.1.7-rc.1` 的 Anthropic Messages 适配器与流式协议，开启思考，`output_config.effort=high`，`max_tokens=8192`（包含思考与正文），不发送 `budget_tokens` 或采样参数。模型列表按已核对文档维护，不能保证自动跟随将来的命名变化。
+模型名称和参数核对于 2026-09-24：[DeepSeek 模型列表](https://api-docs.deepseek.com/api/list-models/)、[官方 Anthropic 接口](https://api-docs.deepseek.com/guides/anthropic_api/)、[千问 Anthropic 接口](https://platform.qianwenai.com/docs/api-reference/chat/anthropic)。两家对话均复用 DSH `0.1.7-rc.1` 的 Anthropic Messages 适配器与流式协议，开启思考，`output_config.effort=high`，输出长度沿用 DSH 默认 `max_tokens=256000`（包含思考与正文），不发送 `budget_tokens` 或采样参数。模型列表按已核对文档维护，不能保证自动跟随将来的命名变化。
 
-官方联网搜索复用 DSH 工具，显式使用当前模型，保留独立 `DEEPSEEK_SEARCH_BASE_URL`；更改官方对话端点不会自动更改其搜索端点。千问搜索使用同一 `QIANWEN_BASE_URL` 下的 Messages 接口，按[平台联网搜索文档](https://platform.qianwenai.com/docs/developer-guides/tool-calling/web-search)附加所需 system 标识，关闭辅助搜索的思考；两家搜索均最多 3 次原生搜索、2048 输出 tokens。没有实际搜索结果块或请求失败时显示工具失败。两家密钥独立，只放后端，不得写入 `VITE_` 环境变量。
+官方联网搜索复用 DSH 工具，显式使用当前模型，保留独立 `DEEPSEEK_SEARCH_BASE_URL`；更改官方对话端点不会自动更改其搜索端点。千问搜索使用同一 `QIANWEN_BASE_URL` 下的 Messages 接口，按[平台联网搜索文档](https://platform.qianwenai.com/docs/developer-guides/tool-calling/web-search)附加所需 system 标识，关闭辅助搜索的思考；两家搜索均沿用 DSH 搜索默认值：最多 5 次原生搜索、4096 输出 tokens。没有实际搜索结果块或请求失败时显示工具失败。两家密钥独立，只放后端，不得写入 `VITE_` 环境变量。
 
 | 命令                              | 说明                                                              |
 | --------------------------------- | ----------------------------------------------------------------- |
@@ -69,9 +69,13 @@ pnpm chat                              # 构建并启动本机聊天 http://127.
 
 ## 存储与运行边界
 
+工作区提供“对话 / 轨迹”：对话按 DSH 的紧凑执行过程展示多次思考、工具和最终回答；轨迹按轮次展开真实系统输入、用户、上下文、模型和工具事件，顶部可切换记录耗时与事件顺序，并控制轮次展开和工具行显示。刷新后由同一份 JSONL 历史恢复，停止保留已返回的文本；不展示凭据、协议签名或内部请求头。
+
+出站网络复用 DSH 原生代理策略，支持可选的 `HTTP_PROXY` / `HTTPS_PROXY` / `ALL_PROXY` / `NO_PROXY`。本机代理使用 fake-IP DNS 时，在后端 `server/.env` 设置已有代理地址（例如 `HTTPS_PROXY=http://127.0.0.1:7890`，HTTP 同理），使代理解析公网域名；部署时使用服务器自己的代理或留空。应用不修改操作系统网络设置，仍拒绝私网 IP 字面量；代理模式下域名解析交由所配置的代理。千问原生搜索的 system 标识必须以文本块数组传入，字符串形式无法触发实际搜索。
+
 SQLite 保存内部用户、会话归属及文件索引；DSH JSONL 保存唯一的消息与执行历史；产物文件单独保存。停止服务后备份整个 `DATA_DIR`，数据库、日志与产物必须一起恢复。该目录包含私有研究数据，应由服务账号独占访问，不能作为静态目录公开。
 
-首版使用单进程，最多同时 4 个任务、每人 2 个、每会话 1 个；一次任务最多 8 步、24 次工具调用、180 秒；每次模型输出最多 8192 tokens。上下文超过 200000 个 JSON 字符时停止并提示新建会话，不自动删历史。会话列表展示最新 100 条。文件正文上限 200 KB，表格最多 2000 行、50 列，每人产物总量 50 MiB。尚无文件清理界面。
+首版使用单进程，每会话同时只执行一个任务。Agent 执行与联网工具沿用 DSH 默认参数：工具并行数 10，模型流连续无数据超时 300 秒；网页读取最多 5 MB、100000 字符、30 秒。应用不另设总任务数、每人任务数、任务步骤、工具调用总次数、总时长、流式分片数或 JSON 字符上下文上限，也不自动删历史。模型服务本身的输出和上下文上限仍然有效，真实截断会显示未完成；旧会话下次发送也采用新默认值。会话列表展示最新 100 条。文件正文上限 200 KB，表格最多 2000 行、50 列，每人产物总量 50 MiB。尚无文件清理界面。
 
 内置工具仅 `web_search`、`web_fetch`、`create_file`、`list_files`、`read_file`。网页抓取复用 DSH 公网地址校验；文件读取仅限当前用户的当前会话产物。Word 生成器支持段落及三级标题，Excel/CSV 支持文本与数字表格；不承诺完整 Markdown 到 Word 的排版还原或 Office 在线预览。没有 Bash、任意代码执行或子 Agent。
 

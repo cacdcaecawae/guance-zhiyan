@@ -79,7 +79,24 @@ test('真实文件工具、执行追踪和 Word 下载；其他用户不能访�
   await page.goto('/workspace')
   await page.getByRole('textbox', { name: '研究问题' }).fill('生成报告')
   await page.getByRole('button', { name: '发送' }).click()
-  await expect(page.locator('summary', { hasText: '生成文件 · 已完成' })).toBeVisible()
+  await expect(page.locator('summary', { hasText: /生成文件.*已完成/ })).toBeVisible()
+  const answer = page.getByRole('article', { name: '回答' })
+  const reasoning = answer.locator('summary', { hasText: '思考过程' })
+  await expect(reasoning).toHaveCount(2)
+  await expect(answer.locator('summary')).toHaveText([
+    /1 次工具调用 · 1 条消息/,
+    /思考过程/,
+    /生成文件.*已完成/,
+    /思考过程/,
+  ])
+  await answer.locator('summary', { hasText: '1 次工具调用' }).click()
+  await expect(answer.getByText('文件已生成，请从下方文件卡片下载。')).toBeVisible()
+  await expect(reasoning.first()).not.toBeVisible()
+  await answer.locator('summary', { hasText: '1 次工具调用' }).click()
+  await page.reload()
+  await expect(reasoning).toHaveCount(2)
+  for (const item of await reasoning.all()) await item.click()
+  await expect(answer.getByText('测试适配器：检查请求内容。', { exact: true })).toHaveCount(2)
   const link = page.getByRole('link', { name: /研究报告.docx/ })
   await expect(link).toBeVisible()
   const downloadPromise = page.waitForEvent('download')
@@ -87,6 +104,24 @@ test('真实文件工具、执行追踪和 Word 下载；其他用户不能访�
   const download = await downloadPromise
   expect(download.suggestedFilename()).toBe('研究报告.docx')
   expect(await download.failure()).toBeNull()
+  await page.getByRole('tab', { name: '轨迹', exact: true }).click()
+  const trace = page.getByRole('tabpanel', { name: '轨迹', exact: true })
+  await expect(trace.getByLabel('执行时间分布')).toBeVisible()
+  await expect(trace.locator('summary', { hasText: /第 1 轮/ })).toBeVisible()
+  const tool = trace.locator('summary', { hasText: /工具.*生成文件/ })
+  await tool.click()
+  await expect(trace.getByText('调用参数', { exact: true })).toBeVisible()
+  await trace.getByRole('button', { name: '调用', exact: true }).click()
+  await expect(tool).not.toBeVisible()
+  await trace.getByRole('button', { name: '调用', exact: true }).click()
+  await expect(tool).toBeVisible()
+  await trace.getByRole('button', { name: '轮次', exact: true }).click()
+  await expect(tool).not.toBeVisible()
+  await trace.getByRole('button', { name: '轮次', exact: true }).click()
+  await trace.getByRole('button', { name: '时长', exact: true }).click()
+  await expect(trace.getByText('事件顺序', { exact: true })).toBeVisible()
+  await page.getByRole('tab', { name: '轨迹', exact: true }).press('ArrowLeft')
+  await expect(page.getByRole('tab', { name: '对话', exact: true })).toBeFocused()
   const other = await browser.newContext()
   try {
     await other.addCookies([{ name: 'test_user', value: 'outsider', url: 'http://localhost:4173' }])
@@ -171,6 +206,16 @@ for (const width of [390, 1440]) {
         0,
       )
       await page.screenshot({ path: `test-results/workspace-${width}-${theme}.png` })
+      await box.fill('生成报告')
+      await box.press('Enter')
+      await expect(page.locator('summary', { hasText: /生成文件.*已完成/ })).toBeVisible()
+      await page.screenshot({ path: `test-results/process-${width}-${theme}.png` })
+      await page.getByRole('tab', { name: '轨迹', exact: true }).click()
+      await expect(page.getByLabel('执行时间分布')).toBeVisible()
+      expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
+        width,
+      )
+      await page.screenshot({ path: `test-results/trace-${width}-${theme}.png` })
     })
   }
 }

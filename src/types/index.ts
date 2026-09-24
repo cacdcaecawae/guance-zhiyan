@@ -10,8 +10,8 @@ export interface Artifact {
   size: number
 }
 export type AnswerPart =
-  | { id: string; type: 'text'; text: string }
-  | { id: string; type: 'reasoning'; text: string }
+  | { id: string; type: 'text'; text: string; step: number }
+  | { id: string; type: 'reasoning'; text: string; step: number }
   | {
       id: string
       type: 'tool'
@@ -50,4 +50,17 @@ export interface Session extends SessionSummary, ModelSelection {
   messages: Message[]
   artifacts: Artifact[]
   running: boolean
+  trace: TraceEntry[]
+}
+export interface TraceEntry {
+  id: string
+  turn: number
+  step?: number
+  kind: 'system' | 'user' | 'context' | 'assistant' | 'tool'
+  label: string
+  text: string
+  input?: string
+  time: number
+  end?: number
+  status?: 'running' | 'done' | 'error' | 'stopped'
 }

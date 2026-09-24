@@ -10,14 +10,26 @@ export interface LiveAttempt {
 const textOf = (content: readonly ContentBlock[]) =>
   content.flatMap((block) => (block.type === 'text' ? [block.text] : [])).join('\n')
 
-function appendChunks(parts: AnswerPart[], chunks: StreamChunk[], prefix: string) {
+export function toolError(code?: string): string {
+  const messages: Record<string, string> = {
+    WEB_BLOCKED_URL:
+      '网页地址被安全检查拦截。若公网域名被本机代理解析为虚拟 IP，请配置后端 HTTP_PROXY / HTTPS_PROXY 后重试。',
+    WEB_FETCH_TIMEOUT: '网页读取超时，请重试或更换来源。',
+    WEB_PROVIDER_ERROR: '搜索供应商未返回有效结果，请检查平台搜索支持与后端配置后重试。',
+    WEB_PROVIDER_CREDENTIAL_MISSING: '搜索供应商密钥未配置，请在后端配置后重试。',
+    WEB_UNSUPPORTED_CONTENT_TYPE: '该地址返回的文件类型暂不支持网页读取。',
+  }
+  return messages[code ?? ''] ?? '工具执行失败，请检查参数、网络或服务配置。'
+}
+
+function appendChunks(parts: AnswerPart[], chunks: StreamChunk[], prefix: string, step: number) {
   for (const chunk of chunks) {
     if (chunk.type !== 'text-delta' && chunk.type !== 'reasoning-delta') continue
     const id = `${prefix}-${chunk.index}`
     const type = chunk.type === 'text-delta' ? 'text' : 'reasoning'
     const part = parts.find((p) => p.id === id)
     if (part && part.type !== 'tool') part.text += chunk.text
-    else parts.push({ id, type, text: chunk.text })
+    else parts.push({ id, type, text: chunk.text, step })
   }
 }
 
@@ -58,6 +70,7 @@ export function messagesFromEvents(
         answer.parts,
         expandAssistantStream(event.data.stream).map((member) => member.chunk),
         `step-${event.data.step}-${event.seq}`,
+        event.data.step,
       )
     } else if (answer && event.type === 'tool/call') {
       answer.parts.push({
@@ -75,7 +88,7 @@ export function messagesFromEvents(
       if (part?.type === 'tool') {
         part.status = event.data.message.isError ? 'error' : 'done'
         part.output = event.data.message.isError
-          ? '工具执行失败，请检查参数、网络或服务配置。'
+          ? toolError(event.data.error?.code)
           : textOf(event.data.message.content).slice(0, 16000)
       }
     } else if (answer && event.type === 'turn/end') {
@@ -107,7 +120,7 @@ export function messagesFromEvents(
         e.data.step === live.step,
     )
   ) {
-    appendChunks(answer.parts, live.chunks, `live-${live.step}`)
+    appendChunks(answer.parts, live.chunks, `live-${live.step}`, live.step)
   }
   for (const message of messages)
     if (message.role === 'assistant' && message.status === 'loading' && !running) {

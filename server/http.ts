@@ -150,9 +150,16 @@ export function createApp(
           try {
             const view = await agents.snapshot(user.id, id)
             if (!closed) {
-              response.write(`data: ${JSON.stringify(view)}\n\n`)
-              // Bound slow clients without reconnecting every snapshot over 16 KB.
-              if (response.writableLength > 1_000_000) response.end()
+              if (!response.write(`data: ${JSON.stringify(view)}\n\n`))
+                await new Promise<void>((done) => {
+                  const finish = () => {
+                    response.off('drain', finish)
+                    response.off('close', finish)
+                    done()
+                  }
+                  response.once('drain', finish)
+                  response.once('close', finish)
+                })
             }
           } catch {
             if (!closed) response.end('event: failure\ndata: {}\n\n')
@@ -164,7 +171,7 @@ export function createApp(
         // Batch token bursts, not request ordering: snapshots are serialized.
         const schedule = () => {
           dirty = true
-          if (!batch && !closed)
+          if (!batch && !closed && !writing)
             batch = setTimeout(() => {
               batch = undefined
               void send()

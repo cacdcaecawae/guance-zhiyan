@@ -2,16 +2,8 @@ import { Loader2Icon, RotateCcwIcon } from 'lucide-react'
 import { useEffect, useRef } from 'react'
 import { Button } from '@/components/ui/button'
 import type { AssistantMessage, Message } from '@/types'
-import { Markdown } from './markdown'
-import { Reasoning } from './reasoning'
+import { AnswerContent } from './execution-process'
 
-const toolNames: Record<string, string> = {
-  web_search: '联网搜索',
-  web_fetch: '读取网页',
-  create_file: '生成文件',
-  read_file: '读取文件',
-  list_files: '列出文件',
-}
 export function MessageList({
   messages,
   busy,
@@ -36,8 +28,8 @@ export function MessageList({
     if (follow.current) end.current?.scrollIntoView({ block: 'end' })
   }, [messages])
   return (
-    <div className="mx-auto w-full max-w-2xl py-4">
-      <ol className="flex flex-col gap-4">
+    <div className="mx-auto w-full max-w-3xl py-6">
+      <ol className="flex flex-col gap-8">
         {messages.map((message) => (
           <li key={message.id} className={message.role === 'user' ? 'flex justify-end' : undefined}>
             {message.role === 'user' ? (
@@ -45,48 +37,9 @@ export function MessageList({
                 {message.text}
               </div>
             ) : (
-              <article
-                aria-label="回答"
-                className="min-w-0 rounded-xl border border-card-border bg-card px-4 py-3"
-              >
+              <article aria-label="回答" className="min-w-0 py-2">
                 <div className="flex flex-col gap-3">
-                  {message.parts.map((part) =>
-                    part.type === 'text' ? (
-                      <Markdown key={part.id} text={part.text} />
-                    ) : part.type === 'reasoning' ? (
-                      <Reasoning
-                        key={part.id}
-                        text={part.text}
-                        running={message.status === 'loading' && part === message.parts.at(-1)}
-                      />
-                    ) : (
-                      <details
-                        key={part.id}
-                        className="min-w-0 rounded-lg border border-border px-3 py-2"
-                      >
-                        <summary className="cursor-pointer rounded-md text-ui-caption outline-none focus-visible:ring-2 focus-visible:ring-ring">
-                          {toolNames[part.name] ?? part.name} ·{' '}
-                          {part.status === 'running'
-                            ? '执行中'
-                            : part.status === 'done'
-                              ? '已完成'
-                              : '失败 / 已中断'}
-                        </summary>
-                        <p className="mt-2 text-ui-sm text-foreground-subtlest">调用参数</p>
-                        <pre className="max-h-40 overflow-auto text-ui-sm whitespace-pre-wrap">
-                          {part.input}
-                        </pre>
-                        {part.output && (
-                          <>
-                            <p className="mt-2 text-ui-sm text-foreground-subtlest">执行结果</p>
-                            <pre className="max-h-60 overflow-auto text-ui-sm whitespace-pre-wrap">
-                              {part.output}
-                            </pre>
-                          </>
-                        )}
-                      </details>
-                    ),
-                  )}
+                  <AnswerContent message={message} />
                   {message.status === 'loading' && (
                     <div role="status" className="flex items-center gap-2 text-foreground-subtle">
                       <Loader2Icon className="size-4 animate-spin" aria-hidden />
