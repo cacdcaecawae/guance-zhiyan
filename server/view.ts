@@ -12,6 +12,10 @@ const textOf = (content: readonly ContentBlock[]) =>
 
 export function toolError(code?: string): string {
   const messages: Record<string, string> = {
+    SANDBOX_UNAVAILABLE: '执行环境不可用，请检查沙箱服务后重试。',
+    FS_NOT_FOUND: '工作区中没有找到该文件，请检查路径。',
+    FS_PERMISSION_DENIED: '无法访问该文件，请使用当前会话工作区。',
+    FS_TOO_LARGE: '文件超过本次操作支持的大小。',
     WEB_BLOCKED_URL:
       '网页地址被安全检查拦截。若公网域名被本机代理解析为虚拟 IP，请配置后端 HTTP_PROXY / HTTPS_PROXY 后重试。',
     WEB_FETCH_TIMEOUT: '网页读取超时，请重试或更换来源。',

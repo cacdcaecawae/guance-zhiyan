@@ -101,7 +101,7 @@ export function createApp(
         const artifact = store.artifact(user.id, file[1])
         const data = await readFile(agents.files.path(artifact.id))
         response.writeHead(200, {
-          'Content-Type': MIME[artifact.format],
+          'Content-Type': MIME[artifact.format] ?? 'application/octet-stream',
           'Content-Disposition': `attachment; filename="download.${artifact.format}"; filename*=UTF-8''${encodeURIComponent(artifact.name)}`,
           'Content-Length': data.length,
         })

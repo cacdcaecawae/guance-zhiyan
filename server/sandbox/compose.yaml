@@ -1,0 +1,19 @@
+# Linux host only. Start from this directory with a private .env file.
+services:
+  opensandbox:
+    build:
+      # Official publish_host fix; release 1.1.0 itself binds execd to 0.0.0.0.
+      context: https://github.com/opensandbox-group/OpenSandbox.git#2f5e56ab15846e661da53fb24a4caa4ec3f2008d:server
+      args:
+        SETUPTOOLS_SCM_PRETEND_VERSION: 1.1.0
+    image: guance-opensandbox:2f5e56a
+    network_mode: host
+    restart: unless-stopped
+    environment:
+      OPENSANDBOX_SERVER_API_KEY: ${SANDBOX_API_KEY:?Set SANDBOX_API_KEY in the private .env file}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./server.toml:/etc/opensandbox/config.toml:ro
+      - sandbox-state:/var/lib/opensandbox
+volumes:
+  sandbox-state:

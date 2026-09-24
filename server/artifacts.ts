@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { mkdir, readFile, unlink, writeFile } from 'node:fs/promises'
-import { join } from 'node:path'
+import { join, extname } from 'node:path'
 import { Document, HeadingLevel, Packer, Paragraph } from 'docx'
 import ExcelJS from 'exceljs'
 import JSZip from 'jszip'
@@ -10,7 +10,7 @@ import { defineTool } from '@deepseek-ai/dsh-tools'
 import type { Artifact } from '../src/types/index.ts'
 import { Store, HttpError } from './store.ts'
 
-export const MIME = {
+export const MIME: Record<string, string> = {
   md: 'text/markdown; charset=utf-8',
   csv: 'text/csv; charset=utf-8',
   docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
@@ -18,6 +18,8 @@ export const MIME = {
 }
 const MAX_CONTENT = 200_000
 const MAX_USER_BYTES = 50 * 1024 * 1024
+type GeneratedFormat = 'md' | 'docx' | 'xlsx' | 'csv'
+type Workspace = { writeFile(name: string, data: Uint8Array, signal?: AbortSignal): Promise<void> }
 const contentOutput = {
   schema: { type: 'string' as const },
   render: (_args: unknown, text: string) => [{ type: 'text' as const, text }],
@@ -36,9 +38,10 @@ export class Artifacts {
     userId: string,
     sessionId: string,
     name: string,
-    format: Artifact['format'],
+    format: GeneratedFormat,
     content: string,
     signal?: AbortSignal,
+    workspace?: Workspace,
   ) {
     this.store.session(userId, sessionId)
     if (
@@ -116,11 +119,27 @@ export class Artifacts {
       }
     } else bytes = Buffer.from(content)
     signal?.throwIfAborted()
+    const filename = name.replace(/\.[a-z0-9]+$/i, '') + '.' + format
+    await workspace?.writeFile(filename, bytes, signal)
+    return this.save(userId, sessionId, filename, bytes, signal)
+  }
+  async save(userId: string, sessionId: string, name: string, bytes: Buffer, signal?: AbortSignal) {
+    this.store.session(userId, sessionId)
+    if (
+      !name.trim() ||
+      name.length > 200 ||
+      /[/\\]/.test(name) ||
+      Array.from(name).some((char) => char.charCodeAt(0) < 32 || char.charCodeAt(0) === 127) ||
+      bytes.length > MAX_USER_BYTES
+    )
+      throw new Error('文件名称无效或文件超过 50 MiB。')
+    signal?.throwIfAborted()
+    const extension = extname(name).slice(1).toLowerCase()
     const artifact: Artifact = {
       id: randomUUID(),
       sessionId,
-      name: name.replace(/\.[a-z0-9]+$/i, '') + '.' + format,
-      format,
+      name,
+      format: /^[a-z0-9]{1,12}$/.test(extension) ? extension : 'bin',
       size: bytes.length,
     }
     await mkdir(join(this.store.root, 'artifacts'), { recursive: true, mode: 0o700 })
@@ -167,10 +186,13 @@ export class Artifacts {
           .join('')
       }
       text = collect(parsed)
-    } else text = data.toString('utf8')
+    } else {
+      if (data.includes(0)) throw new Error('这是二进制文件，请使用沙箱工具处理或下载。')
+      text = new TextDecoder('utf-8', { fatal: true }).decode(data)
+    }
     return text.length > 32000 ? text.slice(0, 32000) + '\n[内容已截断]' : text
   }
-  register(ctx: Context, userId: string, sessionId: string) {
+  register(ctx: Context, userId: string, sessionId: string, workspace?: Workspace) {
     ctx.tools.register(
       defineTool({
         name: 'create_file',
@@ -184,7 +206,15 @@ export class Artifacts {
         output: contentOutput,
         execute: async (args, exec) =>
           JSON.stringify(
-            await this.create(userId, sessionId, args.name, args.format, args.content, exec.signal),
+            await this.create(
+              userId,
+              sessionId,
+              args.name,
+              args.format,
+              args.content,
+              exec.signal,
+              workspace,
+            ),
           ),
       }),
     )

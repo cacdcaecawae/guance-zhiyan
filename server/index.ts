@@ -4,6 +4,7 @@ import { Agents } from './agent.ts'
 import { createApp } from './http.ts'
 import { localAuthenticate } from './auth.ts'
 import { configureNetwork } from './network.ts'
+import { sandboxConfig, Sandboxes } from './sandboxes.ts'
 
 const port = Number(process.env.PORT ?? 3001)
 const local = process.argv.includes('--local')
@@ -15,7 +16,9 @@ if (!Number.isInteger(port) || port < 1 || port > 65535 || new URL(origin).origi
 const store = new Store(resolve(process.env.DATA_DIR ?? 'server/data'))
 const disposeNetwork = await configureNetwork()
 process.env.DSH_HOME = resolve(store.root, 'dsh')
-const agents = await new Agents(store).init()
+const sandboxOptions = sandboxConfig()
+const sandboxes = sandboxOptions ? await new Sandboxes(store, sandboxOptions).init() : undefined
+const agents = await new Agents(store, { sandboxes }).init()
 const server = createApp(store, agents, {
   origin,
   dist: resolve('dist'),

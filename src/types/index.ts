@@ -6,7 +6,7 @@ export interface Artifact {
   id: string
   sessionId: string
   name: string
-  format: 'md' | 'docx' | 'xlsx' | 'csv'
+  format: string
   size: number
 }
 export type AnswerPart =
