@@ -28,8 +28,17 @@ function SheetContent({
         }}
         onCloseAutoFocus={(e) => {
           e.preventDefault()
-          returnFocus.current!.focus()
+          // 打开抽屉的按钮可能随导航重新挂载，此时按同名 aria-label 找到新按钮
+          const target = returnFocus.current
+          const label = target?.getAttribute('aria-label')
+          ;(target?.isConnected
+            ? target
+            : label
+              ? document.querySelector<HTMLElement>(`[aria-label="${CSS.escape(label)}"]`)
+              : null
+          )?.focus()
         }}
+        aria-describedby={undefined}
         className={cn(
           'fixed inset-y-0 z-50 flex w-[85vw] max-w-sm flex-col border-popover-border bg-popover shadow-md',
           side === 'right' ? 'right-0 border-l' : 'left-0 border-r',
@@ -38,7 +47,6 @@ function SheetContent({
         {...props}
       >
         <SheetPrimitive.Title className="sr-only">{title}</SheetPrimitive.Title>
-        <SheetPrimitive.Description className="sr-only">{title}</SheetPrimitive.Description>
         {children}
         <SheetPrimitive.Close
           aria-label="关闭"

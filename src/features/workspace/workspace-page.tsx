@@ -1,7 +1,10 @@
+import { CircleAlertIcon, DownloadIcon, PaperclipIcon } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
-import { Link, useNavigate } from 'react-router'
+import { Link, useLocation, useNavigate } from 'react-router'
 import { TopBar } from '@/app/shell'
 import { Button } from '@/components/ui/button'
+import { Sheet, SheetContent } from '@/components/ui/sheet'
+import { useMediaQuery } from '@/lib/use-media-query'
 import {
   artifactUrl,
   askQuestion,
@@ -11,7 +14,9 @@ import {
   watchSession,
 } from '@/services/research'
 import { Composer } from './composer'
+import { FilePreview, FormatBlock, PreviewPane } from './file-preview'
 import { MessageList } from './message-list'
+import { ModelPicker } from './model-picker'
 import { Welcome } from './welcome'
 import { Trajectory } from './trajectory'
 import type { ModelSelection } from '@/types'
@@ -23,7 +28,16 @@ export function WorkspacePage({ sessionId }: { sessionId?: string }) {
   const [operationError, setOperationError] = useState<string | null>(null)
   const [posting, setPosting] = useState(false)
   const [reconnect, setReconnect] = useState(0)
+  const [previewId, setPreviewId] = useState<string | null>(null)
+  const wide = useMediaQuery('(min-width: 1024px)')
   const navigate = useNavigate()
+  // 从“新建研究”进入时直接聚焦输入框
+  const focusComposer = !!(useLocation().state as { focusComposer?: boolean } | null)?.focusComposer
+  // 关闭宽屏预览后把焦点还给对应的文件卡
+  const closePreview = () => {
+    document.getElementById(`artifact-${previewId}`)?.focus()
+    setPreviewId(null)
+  }
   const createdSession = useRef<string | undefined>(undefined)
   const mounted = useRef(false)
   useEffect(() => {
@@ -34,11 +48,12 @@ export function WorkspacePage({ sessionId }: { sessionId?: string }) {
   }, [])
   useEffect(() => watchSession(sessionId), [sessionId, reconnect])
   const session = current?.id === sessionId ? current : null
+  const preview = session?.artifacts.find((file) => file.id === previewId)
   const busy = posting || !!session?.running
   const selection =
     chosen ??
     (session ? { provider: session.provider, model: session.model } : catalog?.defaultSelection)
-  const provider = catalog?.providers.find((item) => item.id === selection?.provider)
+  const empty = !loading && !error && !session?.messages.length
   const submit = async (question: string) => {
     setPosting(true)
     setOperationError(null)
@@ -64,37 +79,37 @@ export function WorkspacePage({ sessionId }: { sessionId?: string }) {
       setOperationError(failure instanceof Error ? failure.message : '停止失败，请重试。')
     }
   }
+  // 连接与操作错误：放进两个视图各自的内容栏顶部，与内容左缘对齐
+  const alerts = (connectionError || operationError) && (
+    <div className="shrink-0 px-4 pt-3">
+      <div className="mx-auto flex max-w-4xl flex-col gap-1.5">
+        {connectionError && (
+          <div role="alert" className="flex items-start gap-2 text-ui-caption text-destructive">
+            <CircleAlertIcon className="mt-0.5 size-3.5 shrink-0" aria-hidden />
+            <span className="min-w-0">{connectionError}</span>
+            <Button
+              variant="outline"
+              size="sm"
+              className="-my-1 text-foreground"
+              onClick={() => setReconnect((value) => value + 1)}
+            >
+              重新连接
+            </Button>
+          </div>
+        )}
+        {operationError && (
+          <p role="alert" className="flex items-start gap-2 text-ui-caption text-destructive">
+            <CircleAlertIcon className="mt-0.5 size-3.5 shrink-0" aria-hidden />
+            {operationError}
+          </p>
+        )}
+      </div>
+    </div>
+  )
   return (
     <>
       <TopBar title={session?.title ?? '研究工作台'}>
-        <span className="text-ui-sm text-foreground-subtlest">研究助手</span>
-      </TopBar>
-      <section aria-label="研究工作区" className="flex min-h-0 flex-1 flex-col bg-surface">
-        <div className="shrink-0 px-4">
-          {' '}
-          {connectionError && (
-            <div role="alert" className="mb-2 text-ui-caption text-destructive">
-              {connectionError}{' '}
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => setReconnect((value) => value + 1)}
-              >
-                重新连接
-              </Button>
-            </div>
-          )}
-          {operationError && (
-            <p role="alert" className="mb-2 text-ui-caption text-destructive">
-              {operationError}
-            </p>
-          )}
-        </div>
-        <div
-          role="tablist"
-          aria-label="会话视图"
-          className="flex shrink-0 gap-6 border-b border-border px-6"
-        >
+        <div role="tablist" aria-label="会话视图" className="flex shrink-0 gap-5 self-stretch pr-2">
           {(['conversation', 'trace'] as const).map((tab) => (
             <button
               key={tab}
@@ -120,12 +135,14 @@ export function WorkspacePage({ sessionId }: { sessionId?: string }) {
                   document.getElementById(next + '-tab')?.focus()
                 }
               }}
-              className={`border-b-2 py-2.5 text-ui-caption outline-none focus-visible:ring-2 focus-visible:ring-ring ${view === tab ? 'border-brand text-brand' : 'border-transparent text-foreground-subtle hover:text-foreground'}`}
+              className={`relative rounded-sm px-1.5 text-ui-caption outline-none transition-colors after:absolute after:inset-x-1.5 after:-bottom-px after:h-0.5 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset ${view === tab ? 'font-medium text-foreground after:bg-seal' : 'text-foreground-subtle hover:text-foreground'}`}
             >
               {tab === 'conversation' ? '对话' : '轨迹'}
             </button>
           ))}
         </div>
+      </TopBar>
+      <section aria-label="研究工作区" className="flex min-h-0 flex-1 flex-col">
         <div
           role="tabpanel"
           id="trace-panel"
@@ -133,6 +150,7 @@ export function WorkspacePage({ sessionId }: { sessionId?: string }) {
           hidden={view !== 'trace'}
           className={view === 'trace' ? 'flex min-h-0 flex-1 flex-col' : 'hidden'}
         >
+          {alerts}
           <Trajectory entries={session?.trace ?? []} />
           {session?.running && (
             <Button variant="outline" className="m-3 self-end" onClick={stop}>
@@ -145,121 +163,129 @@ export function WorkspacePage({ sessionId }: { sessionId?: string }) {
           id="conversation-panel"
           aria-labelledby="conversation-tab"
           hidden={view !== 'conversation'}
-          className={view === 'conversation' ? 'flex min-h-0 flex-1 flex-col' : 'hidden'}
+          className={view !== 'conversation' ? 'hidden' : 'flex min-h-0 flex-1'}
         >
-          <div data-message-scroll className="min-h-0 flex-1 overflow-y-auto px-4">
-            {loading ? (
-              <p role="status" className="p-6 text-foreground-subtle">
-                正在加载会话…
-              </p>
-            ) : error ? (
-              <div className="mx-auto flex max-w-3xl flex-col gap-3 py-6">
-                <p role="alert" className="text-destructive">
-                  {error}
+          <div
+            className={`flex min-w-0 flex-1 flex-col lg:min-w-80 ${empty ? 'justify-center-safe [@media(min-height:560px)]:pb-12' : ''}`}
+          >
+            {alerts}
+            <div
+              data-message-scroll
+              className={`relative min-h-0 overflow-y-auto px-4 ${empty ? '' : 'flex-1'}`}
+            >
+              {loading ? (
+                <p role="status" className="p-6 text-foreground-subtle">
+                  正在加载会话…
                 </p>
-                <Button variant="outline" onClick={() => setReconnect((value) => value + 1)}>
-                  重试加载
-                </Button>
-                <Link to="/workspace" className="text-brand underline">
-                  返回工作台
-                </Link>
-              </div>
-            ) : session?.messages.length ? (
-              <MessageList
-                messages={session.messages}
-                busy={busy}
-                onRetry={(message) => {
-                  void submit(message.question)
-                }}
-              />
-            ) : (
-              <Welcome
-                onPick={(question) => {
-                  if (!busy) void submit(question)
-                }}
-              />
-            )}
-            {!!session?.artifacts.length && (
-              <section aria-label="会话文件" className="mx-auto mb-4 flex max-w-3xl flex-col gap-2">
-                <h2 className="font-medium">会话文件</h2>
-                {session.artifacts.map((file) => (
-                  <a
-                    key={file.id}
-                    href={artifactUrl(file)}
-                    className="flex min-w-0 flex-wrap items-center gap-2 rounded-lg border border-border px-3 py-2 outline-none hover:bg-hover focus-visible:ring-2 focus-visible:ring-ring"
-                  >
-                    <span className="min-w-0 flex-1 wrap-anywhere">{file.name}</span>
-                    <span className="text-ui-sm text-foreground-subtle">
-                      {Math.ceil(file.size / 1024)} KB · 下载
-                    </span>
-                  </a>
-                ))}
-              </section>
-            )}
-          </div>
-          <div className="shrink-0 px-4 pb-4">
-            <div className="mx-auto max-w-3xl">
-              {!error && (
-                <div className="mb-2 flex flex-wrap gap-2">
-                  <label className="flex min-w-0 flex-1 flex-col gap-1 text-ui-sm text-foreground-subtle">
-                    <span className="sr-only">供应商</span>
-                    <select
-                      aria-label="供应商"
-                      disabled={busy || loading}
-                      value={selection?.provider ?? ''}
-                      className="h-8 min-w-0 rounded-lg border border-input-border bg-input px-2 text-ui-caption text-foreground outline-none hover:border-input-border-hover focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
-                      onChange={(event) => {
-                        const next = catalog?.providers.find(
-                          (item) => item.id === event.target.value,
-                        )
-                        if (next) setChosen({ provider: next.id, model: next.models[0].id })
-                      }}
-                    >
-                      {catalog?.providers.map((item) => (
-                        <option key={item.id} value={item.id}>
-                          {item.name}
-                          {item.configured ? '' : '（未配置密钥）'}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                  <label className="flex min-w-0 flex-1 flex-col gap-1 text-ui-sm text-foreground-subtle">
-                    <span className="sr-only">模型</span>
-                    <select
-                      aria-label="模型"
-                      disabled={busy || loading}
-                      value={selection?.model ?? ''}
-                      className="h-8 min-w-0 rounded-lg border border-input-border bg-input px-2 text-ui-caption text-foreground outline-none hover:border-input-border-hover focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
-                      onChange={(event) => {
-                        if (selection)
-                          setChosen({ provider: selection.provider, model: event.target.value })
-                      }}
-                    >
-                      {provider?.models.map((item) => (
-                        <option key={item.id} value={item.id}>
-                          {item.name}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                  <p className="w-full text-ui-sm text-foreground-subtlest">
-                    所选平台将接收本会话历史并提供回答与联网搜索。
+              ) : error ? (
+                <div className="mx-auto flex max-w-3xl flex-col gap-3 py-6">
+                  <p role="alert" className="text-destructive">
+                    {error}
                   </p>
+                  <Button variant="outline" onClick={() => setReconnect((value) => value + 1)}>
+                    重试加载
+                  </Button>
+                  <Link to="/workspace" className="text-brand underline">
+                    返回工作台
+                  </Link>
                 </div>
-              )}
-              {!error && (
-                <Composer
-                  onSubmit={submit}
-                  busy={busy || loading}
-                  onStop={session?.running ? stop : undefined}
+              ) : session?.messages.length ? (
+                <MessageList
+                  messages={session.messages}
+                  busy={busy}
+                  onRetry={(message) => {
+                    void submit(message.question)
+                  }}
+                />
+              ) : (
+                <Welcome
+                  onPick={(question) => {
+                    if (!busy) void submit(question)
+                  }}
                 />
               )}
-              <p className="mt-1.5 text-ui-sm text-foreground-subtlest">
-                Enter 发送，Shift+Enter 换行。联网资料需核对来源；文献库检索尚未实现。
-              </p>
+              {!!session?.artifacts.length && (
+                <section aria-label="会话文件" className="mx-auto mb-6 w-full max-w-4xl">
+                  <h2 className="mb-3 flex items-center gap-2 font-serif text-ui-base font-semibold">
+                    <PaperclipIcon className="size-4 text-foreground-subtlest" aria-hidden />
+                    会话文件
+                    <span className="font-sans text-ui-sm font-normal text-foreground-subtlest">
+                      {session.artifacts.length} 个
+                    </span>
+                  </h2>
+                  {/* 文件卡片：朱红格式块 + 文件名，整卡可点开预览，与正文明显区分 */}
+                  <ul className="grid grid-cols-[repeat(auto-fill,minmax(16rem,1fr))] gap-3">
+                    {session.artifacts.map((file) => (
+                      <li
+                        key={file.id}
+                        className={`relative flex min-w-0 items-center gap-3 rounded-xl border p-3 transition-colors has-[button:focus-visible]:ring-2 has-[button:focus-visible]:ring-ring ${previewId === file.id ? 'border-brand bg-accent' : 'border-card-border bg-card hover:border-border-hover hover:bg-surface-hover'}`}
+                      >
+                        <FormatBlock format={file.format} />
+                        <div className="min-w-0 flex-1">
+                          <button
+                            type="button"
+                            id={`artifact-${file.id}`}
+                            aria-pressed={previewId === file.id}
+                            onClick={() => setPreviewId(previewId === file.id ? null : file.id)}
+                            className="block max-w-full truncate rounded-sm text-left text-ui-base font-medium outline-none after:absolute after:inset-0 after:rounded-xl"
+                          >
+                            {file.name}
+                          </button>
+                          <p className="text-ui-sm text-foreground-subtlest">
+                            {Math.ceil(file.size / 1024)} KB
+                            {previewId === file.id && ' · 预览中'}
+                          </p>
+                        </div>
+                        <a
+                          href={artifactUrl(file)}
+                          aria-label={`下载 ${file.name}`}
+                          title="下载"
+                          className="relative z-10 flex size-8 shrink-0 items-center justify-center rounded-md text-foreground-subtle outline-none transition-colors hover:bg-hover hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+                        >
+                          <DownloadIcon className="size-4" />
+                        </a>
+                      </li>
+                    ))}
+                  </ul>
+                </section>
+              )}
+            </div>
+            <div className="shrink-0 px-4 pt-2 pb-5">
+              <div className="mx-auto max-w-4xl">
+                {!error && (
+                  <Composer
+                    autoFocus={focusComposer}
+                    onSubmit={submit}
+                    busy={busy || loading}
+                    onStop={session?.running ? stop : undefined}
+                  >
+                    {catalog && selection && (
+                      <ModelPicker
+                        catalog={catalog}
+                        selection={selection}
+                        disabled={busy || loading}
+                        onChange={setChosen}
+                      />
+                    )}
+                  </Composer>
+                )}
+              </div>
             </div>
           </div>
+          {preview && wide && <PreviewPane file={preview} onClose={closePreview} />}
         </div>
+        {preview && !wide && (
+          <Sheet
+            open
+            onOpenChange={(open) => {
+              if (!open) setPreviewId(null)
+            }}
+          >
+            <SheetContent side="right" title={`预览：${preview.name}`} className="w-full max-w-lg">
+              <FilePreview file={preview} />
+            </SheetContent>
+          </Sheet>
+        )}
       </section>
     </>
   )

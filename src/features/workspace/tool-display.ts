@@ -1,3 +1,5 @@
+import type { AssistantMessage } from '@/types'
+
 export const toolNames: Record<string, string> = {
   web_search: '联网搜索',
   web_fetch: '读取网页',
@@ -25,4 +27,15 @@ export function toolSummary(input: string): string {
   } catch {
     return input
   }
+}
+
+/** 过程与最终回答的分界，adapted from DSH's turn-process boundary; see THIRD_PARTY_NOTICES. */
+export function splitAnswer(message: AssistantMessage) {
+  const lastTool = message.parts.findLastIndex((part) => part.type === 'tool')
+  const lastText = message.parts.findLast((part) => part.type === 'text')
+  const finalStart =
+    lastText && message.parts.indexOf(lastText) > lastTool
+      ? message.parts.findIndex((part) => part.type !== 'tool' && part.step === lastText.step)
+      : message.parts.length
+  return { process: message.parts.slice(0, finalStart), final: message.parts.slice(finalStart) }
 }

@@ -137,9 +137,7 @@ export function messagesFromEvents(
             : 'error'
       if (answer.status === 'error') {
         answer.error =
-          reason.kind === 'max-tokens'
-            ? '回答达到长度限制，尚未完成。可以继续提问。'
-            : '回答生成失败，请检查模型配置后重试。'
+          reason.kind === 'max-tokens' ? '回答达到长度上限，已截断。' : '回答生成失败。'
       }
       if (reason.kind === 'aborted' && reason.reason.kind === 'hook')
         answer.error = reason.reason.reason
