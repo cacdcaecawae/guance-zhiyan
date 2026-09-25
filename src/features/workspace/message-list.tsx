@@ -45,7 +45,7 @@ function CopyAnswer({ text }: { text: string }) {
         aria-live="polite"
         className={`text-ui-sm ${state === 'failed' ? 'text-destructive' : 'text-foreground-subtlest'}`}
       >
-        {state === 'copied' ? '已复制' : state === 'failed' ? '复制失败，请手动选择文本' : ''}
+        {state === 'copied' ? '已复制' : state === 'failed' ? '复制失败' : ''}
       </span>
     </>
   )
@@ -86,30 +86,21 @@ export function MessageList({
       <ol className="flex flex-col">
         {messages.map((message) =>
           message.role === 'user' ? (
-            // 每一问以朱红“问”字印章起头、衬线粗体；轮次之间细线分隔，回答缩进到印章之后。
-            <li
-              key={message.id}
-              className="mt-8 flex items-start gap-3 border-t border-border pt-8 first:mt-0 first:border-t-0 first:pt-0"
-            >
-              <span
-                aria-hidden
-                className="mt-0.5 flex size-6.5 shrink-0 items-center justify-center rounded-sm bg-seal font-serif text-ui-caption font-bold text-seal-foreground"
-              >
-                问
-              </span>
-              <p className="min-w-0 font-serif text-ui-lg leading-relaxed font-bold whitespace-pre-wrap">
+            // 参照 Claude：问题靠右、浅灰圆角气泡；回答靠左、无外框。
+            <li key={message.id} className="mt-10 flex justify-end first:mt-0">
+              <p className="max-w-[85%] rounded-2xl bg-tag px-4 py-2.5 text-ui-base whitespace-pre-wrap wrap-anywhere">
                 <span className="sr-only">问题：</span>
                 {message.text}
               </p>
             </li>
           ) : (
-            <li key={message.id} className="mt-2 pl-9.5">
+            <li key={message.id} className="mt-6">
               <AnswerArticle message={message} busy={busy} onRetry={onRetry} />
             </li>
           ),
         )}
       </ol>
-      <div ref={end} />
+      <div ref={end} tabIndex={-1} className="outline-none" />
       {away && (
         <div className="pointer-events-none sticky bottom-3 flex justify-center">
           <Button
@@ -118,7 +109,11 @@ export function MessageList({
             aria-label="回到底部"
             title="回到底部"
             className="pointer-events-auto rounded-full bg-popover shadow-md"
-            onClick={scrollToBottom}
+            onClick={() => {
+              scrollToBottom()
+              // 按钮随即消失，焦点移到列表末尾，而不是掉回页面开头
+              end.current?.focus({ preventScroll: true })
+            }}
           >
             <ArrowDownIcon />
           </Button>
@@ -153,7 +148,7 @@ function AnswerArticle({
       )}
       {message.status === 'stopped' && (
         <p role="status" className="text-ui-caption text-foreground-subtle">
-          {message.error ?? '已停止，已生成的内容已保留。'}
+          {message.error ?? '已停止'}
         </p>
       )}
       {message.status === 'error' && (
@@ -173,15 +168,16 @@ function AnswerArticle({
           {finalText && <CopyAnswer text={finalText} />}
           {retry && (
             <Button
-              variant="ghost"
-              size="icon-sm"
-              aria-label="重新提问"
-              title="重新提问"
-              disabled={busy}
-              onClick={() => onRetry(message)}
-              className="rounded-md"
+              variant="outline"
+              size="sm"
+              aria-disabled={busy}
+              onClick={() => {
+                if (!busy) onRetry(message)
+              }}
+              className="ml-1 rounded-md text-foreground first:ml-1.5"
             >
-              <RotateCcwIcon />
+              <RotateCcwIcon className="size-3.5" />
+              重新提问
             </Button>
           )}
         </div>

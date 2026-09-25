@@ -12,6 +12,8 @@ interface ResizeHandleProps {
   invert?: boolean
   label: string
   className?: string
+  /** 元素实际显示的尺寸；布局可能把它压得小于 value，拖动与方向键从实际尺寸起算，避免无反应的一段 */
+  measure?: () => number
 }
 
 /** 可拖动的分隔条：指针拖动与方向键都能调整尺寸，Home / End 到最小 / 最大。 */
@@ -24,16 +26,18 @@ export function ResizeHandle({
   invert = false,
   label,
   className,
+  measure,
 }: ResizeHandleProps) {
   const clamp = (next: number) => Math.min(max, Math.max(min, Math.round(next)))
   const sign = invert ? -1 : 1
+  const current = () => (measure ? Math.round(measure()) : value)
   const onPointerDown = (event: PointerEvent<HTMLDivElement>) => {
     if (event.button !== 0) return
     event.preventDefault()
     const axis = (e: { clientX: number; clientY: number }) =>
       orientation === 'vertical' ? e.clientX : e.clientY
     const start = axis(event)
-    const from = value
+    const from = current()
     const target = event.currentTarget
     target.setPointerCapture(event.pointerId)
     const move = (e: globalThis.PointerEvent) => onChange(clamp(from + sign * (axis(e) - start)))
@@ -55,7 +59,7 @@ export function ResizeHandle({
     }
     const step = steps[event.key]
     const next =
-      event.key === 'Home' ? min : event.key === 'End' ? max : step && value + sign * step
+      event.key === 'Home' ? min : event.key === 'End' ? max : step && current() + sign * step
     if (next === undefined) return
     event.preventDefault()
     onChange(clamp(next))

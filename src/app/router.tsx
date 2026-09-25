@@ -44,7 +44,9 @@ function AuthenticationBoundary({ children }: { children: ReactNode }) {
     <main className="flex min-h-dvh items-center justify-center bg-background p-6">
       <section className="flex w-full max-w-md flex-col gap-4 rounded-xl border border-border bg-card p-6">
         <h1 className="flex items-center gap-2 text-ui-lg font-semibold">
-          <Seal size={28} />
+          <span aria-hidden>
+            <Seal size={28} />
+          </span>
           管策智研
         </h1>
         {loading ? (

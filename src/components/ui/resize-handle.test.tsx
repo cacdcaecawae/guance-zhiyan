@@ -45,3 +45,20 @@ it('方向键按步长调整并限制在上下限内；invert 时向上变大', 
   fireEvent.keyDown(screen.getByRole('separator', { name: '高度' }), { key: 'ArrowUp' })
   expect(onChange).toHaveBeenLastCalledWith(116)
 })
+
+it('布局把元素压小时，方向键从实际显示尺寸起算', () => {
+  const onChange = vi.fn()
+  render(
+    <ResizeHandle
+      orientation="vertical"
+      label="宽度"
+      value={760}
+      min={320}
+      max={760}
+      measure={() => 448}
+      onChange={onChange}
+    />,
+  )
+  fireEvent.keyDown(screen.getByRole('separator', { name: '宽度' }), { key: 'ArrowLeft' })
+  expect(onChange).toHaveBeenCalledWith(432)
+})

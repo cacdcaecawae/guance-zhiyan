@@ -24,7 +24,7 @@ it('触发器显示模型名与平台名，并标出未配置密钥的平台', (
   const { rerender } = render(
     <ModelPicker catalog={catalog} selection={catalog.defaultSelection} onChange={() => {}} />,
   )
-  const trigger = screen.getByRole('combobox', { name: '模型' })
+  const trigger = screen.getByRole('combobox', { name: /^模型：/ })
   expect(trigger).toHaveTextContent(/^DeepSeek V4\.1 Flash · DeepSeek 官方$/)
   rerender(
     <ModelPicker

@@ -1,6 +1,6 @@
-import { DownloadIcon, FileTextIcon, PaperclipIcon } from 'lucide-react'
+import { CircleAlertIcon, DownloadIcon, PaperclipIcon } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
-import { Link, useNavigate } from 'react-router'
+import { Link, useLocation, useNavigate } from 'react-router'
 import { TopBar } from '@/app/shell'
 import { Button } from '@/components/ui/button'
 import { Sheet, SheetContent } from '@/components/ui/sheet'
@@ -14,7 +14,7 @@ import {
   watchSession,
 } from '@/services/research'
 import { Composer } from './composer'
-import { FilePreview, PreviewPane } from './file-preview'
+import { FilePreview, FormatBlock, PreviewPane } from './file-preview'
 import { MessageList } from './message-list'
 import { ModelPicker } from './model-picker'
 import { Welcome } from './welcome'
@@ -31,6 +31,13 @@ export function WorkspacePage({ sessionId }: { sessionId?: string }) {
   const [previewId, setPreviewId] = useState<string | null>(null)
   const wide = useMediaQuery('(min-width: 1024px)')
   const navigate = useNavigate()
+  // 从“新建研究”进入时直接聚焦输入框
+  const focusComposer = !!(useLocation().state as { focusComposer?: boolean } | null)?.focusComposer
+  // 关闭宽屏预览后把焦点还给对应的文件卡
+  const closePreview = () => {
+    document.getElementById(`artifact-${previewId}`)?.focus()
+    setPreviewId(null)
+  }
   const createdSession = useRef<string | undefined>(undefined)
   const mounted = useRef(false)
   useEffect(() => {
@@ -72,6 +79,33 @@ export function WorkspacePage({ sessionId }: { sessionId?: string }) {
       setOperationError(failure instanceof Error ? failure.message : '停止失败，请重试。')
     }
   }
+  // 连接与操作错误：放进两个视图各自的内容栏顶部，与内容左缘对齐
+  const alerts = (connectionError || operationError) && (
+    <div className="shrink-0 px-4 pt-3">
+      <div className="mx-auto flex max-w-4xl flex-col gap-1.5">
+        {connectionError && (
+          <div role="alert" className="flex items-start gap-2 text-ui-caption text-destructive">
+            <CircleAlertIcon className="mt-0.5 size-3.5 shrink-0" aria-hidden />
+            <span className="min-w-0">{connectionError}</span>
+            <Button
+              variant="outline"
+              size="sm"
+              className="-my-1 text-foreground"
+              onClick={() => setReconnect((value) => value + 1)}
+            >
+              重新连接
+            </Button>
+          </div>
+        )}
+        {operationError && (
+          <p role="alert" className="flex items-start gap-2 text-ui-caption text-destructive">
+            <CircleAlertIcon className="mt-0.5 size-3.5 shrink-0" aria-hidden />
+            {operationError}
+          </p>
+        )}
+      </div>
+    </div>
+  )
   return (
     <>
       <TopBar title={session?.title ?? '研究工作台'}>
@@ -109,26 +143,6 @@ export function WorkspacePage({ sessionId }: { sessionId?: string }) {
         </div>
       </TopBar>
       <section aria-label="研究工作区" className="flex min-h-0 flex-1 flex-col">
-        <div className="shrink-0 px-4">
-          {' '}
-          {connectionError && (
-            <div role="alert" className="mb-2 text-ui-caption text-destructive">
-              {connectionError}{' '}
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => setReconnect((value) => value + 1)}
-              >
-                重新连接
-              </Button>
-            </div>
-          )}
-          {operationError && (
-            <p role="alert" className="mb-2 text-ui-caption text-destructive">
-              {operationError}
-            </p>
-          )}
-        </div>
         <div
           role="tabpanel"
           id="trace-panel"
@@ -136,6 +150,7 @@ export function WorkspacePage({ sessionId }: { sessionId?: string }) {
           hidden={view !== 'trace'}
           className={view === 'trace' ? 'flex min-h-0 flex-1 flex-col' : 'hidden'}
         >
+          {alerts}
           <Trajectory entries={session?.trace ?? []} />
           {session?.running && (
             <Button variant="outline" className="m-3 self-end" onClick={stop}>
@@ -150,7 +165,10 @@ export function WorkspacePage({ sessionId }: { sessionId?: string }) {
           hidden={view !== 'conversation'}
           className={view !== 'conversation' ? 'hidden' : 'flex min-h-0 flex-1'}
         >
-          <div className={`flex min-w-0 flex-1 flex-col ${empty ? 'justify-center pb-12' : ''}`}>
+          <div
+            className={`flex min-w-0 flex-1 flex-col lg:min-w-80 ${empty ? 'justify-center-safe [@media(min-height:560px)]:pb-12' : ''}`}
+          >
+            {alerts}
             <div
               data-message-scroll
               className={`relative min-h-0 overflow-y-auto px-4 ${empty ? '' : 'flex-1'}`}
@@ -189,32 +207,27 @@ export function WorkspacePage({ sessionId }: { sessionId?: string }) {
               {!!session?.artifacts.length && (
                 <section aria-label="会话文件" className="mx-auto mb-6 w-full max-w-4xl">
                   <h2 className="mb-3 flex items-center gap-2 font-serif text-ui-base font-semibold">
-                    <PaperclipIcon className="size-4 text-seal" aria-hidden />
+                    <PaperclipIcon className="size-4 text-foreground-subtlest" aria-hidden />
                     会话文件
                     <span className="font-sans text-ui-sm font-normal text-foreground-subtlest">
-                      {session.artifacts.length} 个 · 点击在右侧预览
+                      {session.artifacts.length} 个
                     </span>
                   </h2>
-                  {/* 文件卡片：朱红格式印块 + 文件名，整卡可点开预览，与正文明显区分 */}
-                  <ul className="grid gap-3 sm:grid-cols-2">
+                  {/* 文件卡片：朱红格式块 + 文件名，整卡可点开预览，与正文明显区分 */}
+                  <ul className="grid grid-cols-[repeat(auto-fill,minmax(16rem,1fr))] gap-3">
                     {session.artifacts.map((file) => (
                       <li
                         key={file.id}
-                        className={`relative flex min-w-0 items-center gap-3 rounded-xl border p-3 shadow-sm transition-[border-color,box-shadow] hover:border-border-hover hover:shadow-md ${previewId === file.id ? 'border-brand bg-accent' : 'border-card-border bg-card'}`}
+                        className={`relative flex min-w-0 items-center gap-3 rounded-xl border p-3 transition-colors has-[button:focus-visible]:ring-2 has-[button:focus-visible]:ring-ring ${previewId === file.id ? 'border-brand bg-accent' : 'border-card-border bg-card hover:border-border-hover hover:bg-surface-hover'}`}
                       >
-                        <span
-                          aria-hidden
-                          className="flex size-11 shrink-0 flex-col items-center justify-center gap-0.5 rounded-lg bg-seal text-seal-foreground"
-                        >
-                          <FileTextIcon className="size-4" />
-                          <span className="text-ui-xs font-semibold uppercase">{file.format}</span>
-                        </span>
+                        <FormatBlock format={file.format} />
                         <div className="min-w-0 flex-1">
                           <button
                             type="button"
+                            id={`artifact-${file.id}`}
                             aria-pressed={previewId === file.id}
                             onClick={() => setPreviewId(previewId === file.id ? null : file.id)}
-                            className="block max-w-full truncate rounded-sm text-left text-ui-base font-medium outline-none after:absolute after:inset-0 after:rounded-xl focus-visible:ring-2 focus-visible:ring-ring"
+                            className="block max-w-full truncate rounded-sm text-left text-ui-base font-medium outline-none after:absolute after:inset-0 after:rounded-xl"
                           >
                             {file.name}
                           </button>
@@ -241,6 +254,7 @@ export function WorkspacePage({ sessionId }: { sessionId?: string }) {
               <div className="mx-auto max-w-4xl">
                 {!error && (
                   <Composer
+                    autoFocus={focusComposer}
                     onSubmit={submit}
                     busy={busy || loading}
                     onStop={session?.running ? stop : undefined}
@@ -258,7 +272,7 @@ export function WorkspacePage({ sessionId }: { sessionId?: string }) {
               </div>
             </div>
           </div>
-          {preview && wide && <PreviewPane file={preview} onClose={() => setPreviewId(null)} />}
+          {preview && wide && <PreviewPane file={preview} onClose={closePreview} />}
         </div>
         {preview && !wide && (
           <Sheet

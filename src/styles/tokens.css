@@ -79,8 +79,8 @@
   --primary: #a9bde0;
   --primary-foreground: #111a2b;
   --destructive: #ee7a70;
-  --seal: #c84a3e;
-  --seal-foreground: #ffffff;
+  --seal: #e06a5e;
+  --seal-foreground: #1b1b1d;
   --trace-model: #a3b0e0;
   --trace-tool: #dba56c;
   --trace-context: #b0c47f;
@@ -130,10 +130,10 @@
     system-ui, -apple-system, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei',
     'Noto Sans SC', 'Source Han Sans SC', 'Noto Sans CJK SC', 'WenQuanYi Micro Hei',
     'Helvetica Neue', Arial, sans-serif;
-  /* 衬线只用于“管策智研”字标与欢迎标题；不列宋体（SimSun 无粗体），缺字体时回落到无衬线 */
+  /* 衬线用于阅读内容与标题（规则见 DESIGN.md），首选自托管的 Noto Serif SC Variable；不列宋体（SimSun 无粗体），缺字体时回落到无衬线 */
   --font-serif:
-    'Songti SC', 'Noto Serif SC', 'Noto Serif CJK SC', 'Source Han Serif SC', system-ui,
-    'PingFang SC', 'Microsoft YaHei', sans-serif;
+    'Noto Serif SC Variable', 'Songti SC', 'Noto Serif SC', 'Noto Serif CJK SC',
+    'Source Han Serif SC', system-ui, 'PingFang SC', 'Microsoft YaHei', sans-serif;
   --font-mono:
     ui-monospace, 'Cascadia Mono', 'SF Mono', Menlo, Consolas, 'Noto Sans Mono CJK SC', monospace;
 

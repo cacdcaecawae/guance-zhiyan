@@ -4,7 +4,7 @@ import type { ComponentProps } from 'react'
 import { cn } from '@/lib/cn'
 
 // shadcn/ui Select，绑定本项目 tokens。与上游差异：无入场动画（DESIGN：不做装饰性动效）；
-// 默认 popper 定位、向上展开，适合贴底的输入区；触发器是圆角容器内的无边框小控件（h-7 rounded-md）。
+// 默认 popper 定位、向上展开，适合贴底的输入区；触发器是无边框小控件（h-7 rounded-md）。
 
 const Select = SelectPrimitive.Root
 const SelectGroup = SelectPrimitive.Group

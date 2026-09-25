@@ -9,7 +9,7 @@ import {
 } from '@/components/ui/select'
 import type { ModelCatalog, ModelSelection } from '@/types'
 
-// 输入区底行的模型下拉：按平台分组；两个平台有同名模型，所以触发器文字带平台名，选项只写模型名。
+// 输入框右下方的模型下拉：按平台分组；两个平台有同名模型，所以触发器文字带平台名，选项只写模型名。
 export function ModelPicker({
   catalog,
   selection,
@@ -23,6 +23,7 @@ export function ModelPicker({
 }) {
   const provider = catalog.providers.find((item) => item.id === selection.provider)
   const model = provider?.models.find((item) => item.id === selection.model)
+  const label = `${model?.name ?? selection.model} · ${provider?.name ?? selection.provider}${provider && !provider.configured ? '（未配置密钥）' : ''}`
   return (
     <Select
       disabled={disabled}
@@ -32,13 +33,13 @@ export function ModelPicker({
         onChange({ provider: value.slice(0, split), model: value.slice(split + 1) })
       }}
     >
-      <SelectTrigger aria-label="模型">
+      {/* 可访问名称包含屏幕上显示的文字，语音控制可按所见名称点中 */}
+      <SelectTrigger aria-label={`模型：${label}`} className="text-foreground-subtlest">
         <SelectValue>
-          {model?.name ?? selection.model} · {provider?.name ?? selection.provider}
-          {provider && !provider.configured && '（未配置密钥）'}
+          <span className="truncate">{label}</span>
         </SelectValue>
       </SelectTrigger>
-      <SelectContent className="min-w-60">
+      <SelectContent side="bottom" align="end" className="min-w-60">
         {catalog.providers.map((item) => (
           <SelectGroup key={item.id}>
             <SelectLabel>

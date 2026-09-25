@@ -58,6 +58,9 @@ DSH `tool-bash`、`tool-fs`、`shell`、`shell-env`、`fs`、`fs-local` 均固�
 ## Noto Serif SC
 
 The logo glyphs in `src/app/logo-glyphs.ts` and `public/favicon.svg` are outlines
-of “管策智研” converted from Noto Serif SC (weight 900), © Google LLC / Adobe,
+of “管策智研” converted from Noto Serif SC (weight 900; the Noto build of Source Han Serif), © Adobe,
 licensed under the [SIL Open Font License 1.1](https://openfontlicense.org/).
-The font software itself is not redistributed.
+The web app also self-hosts the Noto Serif SC variable font through
+[`@fontsource-variable/noto-serif-sc`](https://fontsource.org/fonts/noto-serif-sc)
+(© Adobe, SIL Open Font License 1.1); its WOFF2 files are served unmodified from
+the build output.

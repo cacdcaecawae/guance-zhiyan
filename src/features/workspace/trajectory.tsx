@@ -1,4 +1,10 @@
-import { ChevronDownIcon, Clock3Icon, LayersIcon, ListTreeIcon } from 'lucide-react'
+import {
+  ChevronDownIcon,
+  CircleAlertIcon,
+  Clock3Icon,
+  LayersIcon,
+  ListTreeIcon,
+} from 'lucide-react'
 import { useState } from 'react'
 import type { TraceEntry } from '@/types'
 import { toolNames, toolSummary } from './tool-display'
@@ -28,15 +34,22 @@ export function Trajectory({ entries }: { entries: TraceEntry[] }) {
         <div role="group" aria-label="轨迹显示选项" className="flex shrink-0 gap-1">
           {[
             { label: '时长', value: timed, set: setTimed, Icon: Clock3Icon },
-            { label: '轮次', value: turnsOpen, set: setTurnsOpen, Icon: LayersIcon },
+            // 轮次可逐个手动展开，按钮只做“全部展开 / 全部收起”动作，不表示按下状态
+            {
+              label: turnsOpen ? '全部收起' : '全部展开',
+              value: turnsOpen,
+              set: setTurnsOpen,
+              Icon: LayersIcon,
+              action: true,
+            },
             { label: '调用', value: callsOpen, set: setCallsOpen, Icon: ListTreeIcon },
-          ].map(({ label, value, set, Icon }) => (
+          ].map(({ label, value, set, Icon, action }, index) => (
             <button
-              key={label}
+              key={index}
               type="button"
-              aria-pressed={value}
+              aria-pressed={action ? undefined : value}
               onClick={() => set(!value)}
-              className={`flex h-7 items-center gap-1 rounded-md px-2.5 text-ui-caption outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring ${value ? 'bg-selected font-medium text-foreground' : 'text-foreground-subtle hover:bg-hover hover:text-foreground'}`}
+              className={`flex h-7 items-center gap-1 rounded-md px-2.5 text-ui-caption outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring ${value && !action ? 'bg-selected font-medium text-foreground' : 'text-foreground-subtle hover:bg-hover hover:text-foreground'}`}
             >
               <Icon className="size-3.5" aria-hidden />
               {label}
@@ -69,7 +82,7 @@ export function Trajectory({ entries }: { entries: TraceEntry[] }) {
                       <span
                         key={entry.id}
                         title={`${entry.label} · ${entry.status === 'running' ? '执行中' : duration(entry) || '输入'}`}
-                        className={`absolute top-1.5 h-2 rounded-sm ${kind === 'assistant' ? 'bg-trace-model' : kind === 'tool' ? 'bg-trace-tool' : 'bg-brand'} ${entry.status === 'running' ? 'animate-pulse' : ''}`}
+                        className={`absolute top-1.5 h-2 rounded-sm ${kind === 'assistant' ? 'bg-trace-model' : kind === 'tool' ? 'bg-trace-tool' : 'bg-trace-context'} ${entry.status === 'running' ? 'animate-pulse' : ''}`}
                         style={{
                           left: `${timed ? ((entry.time - start) / span) * 99 : (index / entries.length) * 100}%`,
                           width: `${timed ? Math.max(0.3, (((entry.end ?? entry.time) - entry.time) / span) * 99) : 90 / entries.length}%`,
@@ -81,7 +94,7 @@ export function Trajectory({ entries }: { entries: TraceEntry[] }) {
               </div>
             ))}
           </div>
-          <div className="min-h-0 flex-1 overflow-y-auto" aria-label="执行轨迹">
+          <div className="min-h-0 flex-1 scroll-pt-10 overflow-y-auto" aria-label="执行轨迹">
             {turns.map((turn) => (
               <details key={turn} open={turnsOpen} className="group/turn border-b border-border">
                 <summary className="sticky top-0 z-10 flex cursor-pointer list-none items-center gap-2 bg-surface-hover px-4 py-2 text-ui-sm text-foreground-subtle outline-none transition-colors hover:bg-hover focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset [&::-webkit-details-marker]:hidden">
@@ -113,8 +126,11 @@ export function Trajectory({ entries }: { entries: TraceEntry[] }) {
                             : entry.text || '等待模型输出…'}
                         </span>
                         <span
-                          className={`w-12 shrink-0 text-right text-ui-sm ${entry.status === 'running' ? 'text-foreground-subtle' : 'text-destructive'}`}
+                          className={`flex w-14 shrink-0 items-center justify-end gap-1 text-ui-sm ${entry.status === 'running' ? 'text-foreground-subtle' : 'text-destructive'}`}
                         >
+                          {(entry.status === 'error' || entry.status === 'stopped') && (
+                            <CircleAlertIcon className="size-3 shrink-0" aria-hidden />
+                          )}
                           {statuses[entry.status ?? 'done']}
                         </span>
                         <span className="hidden w-16 shrink-0 text-right font-mono text-ui-sm whitespace-nowrap text-foreground-subtlest tabular-nums md:block">
@@ -154,9 +170,7 @@ export function Trajectory({ entries }: { entries: TraceEntry[] }) {
           </div>
         </>
       ) : (
-        <p className="p-6 text-ui-caption text-foreground-subtle">
-          发送问题后，这里会显示真实执行轨迹。
-        </p>
+        <p className="p-6 text-ui-caption text-foreground-subtle">暂无轨迹</p>
       )}
     </div>
   )

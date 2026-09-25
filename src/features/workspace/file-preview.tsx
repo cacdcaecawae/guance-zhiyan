@@ -1,5 +1,5 @@
-import { Loader2Icon, XIcon } from 'lucide-react'
-import { useEffect, useState } from 'react'
+import { FileTextIcon, Loader2Icon, XIcon } from 'lucide-react'
+import { memo, useEffect, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { ResizeHandle } from '@/components/ui/resize-handle'
 import { parseCsv } from '@/lib/csv'
@@ -12,16 +12,36 @@ const TEXT_FORMATS = new Set(['md', 'markdown', 'csv', 'txt', 'json'])
 const MAX_PREVIEW_BYTES = 2 * 1024 * 1024
 const MAX_TABLE_ROWS = 500
 
+const canPreview = (file: Artifact) =>
+  TEXT_FORMATS.has(file.format) && file.size <= MAX_PREVIEW_BYTES
+
+/** 朱红格式块：会话文件卡片与预览空状态共用。 */
+export function FormatBlock({
+  format,
+  className = 'size-11',
+}: {
+  format: string
+  className?: string
+}) {
+  return (
+    <span
+      aria-hidden
+      className={`flex shrink-0 flex-col items-center justify-center gap-0.5 rounded-lg bg-seal text-seal-foreground ${className}`}
+    >
+      <FileTextIcon className="size-4" />
+      <span className="text-ui-xs font-semibold uppercase">{format}</span>
+    </span>
+  )
+}
+
 type Loaded =
   { status: 'loading' } | { status: 'error'; message: string } | { status: 'done'; text: string }
 
 function Body({ file }: { file: Artifact }) {
   const { id } = file
-  const previewable = TEXT_FORMATS.has(file.format) && file.size <= MAX_PREVIEW_BYTES
   const [loaded, setLoaded] = useState<Loaded>({ status: 'loading' })
   const [attempt, setAttempt] = useState(0)
   useEffect(() => {
-    if (!previewable) return
     const abort = new AbortController()
     readArtifactText({ id }, abort.signal).then(
       (text) => setLoaded({ status: 'done', text }),
@@ -34,16 +54,8 @@ function Body({ file }: { file: Artifact }) {
       },
     )
     return () => abort.abort()
-  }, [id, previewable, attempt])
+  }, [id, attempt])
 
-  if (!previewable)
-    return (
-      <p className="text-ui-caption text-foreground-subtle">
-        {TEXT_FORMATS.has(file.format)
-          ? '文件较大，请下载后查看。'
-          : `${file.format.toUpperCase()} 文件暂不支持在线预览，请下载后查看。`}
-      </p>
-    )
   if (loaded.status === 'loading')
     return (
       <p role="status" className="flex items-center gap-2 text-ui-caption text-foreground-subtle">
@@ -109,7 +121,13 @@ function Body({ file }: { file: Artifact }) {
 }
 
 /** 右侧文件预览：灰色桌面上的一页纸。文件内容来自模型或工具，按不可信文本渲染。 */
-export function FilePreview({ file, onClose }: { file: Artifact; onClose?: () => void }) {
+export const FilePreview = memo(function FilePreview({
+  file,
+  onClose,
+}: {
+  file: Artifact
+  onClose?: () => void
+}) {
   return (
     <div className="flex h-full min-h-0 flex-col bg-background">
       <div
@@ -128,33 +146,52 @@ export function FilePreview({ file, onClose }: { file: Artifact; onClose?: () =>
         )}
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto p-4">
-        <div className="document-sheet mx-auto min-w-0 max-w-3xl rounded-sm bg-card px-7 py-8 shadow-sm">
-          <Body key={file.id} file={file} />
-        </div>
+        {canPreview(file) ? (
+          <div className="document-sheet mx-auto min-w-0 max-w-3xl rounded-sm bg-card px-5 py-8 shadow-sm sm:px-8">
+            <Body key={file.id} file={file} />
+          </div>
+        ) : (
+          // 不可预览时不画空白的“纸”，在桌面上居中说明
+          <div className="flex flex-col items-center gap-3 px-4 py-16 text-center">
+            <FormatBlock format={file.format} className="size-14" />
+            <p className="max-w-full truncate text-ui-base font-medium">{file.name}</p>
+            <p className="text-ui-caption text-foreground-subtle">
+              {TEXT_FORMATS.has(file.format)
+                ? '文件较大，暂不支持在线预览'
+                : `${file.format.toUpperCase()} 文件暂不支持在线预览`}
+            </p>
+          </div>
+        )}
       </div>
     </div>
   )
-}
+})
 
 const WIDTH_KEY = 'gczy.preview-width'
 const WIDTH = { min: 320, max: 760, initial: 440 }
 
 /** 宽屏右侧的预览栏：左边缘可拖动调整宽度并保存为界面偏好；独立成组件，拖动时不重绘对话。 */
 export function PreviewPane({ file, onClose }: { file: Artifact; onClose: () => void }) {
+  const aside = useRef<HTMLElement>(null)
   const [width, setWidth] = useState(() => {
     const saved = Number(readPref(WIDTH_KEY))
     return saved ? Math.min(WIDTH.max, Math.max(WIDTH.min, saved)) : WIDTH.initial
   })
   return (
     <aside
+      ref={aside}
       aria-label="文件预览"
+      onKeyDown={(event) => {
+        if (event.key === 'Escape') onClose()
+      }}
       style={{ width }}
-      className="relative shrink-0 border-l border-border"
+      className="relative min-w-0 border-l border-border"
     >
       <ResizeHandle
         orientation="vertical"
         invert
         label="调整预览宽度"
+        measure={() => aside.current?.getBoundingClientRect().width ?? width}
         value={width}
         min={WIDTH.min}
         max={WIDTH.max}
@@ -162,7 +199,7 @@ export function PreviewPane({ file, onClose }: { file: Artifact; onClose: () => 
           setWidth(next)
           writePref(WIDTH_KEY, String(next))
         }}
-        className="absolute inset-y-0 -left-1 z-10 w-2 transition-colors hover:bg-brand/25 active:bg-brand/40"
+        className="absolute inset-y-0 -left-1 z-10 w-2 transition-colors hover:bg-brand/25"
       />
       <FilePreview file={file} onClose={onClose} />
     </aside>

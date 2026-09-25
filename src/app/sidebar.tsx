@@ -26,11 +26,12 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
   const navigate = useNavigate()
 
   const newResearch = async () => {
+    if (creating) return
     setCreating(true)
     setError(null)
     try {
       const s = await createSession()
-      navigate(`/workspace/${s.id}`)
+      navigate(`/workspace/${s.id}`, { state: { focusComposer: true } })
       onNavigate?.()
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : '新建失败，请重试。')
@@ -43,13 +44,18 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
     <nav aria-label="主导航" className="flex h-full min-h-0 flex-col gap-4 p-3">
       {/* 铭牌与校名署名：配色呼应社科大的中国红 */}
       <div className="flex flex-col items-center gap-2 border-b border-border px-1 pt-1 pb-3">
-        <Nameplate width={216} className="h-auto w-full max-w-60" />
-        <div className="font-serif text-ui-caption font-semibold tracking-[0.3em] text-foreground">
+        <Nameplate width={216} className="h-auto w-full max-w-52" />
+        <div className="pl-[0.3em] font-serif text-ui-caption font-semibold tracking-[0.3em] text-foreground">
           中国社会科学院大学
         </div>
       </div>
 
-      <Button className="w-full justify-start" onClick={newResearch} disabled={creating}>
+      <Button
+        variant="outline"
+        className="w-full justify-start bg-card [&_svg]:text-brand"
+        onClick={newResearch}
+        aria-disabled={creating}
+      >
         <PlusIcon />
         新建研究
       </Button>
@@ -79,9 +85,9 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
                 to={`/workspace/${s.id}`}
                 className={({ isActive }) =>
                   cn(
-                    'flex h-8 min-w-0 items-center gap-2 rounded-md px-2 text-ui-base outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring',
+                    'relative flex h-8 min-w-0 items-center rounded-md px-2 text-ui-base outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring',
                     isActive
-                      ? 'bg-card font-medium text-foreground ring-1 ring-border'
+                      ? 'bg-selected font-medium text-foreground'
                       : 'text-foreground-subtle hover:bg-hover',
                   )
                 }
@@ -90,10 +96,12 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
               >
                 {({ isActive }) => (
                   <>
-                    <span
-                      aria-hidden
-                      className={`h-3.5 w-0.5 shrink-0 rounded-sm ${isActive ? 'bg-seal' : ''}`}
-                    />
+                    {isActive && (
+                      <span
+                        aria-hidden
+                        className="absolute left-0.5 h-3.5 w-0.5 rounded-sm bg-seal"
+                      />
+                    )}
                     <span className="truncate">{s.title}</span>
                   </>
                 )}

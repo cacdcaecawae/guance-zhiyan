@@ -25,13 +25,13 @@ it('Markdown 渲染为格式文本，CSV 渲染为表格', async () => {
 })
 
 it('不支持的格式与过大文件不请求内容；读取失败可重试', async () => {
-  const fetch = vi.fn().mockRejectedValueOnce(new Error('文件读取失败（500），请重试。'))
+  const fetch = vi.fn().mockResolvedValueOnce(new Response('', { status: 500 }))
   vi.stubGlobal('fetch', fetch)
   const { unmount } = render(<FilePreview file={file('docx')} />)
-  expect(screen.getByText('DOCX 文件暂不支持在线预览，请下载后查看。')).toBeInTheDocument()
+  expect(screen.getByText('DOCX 文件暂不支持在线预览')).toBeInTheDocument()
   unmount()
   const big = render(<FilePreview file={file('md', 3 * 1024 * 1024)} />)
-  expect(screen.getByText('文件较大，请下载后查看。')).toBeInTheDocument()
+  expect(screen.getByText('文件较大，暂不支持在线预览')).toBeInTheDocument()
   expect(fetch).not.toHaveBeenCalled()
   big.unmount()
   render(<FilePreview file={file('txt')} />)

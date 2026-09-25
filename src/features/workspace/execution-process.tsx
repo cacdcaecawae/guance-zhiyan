@@ -28,15 +28,13 @@ export function ToolRow({ part }: { part: Extract<AnswerPart, { type: 'tool' }> 
             : WrenchIcon
   return (
     <details className="group/tool min-w-0 text-foreground-subtle">
-      <summary className="flex min-w-0 cursor-pointer list-none items-center gap-2 rounded-md py-1.5 text-ui-caption outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring [&::-webkit-details-marker]:hidden">
+      <summary className="flex w-fit max-w-full min-w-0 cursor-pointer list-none items-center gap-2 rounded-md py-1.5 text-ui-caption outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring [&::-webkit-details-marker]:hidden">
         <Icon
           className={`size-3.5 shrink-0 ${part.status === 'running' ? 'animate-spin' : ''} ${part.status === 'error' ? 'text-destructive' : ''}`}
           aria-hidden
         />
         <span className="shrink-0">{toolNames[part.name] ?? part.name}</span>
-        <span className="min-w-0 flex-1 truncate text-foreground-subtlest">
-          {toolSummary(part.input)}
-        </span>
+        <span className="min-w-0 truncate text-foreground-subtlest">{toolSummary(part.input)}</span>
         <span
           className={
             part.status === 'running' ? 'shrink-0 text-ui-sm text-foreground-subtlest' : 'sr-only'
@@ -85,7 +83,7 @@ export function AnswerContent({ message }: { message: AssistantMessage }) {
       <ToolRow key={part.id} part={part} />
     ) : part.type === 'reasoning' ? (
       // 最终一步的思考不在可收起的过程内，但同样按页边批注排列
-      <div key={part.id} className={inProcess ? undefined : 'ml-1.5 border-l border-border pl-4'}>
+      <div key={part.id}>
         <Reasoning
           text={part.text}
           running={message.status === 'loading' && part === message.parts.at(-1)}
@@ -107,9 +105,14 @@ export function AnswerContent({ message }: { message: AssistantMessage }) {
     <>
       {!!process.length && (
         <details open className="group/process min-w-0">
-          <summary className="flex w-fit cursor-pointer list-none items-center gap-1.5 rounded-md py-1 text-ui-sm text-foreground-subtlest outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring [&::-webkit-details-marker]:hidden">
+          <summary className="flex w-fit cursor-pointer list-none items-center gap-1.5 rounded-md py-1 text-ui-caption text-foreground-subtlest outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring [&::-webkit-details-marker]:hidden">
             <span>{summary}</span>
-            {!!failed && <span className="text-destructive">· {failed} 次失败</span>}
+            {!!failed && (
+              <span className="inline-flex items-center gap-1 text-destructive">
+                · <CircleAlertIcon className="size-3" aria-hidden />
+                {failed} 次失败
+              </span>
+            )}
             <ChevronDownIcon className="size-3 group-open/process:rotate-180" aria-hidden />
           </summary>
           {/* 过程像页边批注：左侧细线，与最终回答区分主次 */}

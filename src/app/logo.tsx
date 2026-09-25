@@ -65,19 +65,10 @@ function Glyph({
 
 /**
  * 铭牌：朱漆底、鎏金双线框，左上与右下的「」角饰寓意引文可溯源。
- * 鎏光（一道光带扫过）由 globals.css 的 .nameplate-sheen 控制：悬停时扫一次，
- * sheen="once" 时挂载后扫一次；减少动效时不播放。
+ * 鎏光（一道光带扫过）由 globals.css 的 .nameplate-sheen 控制：悬停时扫一次，减少动效时不播放。
  */
-export function Nameplate({
-  width,
-  sheen = 'hover',
-  className,
-}: {
-  width: number
-  sheen?: 'hover' | 'once'
-  className?: string
-}) {
-  const id = useId().replaceAll(':', '')
+export function Nameplate({ width, className }: { width: number; className?: string }) {
+  const id = useId()
   const chars = ['管', '策', '智', '研'] as const
   const start = (520 - (4 * 64 + 3 * 22)) / 2
   return (
@@ -125,9 +116,7 @@ export function Nameplate({
         <Glyph key={char} char={char} x={start + i * 86} y={36} size={64} id={id} />
       ))}
       <g clipPath={`url(#${id}-clip)`}>
-        <g
-          className={sheen === 'once' ? 'nameplate-sheen nameplate-sheen-once' : 'nameplate-sheen'}
-        >
+        <g className="nameplate-sheen">
           <rect
             x="-40"
             y="-20"
@@ -142,9 +131,9 @@ export function Nameplate({
   )
 }
 
-/** “策”字方印：网站图标、收起的侧栏与窄屏顶栏使用；小于 40px 时去掉内框以保持清晰。 */
+/** “策”字方印：网站图标、欢迎页与连接页使用；小于 40px 时去掉内框以保持清晰。 */
 export function Seal({ size, className }: { size: number; className?: string }) {
-  const id = useId().replaceAll(':', '')
+  const id = useId()
   return (
     <svg
       width={size}

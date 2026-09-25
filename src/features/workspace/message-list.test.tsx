@@ -54,10 +54,10 @@ it('复制只写入最终回答；剪贴板失败或不可用时明确提示', a
   expect(await screen.findByText('已复制')).toBeInTheDocument()
   writeText.mockRejectedValueOnce(new Error('denied'))
   fireEvent.click(copy)
-  expect(await screen.findByText('复制失败，请手动选择文本')).toBeInTheDocument()
+  expect(await screen.findByText('复制失败')).toBeInTheDocument()
   Object.defineProperty(navigator, 'clipboard', { value: undefined, configurable: true })
   fireEvent.click(copy)
-  expect(screen.getByText('复制失败，请手动选择文本')).toBeInTheDocument()
+  expect(screen.getByText('复制失败')).toBeInTheDocument()
 })
 
 it('执行过程汇总只列非零计数，全为零时写“执行过程”', () => {
