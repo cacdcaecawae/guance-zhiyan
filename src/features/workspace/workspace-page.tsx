@@ -1,3 +1,4 @@
+import { DownloadIcon, FileTextIcon, PaperclipIcon } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { Link, useNavigate } from 'react-router'
 import { TopBar } from '@/app/shell'
@@ -186,40 +187,53 @@ export function WorkspacePage({ sessionId }: { sessionId?: string }) {
                 />
               )}
               {!!session?.artifacts.length && (
-                <section
-                  aria-label="会话文件"
-                  className="mx-auto mb-6 flex max-w-4xl flex-col gap-2"
-                >
-                  <h2 className="text-ui-sm tracking-widest text-foreground-subtlest">会话文件</h2>
-                  {session.artifacts.map((file) => (
-                    <div
-                      key={file.id}
-                      className={`flex min-w-0 items-center gap-3 rounded-lg border px-3 py-2 transition-colors ${previewId === file.id ? 'border-brand/40 bg-accent' : 'border-border bg-card'}`}
-                    >
-                      <span className="shrink-0 rounded-sm border border-seal/50 px-1.5 text-ui-sm font-medium tracking-wide text-seal uppercase">
-                        {file.format}
-                      </span>
-                      <button
-                        type="button"
-                        aria-pressed={previewId === file.id}
-                        title="在右侧预览"
-                        onClick={() => setPreviewId(previewId === file.id ? null : file.id)}
-                        className="min-w-0 flex-1 truncate rounded-sm text-left text-ui-caption font-medium outline-none hover:text-brand focus-visible:ring-2 focus-visible:ring-ring"
+                <section aria-label="会话文件" className="mx-auto mb-6 w-full max-w-4xl">
+                  <h2 className="mb-3 flex items-center gap-2 font-serif text-ui-base font-semibold">
+                    <PaperclipIcon className="size-4 text-seal" aria-hidden />
+                    会话文件
+                    <span className="font-sans text-ui-sm font-normal text-foreground-subtlest">
+                      {session.artifacts.length} 个 · 点击在右侧预览
+                    </span>
+                  </h2>
+                  {/* 文件卡片：朱红格式印块 + 文件名，整卡可点开预览，与正文明显区分 */}
+                  <ul className="grid gap-3 sm:grid-cols-2">
+                    {session.artifacts.map((file) => (
+                      <li
+                        key={file.id}
+                        className={`relative flex min-w-0 items-center gap-3 rounded-xl border p-3 shadow-sm transition-[border-color,box-shadow] hover:border-border-hover hover:shadow-md ${previewId === file.id ? 'border-brand bg-accent' : 'border-card-border bg-card'}`}
                       >
-                        {file.name}
-                      </button>
-                      <span className="shrink-0 text-ui-sm text-foreground-subtlest">
-                        {Math.ceil(file.size / 1024)} KB
-                      </span>
-                      <a
-                        href={artifactUrl(file)}
-                        aria-label={`下载 ${file.name}`}
-                        className="shrink-0 rounded-sm text-ui-sm text-brand outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring"
-                      >
-                        下载
-                      </a>
-                    </div>
-                  ))}
+                        <span
+                          aria-hidden
+                          className="flex size-11 shrink-0 flex-col items-center justify-center gap-0.5 rounded-lg bg-seal text-seal-foreground"
+                        >
+                          <FileTextIcon className="size-4" />
+                          <span className="text-ui-xs font-semibold uppercase">{file.format}</span>
+                        </span>
+                        <div className="min-w-0 flex-1">
+                          <button
+                            type="button"
+                            aria-pressed={previewId === file.id}
+                            onClick={() => setPreviewId(previewId === file.id ? null : file.id)}
+                            className="block max-w-full truncate rounded-sm text-left text-ui-base font-medium outline-none after:absolute after:inset-0 after:rounded-xl focus-visible:ring-2 focus-visible:ring-ring"
+                          >
+                            {file.name}
+                          </button>
+                          <p className="text-ui-sm text-foreground-subtlest">
+                            {Math.ceil(file.size / 1024)} KB
+                            {previewId === file.id && ' · 预览中'}
+                          </p>
+                        </div>
+                        <a
+                          href={artifactUrl(file)}
+                          aria-label={`下载 ${file.name}`}
+                          title="下载"
+                          className="relative z-10 flex size-8 shrink-0 items-center justify-center rounded-md text-foreground-subtle outline-none transition-colors hover:bg-hover hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+                        >
+                          <DownloadIcon className="size-4" />
+                        </a>
+                      </li>
+                    ))}
+                  </ul>
                 </section>
               )}
             </div>

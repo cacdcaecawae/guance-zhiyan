@@ -44,7 +44,7 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
       {/* 铭牌与校名署名：配色呼应社科大的中国红 */}
       <div className="flex flex-col items-center gap-2 border-b border-border px-1 pt-1 pb-3">
         <Nameplate width={216} className="h-auto w-full max-w-60" />
-        <div className="font-serif text-ui-sm tracking-[0.3em] text-foreground-subtle">
+        <div className="font-serif text-ui-caption font-semibold tracking-[0.3em] text-foreground">
           中国社会科学院大学
         </div>
       </div>

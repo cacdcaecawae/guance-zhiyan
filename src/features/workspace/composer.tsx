@@ -13,7 +13,7 @@ interface ComposerProps {
   onStop?: () => void
   /** 上一条回答仍在加载时禁止再次提交 */
   busy?: boolean
-  /** 输入框底行左侧的控件，例如模型选择 */
+  /** 输入框底行右侧、发送按钮前的控件，例如模型选择 */
   children?: ReactNode
 }
 
@@ -87,7 +87,8 @@ export function Composer({ onSubmit, busy = false, onStop, children }: ComposerP
         style={{ minHeight: height, maxHeight: Math.max(height, 240) }}
         className="border-0 bg-transparent px-1 py-1 field-sizing-content hover:border-0 focus-visible:bg-transparent"
       />
-      <div className="flex min-w-0 items-center gap-2">
+      {/* 与 Claude 一致：模型下拉在右下角，紧挨发送按钮 */}
+      <div className="flex min-w-0 items-center justify-end gap-2">
         {children}
         {onStop ? (
           <Button
@@ -96,7 +97,7 @@ export function Composer({ onSubmit, busy = false, onStop, children }: ComposerP
             size="sm"
             aria-label="停止生成"
             onClick={onStop}
-            className="ml-auto h-8 rounded-md border-brand/50 text-brand hover:text-brand"
+            className="h-8 rounded-md border-brand/50 text-brand hover:text-brand"
           >
             <SquareIcon className="size-3 fill-current" />
             停止
@@ -107,7 +108,7 @@ export function Composer({ onSubmit, busy = false, onStop, children }: ComposerP
             size="icon"
             aria-label="发送"
             disabled={!canSubmit}
-            className="ml-auto rounded-md disabled:bg-tag disabled:text-foreground-subtlest disabled:opacity-100"
+            className="rounded-md disabled:bg-tag disabled:text-foreground-subtlest disabled:opacity-100"
           >
             <SendHorizontalIcon />
           </Button>
