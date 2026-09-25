@@ -63,7 +63,7 @@ it('复制只写入最终回答；剪贴板失败或不可用时明确提示', a
 it('执行过程汇总只列非零计数，全为零时写“执行过程”', () => {
   const tool = { ...answer, parts: [answer.parts[1], answer.parts[2]] }
   const { rerender } = render(<MessageList messages={[tool]} busy={false} onRetry={() => {}} />)
-  expect(screen.getByText('1 次工具调用')).toBeInTheDocument()
+  expect(screen.getByText('生成文件 1 次')).toBeInTheDocument()
   const reasoning: AssistantMessage = {
     ...answer,
     status: 'error',

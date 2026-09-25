@@ -87,21 +87,25 @@ test('真实文件工具、执行追踪和 Word 下载；其他用户不能访�
   const reasoning = answer.locator('summary', { hasText: '思考过程' })
   await expect(reasoning).toHaveCount(2)
   await expect(answer.locator('summary')).toHaveText([
-    /1 次工具调用 · 1 条消息/,
+    /生成文件 1 次/,
     /思考过程/,
     /生成文件.*已完成/,
     /思考过程/,
   ])
-  await answer.locator('summary', { hasText: '1 次工具调用' }).click()
+  await answer.locator('summary', { hasText: '生成文件 1 次' }).click()
   await expect(answer.getByText('文件已生成，请从下方文件卡片下载。')).toBeVisible()
   await expect(reasoning.first()).not.toBeVisible()
-  await answer.locator('summary', { hasText: '1 次工具调用' }).click()
+  await answer.locator('summary', { hasText: '生成文件 1 次' }).click()
   await page.reload()
   await expect(reasoning).toHaveCount(2)
   for (const item of await reasoning.all()) await item.click()
   await expect(answer.getByText('测试适配器：检查请求内容。', { exact: true })).toHaveCount(2)
   const link = page.getByRole('link', { name: /研究报告.docx/ })
   await expect(link).toBeVisible()
+  await page.getByRole('button', { name: '研究报告.docx' }).click()
+  await expect(page.getByRole('complementary', { name: '文件预览' })).toContainText(
+    'DOCX 文件暂不支持在线预览',
+  )
   const downloadPromise = page.waitForEvent('download')
   await link.click()
   const download = await downloadPromise

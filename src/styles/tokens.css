@@ -6,39 +6,42 @@
   --ui-font-size: 14px;
 
   /* 结构面 */
-  --background: #f6f5f1;
-  --sidebar: #eeece6;
-  --surface: #fcfbf9;
-  --surface-hover: #f3f1ec;
+  --background: #efefec;
+  --sidebar: #f7f7f5;
+  --surface: #ffffff;
+  --surface-hover: #f5f5f3;
   --card: #ffffff;
-  --card-border: #e4e1d8;
+  --card-border: #e3e3df;
   --popover: #ffffff;
-  --popover-border: #d9d5ca;
-  --overlay: rgb(31 30 27 / 0.3);
+  --popover-border: #dcdcd7;
+  --overlay: rgb(27 27 29 / 0.3);
   --input: #ffffff;
   --input-focused: #ffffff;
-  --input-border: #d5d1c6;
-  --input-border-hover: #a5a092;
+  --input-border: #c9c9c4;
+  --input-border-hover: #a8a8a2;
 
   /* 文本 */
-  --foreground: #1f1e1b;
-  --foreground-subtle: #4d4942;
-  --foreground-subtlest: #625e55;
+  --foreground: #1b1b1d;
+  --foreground-subtle: #4a4a4f;
+  --foreground-subtlest: #606066;
 
   /* 边框与状态面 */
-  --border: #e4e1d8;
-  --border-hover: #cfcabd;
-  --hover: #e9e6df;
-  --selected: #e2ded4;
-  --accent: #e2efeb;
-  --tag: #e8e5dd;
+  --border: #e3e3df;
+  --border-hover: #cfcfca;
+  --hover: #efefec;
+  --selected: #e9e9e5;
+  --accent: #edf1f7;
+  --tag: #efefec;
   --find-highlight: #fbe8a2;
 
   /* 强调与语义状态 */
-  --brand: #1d6660;
-  --primary: #1d5f5a;
-  --primary-foreground: #fbfaf7;
+  --brand: #23395d;
+  --primary: #23395d;
+  --primary-foreground: #ffffff;
   --destructive: #b3261e;
+  /* 朱红：印章、编号、当前页签等装饰，不表达状态 */
+  --seal: #b0302a;
+  --seal-foreground: #ffffff;
   --trace-model: #46578a;
   --trace-tool: #8a5522;
   --trace-context: #56692a;
@@ -46,36 +49,38 @@
 
 .dark {
   color-scheme: dark;
-  --background: #171513;
-  --sidebar: #1c1a17;
-  --surface: #1e1c19;
-  --surface-hover: #272420;
-  --card: #211f1c;
-  --card-border: #322e29;
-  --popover: #262320;
-  --popover-border: #3b3731;
+  --background: #161615;
+  --sidebar: #1b1b1a;
+  --surface: #212120;
+  --surface-hover: #292927;
+  --card: #252523;
+  --card-border: #353533;
+  --popover: #2a2a28;
+  --popover-border: #3f3f3c;
   --overlay: rgb(0 0 0 / 0.5);
-  --input: #1e1c19;
-  --input-focused: #262320;
-  --input-border: #433f38;
-  --input-border-hover: #5f5a51;
+  --input: #252523;
+  --input-focused: #2a2a28;
+  --input-border: #4a4a46;
+  --input-border-hover: #62625e;
 
-  --foreground: #ddd9cf;
-  --foreground-subtle: #b3aea4;
-  --foreground-subtlest: #9c978d;
+  --foreground: #e6e5e1;
+  --foreground-subtle: #b8b7b2;
+  --foreground-subtlest: #a3a29d;
 
-  --border: #322e29;
-  --border-hover: #433f38;
-  --hover: #2a2723;
-  --selected: #34302b;
-  --accent: #1d2e2b;
-  --tag: #2e2b26;
+  --border: #353533;
+  --border-hover: #454542;
+  --hover: #2d2d2b;
+  --selected: #353533;
+  --accent: #1e2635;
+  --tag: #30302e;
   --find-highlight: #5a4a12;
 
-  --brand: #6cb3a9;
-  --primary: #6cb3a9;
-  --primary-foreground: #0f1d1b;
+  --brand: #9fb6de;
+  --primary: #a9bde0;
+  --primary-foreground: #111a2b;
   --destructive: #ee7a70;
+  --seal: #c84a3e;
+  --seal-foreground: #ffffff;
   --trace-model: #a3b0e0;
   --trace-tool: #dba56c;
   --trace-context: #b0c47f;
@@ -116,6 +121,8 @@
   --color-primary: var(--primary);
   --color-primary-foreground: var(--primary-foreground);
   --color-destructive: var(--destructive);
+  --color-seal: var(--seal);
+  --color-seal-foreground: var(--seal-foreground);
   --color-ring: var(--brand);
 
   /* 字体：系统无衬线栈，兼容中文 */
@@ -131,6 +138,9 @@
     ui-monospace, 'Cascadia Mono', 'SF Mono', Menlo, Consolas, 'Noto Sans Mono CJK SC', monospace;
 
   /* UI 字号体系：全部由 --ui-font-size 派生，界面文字只用 text-ui-*；增删时同步 src/lib/cn.ts */
+  /* 只用于空会话的欢迎标题 */
+  --text-ui-display: calc(var(--ui-font-size) + 12px);
+  --text-ui-display--line-height: 1.3;
   --text-ui-xl: calc(var(--ui-font-size) + 4px);
   --text-ui-xl--line-height: 1.5;
   --text-ui-lg: calc(var(--ui-font-size) + 2px);

@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from 'react'
 import { Link, useNavigate } from 'react-router'
 import { TopBar } from '@/app/shell'
 import { Button } from '@/components/ui/button'
+import { Sheet, SheetContent } from '@/components/ui/sheet'
+import { useMediaQuery } from '@/lib/use-media-query'
 import {
   artifactUrl,
   askQuestion,
@@ -11,6 +13,7 @@ import {
   watchSession,
 } from '@/services/research'
 import { Composer } from './composer'
+import { FilePreview, PreviewPane } from './file-preview'
 import { MessageList } from './message-list'
 import { ModelPicker } from './model-picker'
 import { Welcome } from './welcome'
@@ -24,6 +27,8 @@ export function WorkspacePage({ sessionId }: { sessionId?: string }) {
   const [operationError, setOperationError] = useState<string | null>(null)
   const [posting, setPosting] = useState(false)
   const [reconnect, setReconnect] = useState(0)
+  const [previewId, setPreviewId] = useState<string | null>(null)
+  const wide = useMediaQuery('(min-width: 1024px)')
   const navigate = useNavigate()
   const createdSession = useRef<string | undefined>(undefined)
   const mounted = useRef(false)
@@ -35,6 +40,7 @@ export function WorkspacePage({ sessionId }: { sessionId?: string }) {
   }, [])
   useEffect(() => watchSession(sessionId), [sessionId, reconnect])
   const session = current?.id === sessionId ? current : null
+  const preview = session?.artifacts.find((file) => file.id === previewId)
   const busy = posting || !!session?.running
   const selection =
     chosen ??
@@ -94,7 +100,7 @@ export function WorkspacePage({ sessionId }: { sessionId?: string }) {
                   document.getElementById(next + '-tab')?.focus()
                 }
               }}
-              className={`relative rounded-sm px-1.5 text-ui-caption outline-none transition-colors after:absolute after:inset-x-1.5 after:-bottom-px after:h-0.5 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset ${view === tab ? 'font-medium text-foreground after:bg-brand' : 'text-foreground-subtle hover:text-foreground'}`}
+              className={`relative rounded-sm px-1.5 text-ui-caption outline-none transition-colors after:absolute after:inset-x-1.5 after:-bottom-px after:h-0.5 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset ${view === tab ? 'font-medium text-foreground after:bg-seal' : 'text-foreground-subtle hover:text-foreground'}`}
             >
               {tab === 'conversation' ? '对话' : '轨迹'}
             </button>
@@ -141,89 +147,117 @@ export function WorkspacePage({ sessionId }: { sessionId?: string }) {
           id="conversation-panel"
           aria-labelledby="conversation-tab"
           hidden={view !== 'conversation'}
-          className={
-            view !== 'conversation'
-              ? 'hidden'
-              : `flex min-h-0 flex-1 flex-col ${empty ? 'justify-center pb-12' : ''}`
-          }
+          className={view !== 'conversation' ? 'hidden' : 'flex min-h-0 flex-1'}
         >
-          <div
-            data-message-scroll
-            className={`relative min-h-0 overflow-y-auto px-4 ${empty ? '' : 'flex-1'}`}
-          >
-            {loading ? (
-              <p role="status" className="p-6 text-foreground-subtle">
-                正在加载会话…
-              </p>
-            ) : error ? (
-              <div className="mx-auto flex max-w-3xl flex-col gap-3 py-6">
-                <p role="alert" className="text-destructive">
-                  {error}
+          <div className={`flex min-w-0 flex-1 flex-col ${empty ? 'justify-center pb-12' : ''}`}>
+            <div
+              data-message-scroll
+              className={`relative min-h-0 overflow-y-auto px-4 ${empty ? '' : 'flex-1'}`}
+            >
+              {loading ? (
+                <p role="status" className="p-6 text-foreground-subtle">
+                  正在加载会话…
                 </p>
-                <Button variant="outline" onClick={() => setReconnect((value) => value + 1)}>
-                  重试加载
-                </Button>
-                <Link to="/workspace" className="text-brand underline">
-                  返回工作台
-                </Link>
-              </div>
-            ) : session?.messages.length ? (
-              <MessageList
-                messages={session.messages}
-                busy={busy}
-                onRetry={(message) => {
-                  void submit(message.question)
-                }}
-              />
-            ) : (
-              <Welcome
-                onPick={(question) => {
-                  if (!busy) void submit(question)
-                }}
-              />
-            )}
-            {!!session?.artifacts.length && (
-              <section aria-label="会话文件" className="mx-auto mb-4 flex max-w-4xl flex-col gap-2">
-                <h2 className="font-medium">会话文件</h2>
-                {session.artifacts.map((file) => (
-                  <a
-                    key={file.id}
-                    href={artifactUrl(file)}
-                    className="flex min-w-0 flex-wrap items-center gap-2 rounded-lg border border-border px-3 py-2 outline-none hover:bg-hover focus-visible:ring-2 focus-visible:ring-ring"
-                  >
-                    <span className="min-w-0 flex-1 wrap-anywhere">{file.name}</span>
-                    <span className="text-ui-sm text-foreground-subtle">
-                      {Math.ceil(file.size / 1024)} KB · 下载
-                    </span>
-                  </a>
-                ))}
-              </section>
-            )}
-          </div>
-          <div className="shrink-0 px-4 pt-2 pb-4">
-            <div className="mx-auto max-w-4xl">
-              {!error && (
-                <Composer
-                  onSubmit={submit}
-                  busy={busy || loading}
-                  onStop={session?.running ? stop : undefined}
-                >
-                  {catalog && selection && (
-                    <ModelPicker
-                      catalog={catalog}
-                      selection={selection}
-                      disabled={busy || loading}
-                      onChange={setChosen}
-                    />
-                  )}
-                </Composer>
+              ) : error ? (
+                <div className="mx-auto flex max-w-3xl flex-col gap-3 py-6">
+                  <p role="alert" className="text-destructive">
+                    {error}
+                  </p>
+                  <Button variant="outline" onClick={() => setReconnect((value) => value + 1)}>
+                    重试加载
+                  </Button>
+                  <Link to="/workspace" className="text-brand underline">
+                    返回工作台
+                  </Link>
+                </div>
+              ) : session?.messages.length ? (
+                <MessageList
+                  messages={session.messages}
+                  busy={busy}
+                  onRetry={(message) => {
+                    void submit(message.question)
+                  }}
+                />
+              ) : (
+                <Welcome
+                  onPick={(question) => {
+                    if (!busy) void submit(question)
+                  }}
+                />
               )}
-              <p className="mt-1.5 text-ui-sm text-balance text-foreground-subtlest">
-                所选平台会接收本会话历史 · 联网资料需核对来源 · 文献库检索尚未实现
-              </p>
+              {!!session?.artifacts.length && (
+                <section
+                  aria-label="会话文件"
+                  className="mx-auto mb-6 flex max-w-4xl flex-col gap-2"
+                >
+                  <h2 className="text-ui-sm tracking-widest text-foreground-subtlest">会话文件</h2>
+                  {session.artifacts.map((file) => (
+                    <div
+                      key={file.id}
+                      className={`flex min-w-0 items-center gap-3 rounded-lg border px-3 py-2 transition-colors ${previewId === file.id ? 'border-brand/40 bg-accent' : 'border-border bg-card'}`}
+                    >
+                      <span className="shrink-0 rounded-sm border border-seal/50 px-1.5 text-ui-sm font-medium tracking-wide text-seal uppercase">
+                        {file.format}
+                      </span>
+                      <button
+                        type="button"
+                        aria-pressed={previewId === file.id}
+                        title="在右侧预览"
+                        onClick={() => setPreviewId(previewId === file.id ? null : file.id)}
+                        className="min-w-0 flex-1 truncate rounded-sm text-left text-ui-caption font-medium outline-none hover:text-brand focus-visible:ring-2 focus-visible:ring-ring"
+                      >
+                        {file.name}
+                      </button>
+                      <span className="shrink-0 text-ui-sm text-foreground-subtlest">
+                        {Math.ceil(file.size / 1024)} KB
+                      </span>
+                      <a
+                        href={artifactUrl(file)}
+                        aria-label={`下载 ${file.name}`}
+                        className="shrink-0 rounded-sm text-ui-sm text-brand outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring"
+                      >
+                        下载
+                      </a>
+                    </div>
+                  ))}
+                </section>
+              )}
+            </div>
+            <div className="shrink-0 px-4 pt-2 pb-5">
+              <div className="mx-auto max-w-4xl">
+                {!error && (
+                  <Composer
+                    onSubmit={submit}
+                    busy={busy || loading}
+                    onStop={session?.running ? stop : undefined}
+                  >
+                    {catalog && selection && (
+                      <ModelPicker
+                        catalog={catalog}
+                        selection={selection}
+                        disabled={busy || loading}
+                        onChange={setChosen}
+                      />
+                    )}
+                  </Composer>
+                )}
+              </div>
             </div>
           </div>
+          {preview && wide && <PreviewPane file={preview} onClose={() => setPreviewId(null)} />}
         </div>
+        {preview && !wide && (
+          <Sheet
+            open
+            onOpenChange={(open) => {
+              if (!open) setPreviewId(null)
+            }}
+          >
+            <SheetContent side="right" title={`预览：${preview.name}`} className="w-full max-w-lg">
+              <FilePreview file={preview} />
+            </SheetContent>
+          </Sheet>
+        )}
       </section>
     </>
   )

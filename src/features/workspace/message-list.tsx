@@ -1,4 +1,11 @@
-import { ArrowDownIcon, CheckIcon, CopyIcon, Loader2Icon, RotateCcwIcon } from 'lucide-react'
+import {
+  ArrowDownIcon,
+  CheckIcon,
+  CircleAlertIcon,
+  CopyIcon,
+  Loader2Icon,
+  RotateCcwIcon,
+} from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import type { AssistantMessage, Message } from '@/types'
@@ -74,28 +81,29 @@ export function MessageList({
   useEffect(() => {
     if (follow.current) scrollToBottom()
   }, [messages])
-  let questionNumber = 0
   return (
     <div className="mx-auto w-full max-w-4xl py-8">
       <ol className="flex flex-col">
         {messages.map((message) =>
           message.role === 'user' ? (
-            // 问题作为研究条目的标题：「 角标呼应标志，条目之间以细线分隔。
+            // 每一问以朱红“问”字印章起头、衬线粗体；轮次之间细线分隔，回答缩进到印章之后。
             <li
               key={message.id}
-              className="mt-10 border-t border-border pt-8 first:mt-0 first:border-t-0 first:pt-0"
+              className="mt-8 flex items-start gap-3 border-t border-border pt-8 first:mt-0 first:border-t-0 first:pt-0"
             >
-              <p className="text-ui-sm text-foreground-subtlest">第 {++questionNumber} 问</p>
-              <div className="relative mt-1 pl-4 text-ui-lg font-medium whitespace-pre-wrap">
-                <span
-                  aria-hidden
-                  className="absolute top-2 left-0 size-2.5 border-t-2 border-l-2 border-brand"
-                />
+              <span
+                aria-hidden
+                className="mt-0.5 flex size-6.5 shrink-0 items-center justify-center rounded-sm bg-seal font-serif text-ui-caption font-bold text-seal-foreground"
+              >
+                问
+              </span>
+              <p className="min-w-0 font-serif text-ui-lg leading-relaxed font-bold whitespace-pre-wrap">
+                <span className="sr-only">问题：</span>
                 {message.text}
-              </div>
+              </p>
             </li>
           ) : (
-            <li key={message.id} className="mt-4">
+            <li key={message.id} className="mt-2 pl-9.5">
               <AnswerArticle message={message} busy={busy} onRetry={onRetry} />
             </li>
           ),
@@ -103,15 +111,16 @@ export function MessageList({
       </ol>
       <div ref={end} />
       {away && (
-        <div className="pointer-events-none sticky bottom-3 flex justify-end">
+        <div className="pointer-events-none sticky bottom-3 flex justify-center">
           <Button
             variant="outline"
-            size="sm"
-            className="pointer-events-auto bg-popover shadow-md"
+            size="icon"
+            aria-label="回到底部"
+            title="回到底部"
+            className="pointer-events-auto rounded-full bg-popover shadow-md"
             onClick={scrollToBottom}
           >
             <ArrowDownIcon />
-            回到底部
           </Button>
         </div>
       )}
@@ -137,10 +146,7 @@ function AnswerArticle({
     <article aria-label="回答" className="flex min-w-0 flex-col gap-2">
       <AnswerContent message={message} />
       {message.status === 'loading' && (
-        <div
-          role="status"
-          className="flex items-center gap-2 text-ui-caption text-foreground-subtle"
-        >
+        <div role="status" className="flex items-center gap-2 text-ui-caption text-brand">
           <Loader2Icon className="size-4 animate-spin" aria-hidden />
           正在生成…
         </div>
@@ -151,7 +157,8 @@ function AnswerArticle({
         </p>
       )}
       {message.status === 'error' && (
-        <p role="alert" className="text-ui-caption text-destructive">
+        <p role="alert" className="flex items-start gap-1.5 text-ui-caption text-destructive">
+          <CircleAlertIcon className="mt-0.5 size-3.5 shrink-0" aria-hidden />
           {message.error}
         </p>
       )}
@@ -162,18 +169,19 @@ function AnswerArticle({
           <p className="text-ui-caption text-foreground-subtle">本次未返回正文。</p>
         )}
       {message.status !== 'loading' && (finalText || retry) && (
-        <div className="-ml-1.5 flex min-h-7 items-center gap-1">
+        <div className="-ml-1.5 flex min-h-7 items-center gap-0.5 text-foreground-subtlest">
           {finalText && <CopyAnswer text={finalText} />}
           {retry && (
             <Button
               variant="ghost"
-              size="sm"
+              size="icon-sm"
+              aria-label="重新提问"
+              title="重新提问"
               disabled={busy}
               onClick={() => onRetry(message)}
               className="rounded-md"
             >
               <RotateCcwIcon />
-              重新提问
             </Button>
           )}
         </div>

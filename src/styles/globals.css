@@ -50,6 +50,10 @@
   .answer-markdown > :first-child {
     margin-top: 0;
   }
+  /* 文件预览里的文档标题：居中，下压一道朱红细线，像公文的版头 */
+  .document-sheet .answer-markdown > h1:first-child {
+    @apply border-b border-seal pb-3 text-center;
+  }
   .answer-markdown strong {
     @apply font-semibold;
   }
@@ -70,6 +74,9 @@
   }
   .answer-markdown li::marker {
     @apply text-foreground-subtlest;
+  }
+  .answer-markdown ol > li::marker {
+    @apply font-semibold text-seal;
   }
   .answer-markdown li + li,
   .answer-markdown li > ul,
@@ -103,5 +110,32 @@
   }
   .answer-markdown tbody tr + tr td {
     @apply border-t border-border;
+  }
+
+  /* 铭牌鎏光：悬停时一道光带扫过一次；once 为挂载后扫一次。只属于标志，减少动效时不播放。 */
+  .nameplate-sheen {
+    transform: translateX(-120px);
+  }
+  .group\/nameplate:hover .nameplate-sheen,
+  .nameplate-sheen-once {
+    animation: nameplate-sweep 1.2s cubic-bezier(0.4, 0, 0.2, 1) both;
+  }
+  .nameplate-sheen-once {
+    animation-delay: 0.4s;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .nameplate-sheen {
+      animation: none !important;
+      opacity: 0;
+    }
+  }
+}
+
+@keyframes nameplate-sweep {
+  from {
+    transform: translateX(-120px);
+  }
+  to {
+    transform: translateX(720px);
   }
 }

@@ -70,14 +70,16 @@ export function ToolRow({ part }: { part: Extract<AnswerPart, { type: 'tool' }> 
 /** Adapted from DSH's turn-process / final-answer boundary; see THIRD_PARTY_NOTICES. */
 export function AnswerContent({ message }: { message: AssistantMessage }) {
   const { process, final } = splitAnswer(message)
-  const tools = process.filter((part) => part.type === 'tool').length
-  const messages = new Set(process.flatMap((part) => (part.type === 'text' ? [part.step] : [])))
-    .size
+  // 汇总按工具种类计数，如“联网搜索 2 次 · 生成文件 1 次”；没有工具时写“执行过程”。
+  const counts = new Map<string, number>()
+  for (const part of process)
+    if (part.type === 'tool') {
+      const name = toolNames[part.name] ?? part.name
+      counts.set(name, (counts.get(name) ?? 0) + 1)
+    }
   const failed = process.filter((part) => part.type === 'tool' && part.status === 'error').length
   const summary =
-    [tools && `${tools} 次工具调用`, messages && `${messages} 条消息`]
-      .filter(Boolean)
-      .join(' · ') || '执行过程'
+    [...counts].map(([name, count]) => `${name} ${count} 次`).join(' · ') || '执行过程'
   const renderPart = (part: AnswerPart, inProcess: boolean) =>
     part.type === 'tool' ? (
       <ToolRow key={part.id} part={part} />
@@ -92,7 +94,11 @@ export function AnswerContent({ message }: { message: AssistantMessage }) {
     ) : (
       <div
         key={part.id}
-        className={inProcess ? 'py-1 text-ui-caption text-foreground-subtle' : 'py-1 text-ui-prose'}
+        className={
+          inProcess
+            ? 'py-1 text-ui-caption text-foreground-subtle'
+            : 'py-1 font-serif text-ui-prose'
+        }
       >
         <Markdown text={part.text} />
       </div>

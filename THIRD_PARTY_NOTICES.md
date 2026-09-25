@@ -54,3 +54,10 @@ SOFTWARE.
 OpenSandbox SDK 使用 `@alibaba-group/opensandbox` 1.1.0（Apache-2.0）；管理服务固定上游提交 `2f5e56ab15846e661da53fb24a4caa4ec3f2008d`，复用绑定地址修复。egress 基于官方 `v1.1.7` 镜像，只增加工作负载 uid 的控制端口阻断规则。来源：https://github.com/opensandbox-group/OpenSandbox 。
 
 DSH `tool-bash`、`tool-fs`、`shell`、`shell-env`、`fs`、`fs-local` 均固定 `0.1.7-rc.1`（MIT）；文件 worker 调用原包，不复制其原子编辑实现。
+
+## Noto Serif SC
+
+The logo glyphs in `src/app/logo-glyphs.ts` and `public/favicon.svg` are outlines
+of “管策智研” converted from Noto Serif SC (weight 900), © Google LLC / Adobe,
+licensed under the [SIL Open Font License 1.1](https://openfontlicense.org/).
+The font software itself is not redistributed.

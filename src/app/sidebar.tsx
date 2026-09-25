@@ -4,7 +4,7 @@ import { useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/cn'
 import { createSession, useResearch } from '@/services/research'
-import { Logo } from './logo'
+import { Nameplate } from './logo'
 import { ThemeToggle } from './theme-toggle'
 
 const NAV = [
@@ -41,20 +41,15 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
 
   return (
     <nav aria-label="主导航" className="flex h-full min-h-0 flex-col gap-4 p-3">
-      <div className="flex items-center gap-2.5 px-2 pt-1">
-        <Logo className="size-8 shrink-0" />
-        <div className="min-w-0">
-          <div className="font-serif text-ui-lg font-semibold tracking-wide">管策智研</div>
-          <div className="text-ui-sm text-foreground-subtlest">政策文本研究工作台</div>
+      {/* 铭牌与校名署名：配色呼应社科大的中国红 */}
+      <div className="flex flex-col items-center gap-2 border-b border-border px-1 pt-1 pb-3">
+        <Nameplate width={216} className="h-auto w-full max-w-60" />
+        <div className="font-serif text-ui-sm tracking-[0.3em] text-foreground-subtle">
+          中国社会科学院大学
         </div>
       </div>
 
-      <Button
-        variant="outline"
-        className="w-full justify-start"
-        onClick={newResearch}
-        disabled={creating}
-      >
+      <Button className="w-full justify-start" onClick={newResearch} disabled={creating}>
         <PlusIcon />
         新建研究
       </Button>
@@ -76,17 +71,32 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
       </ul>
 
       <div className="flex min-h-0 flex-1 flex-col gap-1">
-        <div className="px-2 text-ui-sm font-medium text-foreground-subtlest">我的会话</div>
+        <div className="px-2 text-ui-sm tracking-widest text-foreground-subtlest">研究记录</div>
         <ul className="flex min-h-0 flex-col gap-0.5 overflow-y-auto">
           {sessions.map((s) => (
             <li key={s.id}>
               <NavLink
                 to={`/workspace/${s.id}`}
-                className={linkClass}
+                className={({ isActive }) =>
+                  cn(
+                    'flex h-8 min-w-0 items-center gap-2 rounded-md px-2 text-ui-base outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring',
+                    isActive
+                      ? 'bg-card font-medium text-foreground ring-1 ring-border'
+                      : 'text-foreground-subtle hover:bg-hover',
+                  )
+                }
                 title={s.title}
                 onClick={onNavigate}
               >
-                <span className="truncate">{s.title}</span>
+                {({ isActive }) => (
+                  <>
+                    <span
+                      aria-hidden
+                      className={`h-3.5 w-0.5 shrink-0 rounded-sm ${isActive ? 'bg-seal' : ''}`}
+                    />
+                    <span className="truncate">{s.title}</span>
+                  </>
+                )}
               </NavLink>
             </li>
           ))}

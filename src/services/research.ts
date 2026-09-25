@@ -134,4 +134,12 @@ export const askQuestion = (id: string, question: string, selection?: ModelSelec
     body: JSON.stringify({ question, selection }),
   })
 export const stopAnswer = (id: string) => request(`/sessions/${id}/stop`, { method: 'POST' })
-export const artifactUrl = (file: Artifact) => `/api/files/${encodeURIComponent(file.id)}`
+export const artifactUrl = (file: Pick<Artifact, 'id'>) =>
+  `/api/files/${encodeURIComponent(file.id)}`
+
+/** 读取会话文件的文本内容，供右侧预览使用；只对文本格式调用。 */
+export async function readArtifactText(file: Pick<Artifact, 'id'>, signal?: AbortSignal) {
+  const response = await fetch(artifactUrl(file), { credentials: 'same-origin', signal })
+  if (!response.ok) throw new Error(`文件读取失败（${response.status}），请重试。`)
+  return response.text()
+}

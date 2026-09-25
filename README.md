@@ -4,7 +4,7 @@
 
 ## 当前进度
 
-已接入 Node.js / TypeScript 后端，直接复用 DeepSeek Harness 的 Agent Loop、模型适配器、会话持久化和联网工具。只有一个综合助手，支持多轮会话、Markdown 流式回答、停止生成、思考折叠、工具追踪，以及 Markdown / Word / Excel / CSV 文件生成与下载。原演示模式和虚构引用已移除。
+已接入 Node.js / TypeScript 后端，直接复用 DeepSeek Harness 的 Agent Loop、模型适配器、会话持久化和联网工具。只有一个综合助手，支持多轮会话、Markdown 流式回答、停止生成、思考折叠、工具追踪，以及 Markdown / Word / Excel / CSV 文件生成与下载；Markdown、CSV 与纯文本文件可在右侧面板预览。原演示模式和虚构引用已移除。
 
 配置 OpenSandbox 后支持独立会话沙箱中的 Bash、原生文件读写和任意格式产物导出；普通聊天按需启动执行环境。Linux Docker 部署、权限边界与真实容器验收见 [沙箱部署](docs/SANDBOX.md)。未配置时不装载命令工具，不在宿主机执行模型命令。
 
