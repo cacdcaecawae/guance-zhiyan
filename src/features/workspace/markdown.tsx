@@ -1,14 +1,21 @@
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 
-/** Raw HTML is ignored; only HTTP(S) links are navigable. */
+/** Raw HTML is ignored; only HTTP(S) links and exact library citation paths are navigable. */
 export function Markdown({ text }: { text: string }) {
   return (
     <div className="answer-markdown min-w-0">
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         skipHtml
-        urlTransform={(url) => (/^https?:\/\//i.test(url) ? url : '')}
+        urlTransform={(url) =>
+          /^https?:\/\//i.test(url) ||
+          /^\/api\/library\/passages\/[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}$/.test(
+            url,
+          )
+            ? url
+            : ''
+        }
         components={{
           a: ({ href, children }) =>
             href ? (

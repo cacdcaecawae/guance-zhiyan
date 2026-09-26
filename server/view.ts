@@ -1,6 +1,7 @@
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import { expandAssistantStream, type StreamChunk, type ContentBlock } from '@deepseek-ai/dsh-llm'
 import type { AnswerPart, AssistantMessage, Message } from '../src/types/index.ts'
+import { RAG_ERRORS } from './rag.ts'
 
 export interface LiveAttempt {
   turn: number
@@ -137,7 +138,11 @@ export function messagesFromEvents(
             : 'error'
       if (answer.status === 'error') {
         answer.error =
-          reason.kind === 'max-tokens' ? '回答达到长度上限，已截断。' : '回答生成失败。'
+          reason.kind === 'max-tokens'
+            ? '回答达到长度上限，已截断。'
+            : reason.kind === 'error' && Object.hasOwn(RAG_ERRORS, reason.error.code)
+              ? RAG_ERRORS[reason.error.code as keyof typeof RAG_ERRORS]
+              : '回答生成失败。'
       }
       if (reason.kind === 'aborted' && reason.reason.kind === 'hook')
         answer.error = reason.reason.reason
