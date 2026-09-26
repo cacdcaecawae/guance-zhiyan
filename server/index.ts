@@ -5,6 +5,8 @@ import { createApp } from './http.ts'
 import { localAuthenticate } from './auth.ts'
 import { configureNetwork } from './network.ts'
 import { sandboxConfig, Sandboxes } from './sandboxes.ts'
+import { LibraryStore } from './rag-store.ts'
+import { KnowledgeLibrary, ragConfig } from './rag.ts'
 
 const port = Number(process.env.PORT ?? 3001)
 const local = process.argv.includes('--local')
@@ -18,10 +20,12 @@ const disposeNetwork = await configureNetwork()
 process.env.DSH_HOME = resolve(store.root, 'dsh')
 const sandboxOptions = sandboxConfig()
 const sandboxes = sandboxOptions ? await new Sandboxes(store, sandboxOptions).init() : undefined
-const agents = await new Agents(store, { sandboxes }).init()
+const library = new KnowledgeLibrary(new LibraryStore(store), ragConfig())
+const agents = await new Agents(store, { sandboxes, library }).init()
 const server = createApp(store, agents, {
   origin,
   dist: resolve('dist'),
+  library: library.documents,
   ...(local ? { authenticate: localAuthenticate(origin) } : {}),
 })
 server.listen(port, local ? '127.0.0.1' : (process.env.HOST ?? '127.0.0.1'), () => {

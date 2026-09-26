@@ -12,6 +12,7 @@
     "chat": "pnpm build && node --env-file-if-exists=server/.env server/index.ts --local",
     "dev:server": "node --env-file-if-exists=server/.env --watch server/index.ts",
     "start": "node --env-file-if-exists=server/.env server/index.ts",
+    "rag": "node --env-file-if-exists=server/.env server/rag-import.ts",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
     "typecheck": "tsc -b && tsc -p server/tsconfig.json",
@@ -21,6 +22,7 @@
     "test": "vitest run && pnpm test:server",
     "test:server": "node --expose-gc --test --test-isolation=none --test-timeout=30000 server/*.test.ts",
     "test:sandbox": "node --env-file-if-exists=server/.env --test server/sandbox/live.test.ts",
+    "test:rag": "node --test server/rag/live.test.ts",
     "test:e2e": "pnpm build && playwright test",
     "check": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test && pnpm test:e2e"
   },
