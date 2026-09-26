@@ -1,6 +1,9 @@
 import { defineConfig, devices } from '@playwright/test'
 
 const PORT = 4173
+const backendPort = Number(process.env.E2E_BACKEND_PORT ?? 3001)
+if (!Number.isInteger(backendPort) || backendPort < 1 || backendPort > 65535)
+  throw new Error('E2E_BACKEND_PORT 无效。')
 
 export default defineConfig({
   testDir: './tests/e2e',
@@ -17,7 +20,7 @@ export default defineConfig({
   webServer: [
     {
       command: 'node tests/support/server.ts',
-      url: 'http://127.0.0.1:3001/api/health',
+      url: `http://127.0.0.1:${backendPort}/api/health`,
       reuseExistingServer: false,
     },
     {

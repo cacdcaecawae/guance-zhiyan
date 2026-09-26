@@ -5,6 +5,7 @@ import { Store, HttpError } from './store.ts'
 import { Agents } from './agent.ts'
 import { modelCatalog, validateSelection } from './models.ts'
 import { MIME } from './artifacts.ts'
+import type { LibraryStore } from './rag-store.ts'
 import { authenticate as defaultAuthenticate, type Authenticate } from './auth.ts'
 import { sessionChanges, type SessionFrame } from '../src/services/session-stream.ts'
 import type { Session } from '../src/types/index.ts'
@@ -29,12 +30,24 @@ const json = (response: ServerResponse, status: number, value: unknown) => {
   response.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' })
   response.end(JSON.stringify(value))
 }
+const escapeHtml = (text: string) =>
+  text
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;')
 
 /** One process owns active runs. Scale out only with shared execution ownership. */
 export function createApp(
   store: Store,
   agents: Agents,
-  options: { authenticate?: Authenticate; origin?: string; dist?: string } = {},
+  options: {
+    authenticate?: Authenticate
+    origin?: string
+    dist?: string
+    library?: LibraryStore
+  } = {},
 ) {
   const authenticate = options.authenticate ?? defaultAuthenticate
   const server = createServer(async (request, response) => {
@@ -43,7 +56,8 @@ export function createApp(
     response.setHeader('Referrer-Policy', 'no-referrer')
     response.setHeader('X-Frame-Options', 'DENY')
     try {
-      const path = new URL(request.url ?? '/', 'http://localhost').pathname
+      const url = new URL(request.url ?? '/', 'http://localhost')
+      const path = url.pathname
       if (path === '/api/health' && request.method === 'GET')
         return json(response, 200, { status: 'ok' })
       if (!path.startsWith('/api/')) {
@@ -100,6 +114,46 @@ export function createApp(
       if (path === '/api/me' && request.method === 'GET') return json(response, 200, user)
       if (path === '/api/models' && request.method === 'GET')
         return json(response, 200, modelCatalog(!!agents.options.adapter))
+      if (path === '/api/library' || path.startsWith('/api/library/passages/')) {
+        if (request.method !== 'GET') throw new HttpError(405, '不支持该操作。')
+        const library = options.library
+        if (!library) throw new HttpError(503, '文献库尚未配置。')
+        if (path === '/api/library') {
+          for (const key of ['limit', 'offset']) {
+            const values = url.searchParams.getAll(key)
+            if (values.length > 1 || (values.length === 1 && !/^\d+$/.test(values[0])))
+              throw new HttpError(400, '文献分页参数无效。')
+          }
+          const documents = library.list(
+            Number(url.searchParams.get('limit') ?? 50),
+            Number(url.searchParams.get('offset') ?? 0),
+          )
+          return json(response, 200, { total: library.count(), documents })
+        }
+        const passageId =
+          /^\/api\/library\/passages\/([0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})$/i.exec(path)
+        if (!passageId) throw new HttpError(400, '原文片段编号无效。')
+        const formats = url.searchParams.getAll('format')
+        if (formats.length > 1 || (formats.length === 1 && formats[0] !== 'json'))
+          throw new HttpError(400, '原文片段格式无效。')
+        const passage = library.passage(passageId[1].toLowerCase())
+        if (formats[0] === 'json') return json(response, 200, passage)
+        response.writeHead(200, {
+          'Content-Type': 'text/html; charset=utf-8',
+          'Content-Security-Policy':
+            "default-src 'none'; script-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+        })
+        return response.end(`<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="color-scheme" content="light dark">
+<title>${escapeHtml(passage.title)} · 原文片段</title>
+<style>pre{white-space:pre-wrap;overflow-wrap:anywhere}a,code,h1,dd{overflow-wrap:anywhere}</style></head>
+<body><main><h1>${escapeHtml(passage.title)}</h1><dl>
+<dt>章节</dt><dd>${escapeHtml(passage.heading || '未标注章节')}</dd>
+<dt>文献版本</dt><dd><code>${escapeHtml(passage.versionId)}</code></dd>
+<dt>发布日期</dt><dd>${escapeHtml(passage.publishedAt || '未提供')}</dd>
+<dt>原始来源</dt><dd>${passage.sourceUrl ? `<a href="${escapeHtml(passage.sourceUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(passage.sourceUrl)}</a>` : '未提供'}</dd>
+</dl><h2>原文片段</h2><pre>${escapeHtml(passage.text)}</pre></main></body></html>`)
+      }
       if (path === '/api/sessions') {
         if (request.method === 'GET') return json(response, 200, store.list(user.id))
         if (request.method === 'POST') return json(response, 201, store.create(user.id))
