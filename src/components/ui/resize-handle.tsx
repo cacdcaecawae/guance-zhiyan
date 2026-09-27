@@ -8,6 +8,8 @@ interface ResizeHandleProps {
   min: number
   max: number
   onChange: (value: number) => void
+  /** 松手或按键调整完成时调用，用于保存偏好；拖动过程中不反复写入 */
+  onCommit?: (value: number) => void
   /** 向左 / 向上拖动时变大（如贴底输入框顶部的把手） */
   invert?: boolean
   label: string
@@ -23,6 +25,7 @@ export function ResizeHandle({
   min,
   max,
   onChange,
+  onCommit,
   invert = false,
   label,
   className,
@@ -40,8 +43,13 @@ export function ResizeHandle({
     const from = current()
     const target = event.currentTarget
     target.setPointerCapture(event.pointerId)
-    const move = (e: globalThis.PointerEvent) => onChange(clamp(from + sign * (axis(e) - start)))
+    let last: number | undefined
+    const move = (e: globalThis.PointerEvent) => {
+      last = clamp(from + sign * (axis(e) - start))
+      onChange(last)
+    }
     const end = () => {
+      if (last !== undefined) onCommit?.(last)
       target.removeEventListener('pointermove', move)
       target.removeEventListener('pointerup', end)
       target.removeEventListener('pointercancel', end)
@@ -63,6 +71,7 @@ export function ResizeHandle({
     if (next === undefined) return
     event.preventDefault()
     onChange(clamp(next))
+    onCommit?.(clamp(next))
   }
   return (
     <div

@@ -169,7 +169,8 @@ export function messagesFromEvents(
     if (message.role === 'assistant' && message.status !== 'loading') {
       for (const part of message.parts)
         if (part.type === 'tool' && part.status === 'running') {
-          part.status = 'error'
+          // 用户主动停止不算工具失败
+          part.status = message.status === 'stopped' ? 'stopped' : 'error'
           part.output = '工具执行已中断。'
         }
     }

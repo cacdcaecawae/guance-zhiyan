@@ -67,10 +67,8 @@ function DockedSidebar() {
         value={width}
         min={SIDEBAR_WIDTH.min}
         max={SIDEBAR_WIDTH.max}
-        onChange={(next) => {
-          setWidth(next)
-          writePref(SIDEBAR_WIDTH_KEY, String(next))
-        }}
+        onChange={setWidth}
+        onCommit={(next) => writePref(SIDEBAR_WIDTH_KEY, String(next))}
         className="absolute inset-y-0 -right-1 z-10 w-2 transition-colors hover:bg-brand/25"
       />
     </aside>

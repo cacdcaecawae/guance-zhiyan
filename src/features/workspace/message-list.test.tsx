@@ -88,3 +88,30 @@ it('离开底部时出现“回到底部”，点击滚到容器底部', () => {
   fireEvent.click(screen.getByRole('button', { name: '回到底部' }))
   expect(scroller.scrollTo).toHaveBeenCalledWith({ top: 1000 })
 })
+
+it('停止时中断的工具不计为失败；复制保留开头缩进', async () => {
+  const writeText = vi.fn().mockResolvedValue(undefined)
+  Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true })
+  const message: AssistantMessage = {
+    id: 'answer',
+    role: 'assistant',
+    question: 'q',
+    status: 'stopped',
+    parts: [
+      { id: 'text', type: 'text', step: 1, text: '先搜索。' },
+      {
+        id: 'tool',
+        type: 'tool',
+        name: 'web_search',
+        input: '{}',
+        output: '工具执行已中断。',
+        status: 'stopped',
+      },
+      { id: 'final', type: 'text', step: 2, text: '\n    缩进代码\n' },
+    ],
+  }
+  render(<MessageList messages={[message]} busy={false} onRetry={() => {}} />)
+  expect(screen.queryByText(/次失败/)).not.toBeInTheDocument()
+  fireEvent.click(screen.getByRole('button', { name: '复制回答' }))
+  expect(writeText).toHaveBeenCalledWith('    缩进代码')
+})

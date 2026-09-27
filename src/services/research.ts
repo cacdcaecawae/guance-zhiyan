@@ -33,12 +33,14 @@ const subscribe = (listener: () => void) => {
 }
 export const useResearch = () => useSyncExternalStore(subscribe, () => state)
 
-// 网络不通时 fetch 抛出英文 TypeError（如 Failed to fetch），统一换成可读的中文；主动取消的请求原样抛出
-const send = (url: string, init?: RequestInit) =>
-  fetch(url, init).catch((error: unknown) => {
-    if (init?.signal?.aborted) throw error
+// 网络不通时 fetch 与读取正文都会抛出英文 TypeError（如 Failed to fetch），统一换成可读的中文；主动取消的请求原样抛出
+const offline =
+  (signal?: AbortSignal | null) =>
+  (error: unknown): never => {
+    if (signal?.aborted) throw error
     throw new Error('网络连接失败，请检查网络后重试。')
-  })
+  }
+const send = (url: string, init?: RequestInit) => fetch(url, init).catch(offline(init?.signal))
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await send(`/api${path}`, {
@@ -148,5 +150,5 @@ export const artifactUrl = (file: Pick<Artifact, 'id'>) =>
 export async function readArtifactText(file: Pick<Artifact, 'id'>, signal?: AbortSignal) {
   const response = await send(artifactUrl(file), { credentials: 'same-origin', signal })
   if (!response.ok) throw new Error(`文件读取失败（${response.status}），请重试。`)
-  return response.text()
+  return response.text().catch(offline(signal))
 }

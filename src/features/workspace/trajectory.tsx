@@ -5,7 +5,7 @@ import {
   LayersIcon,
   ListTreeIcon,
 } from 'lucide-react'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import type { TraceEntry } from '@/types'
 import { toolNames, toolSummary } from './tool-display'
 
@@ -26,8 +26,18 @@ export function Trajectory({ entries }: { entries: TraceEntry[] }) {
   const [callsOpen, setCallsOpen] = useState(true)
   const turns = [...new Set(entries.map((entry) => entry.turn))]
   const start = Math.min(...entries.map((entry) => entry.time))
-  const end = Math.max(...entries.map((entry) => entry.end ?? entry.time))
-  const span = Math.max(1, end - start)
+  // 进行中的条目还没有结束时间，按当前时刻计；此时总耗时标“已进行”而不是“共”
+  // 有条目进行中时每 0.5 秒刷新一次时钟，让“已进行”的时长实时增长
+  const running = entries.some((entry) => entry.status === 'running')
+  const [now, setNow] = useState(0)
+  useEffect(() => {
+    if (!running) return
+    const timer = setInterval(() => setNow(Date.now()), 500)
+    return () => clearInterval(timer)
+  }, [running])
+  const endOf = (entry: TraceEntry) =>
+    entry.end ?? (entry.status === 'running' ? Math.max(entry.time, now) : entry.time)
+  const span = Math.max(1, Math.max(...entries.map(endOf)) - start)
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="flex shrink-0 items-center gap-3 border-b border-border px-4 py-2">
@@ -58,7 +68,7 @@ export function Trajectory({ entries }: { entries: TraceEntry[] }) {
         </div>
         <span className="ml-auto min-w-0 truncate text-ui-sm text-foreground-subtlest tabular-nums">
           <span>{timed ? '记录耗时' : '事件顺序'}</span>
-          {entries.length > 0 && ` · 共 ${(span / 1000).toFixed(2)} s`}
+          {entries.length > 0 && ` · ${running ? '已进行' : '共'} ${(span / 1000).toFixed(2)} s`}
         </span>
       </div>
       {entries.length ? (
@@ -85,7 +95,7 @@ export function Trajectory({ entries }: { entries: TraceEntry[] }) {
                         className={`absolute top-1.5 h-2 rounded-sm ${kind === 'assistant' ? 'bg-trace-model' : kind === 'tool' ? 'bg-trace-tool' : 'bg-trace-context'} ${entry.status === 'running' ? 'animate-pulse' : ''}`}
                         style={{
                           left: `${timed ? ((entry.time - start) / span) * 99 : (index / entries.length) * 100}%`,
-                          width: `${timed ? Math.max(0.3, (((entry.end ?? entry.time) - entry.time) / span) * 99) : 90 / entries.length}%`,
+                          width: `${timed ? Math.max(0.3, ((endOf(entry) - entry.time) / span) * 99) : 90 / entries.length}%`,
                         }}
                       />
                     ),

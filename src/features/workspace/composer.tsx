@@ -89,10 +89,8 @@ export function Composer({ onSubmit, busy = false, onStop, children, autoFocus }
           value={height}
           min={HEIGHT.min}
           max={HEIGHT.max}
-          onChange={(next) => {
-            setHeight(next)
-            writePref(HEIGHT_KEY, String(next))
-          }}
+          onChange={setHeight}
+          onCommit={(next) => writePref(HEIGHT_KEY, String(next))}
           className="group/grip absolute inset-x-0 -top-1.5 flex h-3 justify-center rounded-t-2xl"
         />
         <span

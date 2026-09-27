@@ -6,7 +6,7 @@ import {
   Loader2Icon,
   RotateCcwIcon,
 } from 'lucide-react'
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { Button } from '@/components/ui/button'
 import type { AssistantMessage, Message } from '@/types'
 import { AnswerContent } from './execution-process'
@@ -55,10 +55,13 @@ export function MessageList({
   messages,
   busy,
   onRetry,
+  children,
 }: {
   messages: Message[]
   busy: boolean
   onRetry: (message: AssistantMessage) => void
+  /** 列表之后的内容（会话文件），与消息同在一个容器里，“回到底部”在整段内容中都保持吸底 */
+  children?: ReactNode
 }) {
   const end = useRef<HTMLDivElement>(null)
   const follow = useRef(true)
@@ -100,6 +103,7 @@ export function MessageList({
           ),
         )}
       </ol>
+      {children}
       <div ref={end} tabIndex={-1} className="outline-none" />
       {away && (
         <div className="pointer-events-none sticky bottom-3 flex justify-center">
@@ -132,10 +136,11 @@ function AnswerArticle({
   busy: boolean
   onRetry: (message: AssistantMessage) => void
 }) {
-  const finalText = splitAnswer(message)
+  // 只去掉开头空行与末尾空白，保留开头缩进（如缩进代码块），复制出的 Markdown 含义不变
+  const joined = splitAnswer(message)
     .final.flatMap((part) => (part.type === 'text' ? [part.text] : []))
     .join('\n\n')
-    .trim()
+  const finalText = joined.trim() ? joined.replace(/^\s*\n/, '').trimEnd() : ''
   const retry = message.status === 'error' || message.status === 'stopped'
   return (
     <article aria-label="回答" className="flex min-w-0 flex-col gap-2">

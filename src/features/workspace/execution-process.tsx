@@ -1,6 +1,7 @@
 import {
   ChevronDownIcon,
   CircleAlertIcon,
+  CircleStopIcon,
   FileTextIcon,
   GlobeIcon,
   Loader2Icon,
@@ -12,7 +13,7 @@ import { Reasoning } from './reasoning'
 
 import { splitAnswer, toolNames, toolSummary } from './tool-display'
 
-const statusText = { running: '执行中', done: '已完成', error: '失败 / 已中断' }
+const statusText = { running: '执行中', done: '已完成', error: '失败', stopped: '已中断' }
 
 export function ToolRow({ part }: { part: Extract<AnswerPart, { type: 'tool' }> }) {
   // 状态放在图标位：执行中转圈、失败为警示图标；文字对读屏保留，执行中另外可见。
@@ -21,11 +22,13 @@ export function ToolRow({ part }: { part: Extract<AnswerPart, { type: 'tool' }> 
       ? Loader2Icon
       : part.status === 'error'
         ? CircleAlertIcon
-        : part.name.startsWith('web_')
-          ? GlobeIcon
-          : part.name.includes('file')
-            ? FileTextIcon
-            : WrenchIcon
+        : part.status === 'stopped'
+          ? CircleStopIcon
+          : part.name.startsWith('web_')
+            ? GlobeIcon
+            : part.name.includes('file')
+              ? FileTextIcon
+              : WrenchIcon
   return (
     <details className="group/tool min-w-0 text-foreground-subtle">
       <summary className="flex w-fit max-w-full min-w-0 cursor-pointer list-none items-center gap-2 rounded-md py-1.5 text-ui-caption outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring [&::-webkit-details-marker]:hidden">

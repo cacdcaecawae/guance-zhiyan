@@ -11,6 +11,9 @@ import { Markdown } from './markdown'
 const TEXT_FORMATS = new Set(['md', 'markdown', 'csv', 'txt', 'json'])
 const MAX_PREVIEW_BYTES = 2 * 1024 * 1024
 const MAX_TABLE_ROWS = 500
+const MAX_TABLE_COLUMNS = 50
+// 预览内容来自模型或沙箱，不可信：限制渲染规模，避免巨大的表格或 Markdown 卡死页面
+const MAX_MARKDOWN_CHARS = 100_000
 
 const canPreview = (file: Artifact) =>
   TEXT_FORMATS.has(file.format) && file.size <= MAX_PREVIEW_BYTES
@@ -83,12 +86,14 @@ function Body({ file }: { file: Artifact }) {
     )
   if (file.format === 'csv') {
     const [head = [], ...rows] = parseCsv(loaded.text)
+    const columns = Math.max(head.length, ...rows.slice(0, MAX_TABLE_ROWS).map((row) => row.length))
+    const clipped = rows.length > MAX_TABLE_ROWS || columns > MAX_TABLE_COLUMNS
     return (
       <div className="answer-markdown overflow-x-auto">
         <table>
           <thead>
             <tr>
-              {head.map((cell, index) => (
+              {head.slice(0, MAX_TABLE_COLUMNS).map((cell, index) => (
                 <th key={index}>{cell}</th>
               ))}
             </tr>
@@ -96,16 +101,17 @@ function Body({ file }: { file: Artifact }) {
           <tbody>
             {rows.slice(0, MAX_TABLE_ROWS).map((row, index) => (
               <tr key={index}>
-                {row.map((cell, column) => (
+                {row.slice(0, MAX_TABLE_COLUMNS).map((cell, column) => (
                   <td key={column}>{cell}</td>
                 ))}
               </tr>
             ))}
           </tbody>
         </table>
-        {rows.length > MAX_TABLE_ROWS && (
+        {clipped && (
           <p className="text-ui-sm text-foreground-subtlest">
-            共 {rows.length} 行，此处显示前 {MAX_TABLE_ROWS} 行，完整内容请下载。
+            共 {rows.length} 行、{columns} 列，此处最多显示前 {MAX_TABLE_ROWS} 行、前{' '}
+            {MAX_TABLE_COLUMNS} 列，完整内容请下载。
           </p>
         )}
       </div>
@@ -114,7 +120,12 @@ function Body({ file }: { file: Artifact }) {
   if (file.format === 'md' || file.format === 'markdown')
     return (
       <div className="font-serif text-ui-prose">
-        <Markdown text={loaded.text} />
+        <Markdown text={loaded.text.slice(0, MAX_MARKDOWN_CHARS)} />
+        {loaded.text.length > MAX_MARKDOWN_CHARS && (
+          <p className="mt-6 font-sans text-ui-sm text-foreground-subtlest">
+            文件较长，此处显示前 {MAX_MARKDOWN_CHARS / 10_000} 万字，完整内容请下载。
+          </p>
+        )}
       </div>
     )
   return <pre className="font-mono text-ui-sm whitespace-pre-wrap wrap-anywhere">{loaded.text}</pre>
@@ -177,13 +188,19 @@ export function PreviewPane({ file, onClose }: { file: Artifact; onClose: () => 
     const saved = Number(readPref(WIDTH_KEY))
     return saved ? Math.min(WIDTH.max, Math.max(WIDTH.min, saved)) : WIDTH.initial
   })
+  // 打开预览后焦点常停在对话区的文件卡上，所以在 document 上监听 Esc；
+  // Radix 弹层（模型下拉、抽屉）处理 Esc 时会 preventDefault，这里跳过，不会一次关两层
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape' && !event.defaultPrevented) onClose()
+    }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [onClose])
   return (
     <aside
       ref={aside}
       aria-label="文件预览"
-      onKeyDown={(event) => {
-        if (event.key === 'Escape') onClose()
-      }}
       style={{ width }}
       className="relative min-w-0 border-l border-border"
     >
@@ -195,10 +212,8 @@ export function PreviewPane({ file, onClose }: { file: Artifact; onClose: () => 
         value={width}
         min={WIDTH.min}
         max={WIDTH.max}
-        onChange={(next) => {
-          setWidth(next)
-          writePref(WIDTH_KEY, String(next))
-        }}
+        onChange={setWidth}
+        onCommit={(next) => writePref(WIDTH_KEY, String(next))}
         className="absolute inset-y-0 -left-1 z-10 w-2 transition-colors hover:bg-brand/25"
       />
       <FilePreview file={file} onClose={onClose} />

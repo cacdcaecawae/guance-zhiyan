@@ -28,15 +28,14 @@ function SheetContent({
         }}
         onCloseAutoFocus={(e) => {
           e.preventDefault()
-          // 打开抽屉的按钮可能随导航重新挂载，此时按同名 aria-label 找到新按钮
           const target = returnFocus.current
+          if (target?.isConnected) return target.focus()
+          // 打开抽屉的按钮随导航重新挂载了：新页面已自行放好焦点（如新建研究后的输入框）就不动，
+          // 否则按同名 aria-label 找到新按钮
+          if (document.activeElement && document.activeElement !== document.body) return
           const label = target?.getAttribute('aria-label')
-          ;(target?.isConnected
-            ? target
-            : label
-              ? document.querySelector<HTMLElement>(`[aria-label="${CSS.escape(label)}"]`)
-              : null
-          )?.focus()
+          if (label)
+            document.querySelector<HTMLElement>(`[aria-label="${CSS.escape(label)}"]`)?.focus()
         }}
         aria-describedby={undefined}
         className={cn(

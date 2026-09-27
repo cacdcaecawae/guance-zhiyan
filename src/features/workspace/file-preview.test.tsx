@@ -1,7 +1,7 @@
 import { fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, expect, it, vi } from 'vitest'
 import type { Artifact } from '@/types'
-import { FilePreview } from './file-preview'
+import { FilePreview, PreviewPane } from './file-preview'
 
 const file = (format: string, size = 100): Artifact => ({
   id: '00000000-0000-4000-8000-000000000001',
@@ -39,4 +39,21 @@ it('不支持的格式与过大文件不请求内容；读取失败可重试', a
   fetch.mockResolvedValueOnce(new Response('原文'))
   fireEvent.click(screen.getByRole('button', { name: '重试' }))
   expect(await screen.findByText('原文')).toBeInTheDocument()
+})
+
+it('CSV 超过 50 列时截断并提示；Esc 在页面任意位置关闭宽屏预览', async () => {
+  const header = Array.from({ length: 60 }, (_, index) => `列${index}`).join(',')
+  vi.stubGlobal(
+    'fetch',
+    vi.fn().mockResolvedValue(
+      new Response(`${header}
+${header}`),
+    ),
+  )
+  const onClose = vi.fn()
+  render(<PreviewPane file={file('csv')} onClose={onClose} />)
+  expect(await screen.findByText(/共 1 行、60 列/)).toBeInTheDocument()
+  expect(screen.getAllByRole('columnheader')).toHaveLength(50)
+  fireEvent.keyDown(document.body, { key: 'Escape' })
+  expect(onClose).toHaveBeenCalledOnce()
 })
