@@ -18,7 +18,7 @@ export type AnswerPart =
       name: string
       input: string
       output: string
-      status: 'running' | 'done' | 'error'
+      status: 'running' | 'done' | 'error' | 'stopped'
     }
 export interface AssistantMessage {
   id: string

@@ -37,7 +37,6 @@ test('流式部分回答、停止、失败后重新提问', async ({ page }) => 
   await box.fill('持续生成')
   await box.press('Enter')
   await expect(page.getByRole('article', { name: '回答' })).toContainText('已经生成的部分内容')
-  await expect(page.getByRole('combobox', { name: '供应商' })).toBeDisabled()
   await expect(page.getByRole('combobox', { name: '模型' })).toBeDisabled()
   await page.getByRole('button', { name: '停止生成' }).click()
   await expect(page.getByRole('status')).toContainText('已停止')
@@ -50,30 +49,33 @@ test('流式部分回答、停止、失败后重新提问', async ({ page }) => 
   await expect(page.getByRole('alert')).toHaveCount(2)
 })
 
-test('供应商和 DeepSeek 模型可切换，刷新保留，沿用同一会话历史', async ({ page }) => {
+test('同一列表按平台切换 DeepSeek 模型，刷新保留，沿用同一会话历史', async ({ page }) => {
   await page.goto('/workspace')
-  const provider = page.getByRole('combobox', { name: '供应商' })
   const model = page.getByRole('combobox', { name: '模型' })
-  await expect(model).toHaveValue('deepseek-flash')
-  await provider.selectOption('qianwen')
-  await expect(model).toHaveValue('deepseek-v4.1-flash')
-  await model.selectOption('deepseek-v4-pro-0813')
+  // 两个平台有同名模型，选项名只含模型名，需按平台分组定位
+  const pick = async (platform: string, name: string) => {
+    await model.click()
+    await page
+      .getByRole('group', { name: platform })
+      .getByRole('option', { name, exact: true })
+      .click()
+  }
+  await expect(model).toContainText('DeepSeek V4.1 Flash · DeepSeek 官方')
+  await pick('千问 AI 平台', 'DeepSeek V4 Pro（0813）')
+  await expect(model).toContainText('DeepSeek V4 Pro（0813） · 千问 AI 平台')
   await page.getByRole('textbox', { name: '研究问题' }).fill('你好')
   await page.getByRole('button', { name: '发送' }).click()
   await expect(page.getByRole('heading', { name: '测试回答' })).toBeVisible()
   const url = page.url()
   await page.reload()
-  await expect(provider).toHaveValue('qianwen')
-  await expect(model).toHaveValue('deepseek-v4-pro-0813')
-  await provider.selectOption('deepseek-official')
-  await model.selectOption('deepseek-v4-pro')
+  await expect(model).toContainText('DeepSeek V4 Pro（0813） · 千问 AI 平台')
+  await pick('DeepSeek 官方', 'DeepSeek V4 Pro')
   await page.getByRole('textbox', { name: '研究问题' }).fill('继续')
   await page.getByRole('button', { name: '发送' }).click()
   await expect(page.getByRole('article', { name: '回答' })).toHaveCount(2)
   await expect(page).toHaveURL(url)
   await page.reload()
-  await expect(provider).toHaveValue('deepseek-official')
-  await expect(model).toHaveValue('deepseek-v4-pro')
+  await expect(model).toContainText('DeepSeek V4 Pro · DeepSeek 官方')
 })
 
 test('真实文件工具、执行追踪和 Word 下载；其他用户不能访问', async ({ page, browser }) => {
@@ -85,21 +87,25 @@ test('真实文件工具、执行追踪和 Word 下载；其他用户不能访�
   const reasoning = answer.locator('summary', { hasText: '思考过程' })
   await expect(reasoning).toHaveCount(2)
   await expect(answer.locator('summary')).toHaveText([
-    /1 次工具调用 · 1 条消息/,
+    /生成文件 1 次/,
     /思考过程/,
     /生成文件.*已完成/,
     /思考过程/,
   ])
-  await answer.locator('summary', { hasText: '1 次工具调用' }).click()
+  await answer.locator('summary', { hasText: '生成文件 1 次' }).click()
   await expect(answer.getByText('文件已生成，请从下方文件卡片下载。')).toBeVisible()
   await expect(reasoning.first()).not.toBeVisible()
-  await answer.locator('summary', { hasText: '1 次工具调用' }).click()
+  await answer.locator('summary', { hasText: '生成文件 1 次' }).click()
   await page.reload()
   await expect(reasoning).toHaveCount(2)
   for (const item of await reasoning.all()) await item.click()
   await expect(answer.getByText('测试适配器：检查请求内容。', { exact: true })).toHaveCount(2)
   const link = page.getByRole('link', { name: /研究报告.docx/ })
   await expect(link).toBeVisible()
+  await page.getByRole('button', { name: '研究报告.docx' }).click()
+  await expect(page.getByRole('complementary', { name: '文件预览' })).toContainText(
+    'DOCX 文件暂不支持在线预览',
+  )
   const downloadPromise = page.waitForEvent('download')
   await link.click()
   const download = await downloadPromise
@@ -116,9 +122,9 @@ test('真实文件工具、执行追踪和 Word 下载；其他用户不能访�
   await expect(tool).not.toBeVisible()
   await trace.getByRole('button', { name: '调用', exact: true }).click()
   await expect(tool).toBeVisible()
-  await trace.getByRole('button', { name: '轮次', exact: true }).click()
+  await trace.getByRole('button', { name: '全部收起', exact: true }).click()
   await expect(tool).not.toBeVisible()
-  await trace.getByRole('button', { name: '轮次', exact: true }).click()
+  await trace.getByRole('button', { name: '全部展开', exact: true }).click()
   await trace.getByRole('button', { name: '时长', exact: true }).click()
   await expect(trace.getByText('事件顺序', { exact: true })).toBeVisible()
   await page.getByRole('tab', { name: '轨迹', exact: true }).press('ArrowLeft')

@@ -1,6 +1,6 @@
 import { act, renderHook } from '@testing-library/react'
 import { expect, it, vi } from 'vitest'
-import { askQuestion, useResearch, watchSession } from './research'
+import { askQuestion, createSession, useResearch, watchSession } from './research'
 import type { Session } from '@/types'
 
 it('会话切换丢弃过时读取；HTTP 确认不覆盖较新的流式状态', async () => {
@@ -75,4 +75,10 @@ it('会话切换丢弃过时读取；HTTP 确认不覆盖较新的流式状态',
     unmount()
     vi.unstubAllGlobals()
   }
+})
+
+it('网络不通时给出中文错误，而不是浏览器的英文原文', async () => {
+  vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('Failed to fetch')))
+  await expect(createSession()).rejects.toThrow('网络连接失败，请检查网络后重试。')
+  vi.unstubAllGlobals()
 })

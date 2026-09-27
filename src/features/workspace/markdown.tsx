@@ -4,7 +4,7 @@ import remarkGfm from 'remark-gfm'
 /** Raw HTML is ignored; only HTTP(S) links are navigable. */
 export function Markdown({ text }: { text: string }) {
   return (
-    <div className="answer-markdown min-w-0 leading-relaxed">
+    <div className="answer-markdown min-w-0">
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         skipHtml
@@ -16,7 +16,7 @@ export function Markdown({ text }: { text: string }) {
                 href={href}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="rounded-sm text-brand underline outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                className="rounded-sm text-brand underline decoration-brand/40 underline-offset-2 outline-none transition-colors hover:decoration-brand focus-visible:ring-2 focus-visible:ring-ring"
               >
                 {children}
               </a>

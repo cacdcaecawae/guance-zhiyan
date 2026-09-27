@@ -114,6 +114,11 @@ test('native DSH: scoped tools, persistent history, cancellation and long-runnin
       (message) => message.role === 'assistant',
     )
     assert.equal(projected[0].status, 'stopped')
+    // 用户停止时中断的工具记为“已中断”，不算失败
+    assert.ok(
+      projected[0].role === 'assistant' &&
+        projected[0].parts.some((part) => part.type === 'tool' && part.status === 'stopped'),
+    )
     assert.equal(projected[1].status, 'loading')
     assert.equal(
       traceFromEvents(resumed, true).find((row) => row.kind === 'tool')?.status,

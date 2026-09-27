@@ -6,79 +6,84 @@
   --ui-font-size: 14px;
 
   /* 结构面 */
-  --background: #f5f5f6;
-  --sidebar: #ededef;
+  --background: #efefec;
+  --sidebar: #f7f7f5;
   --surface: #ffffff;
-  --surface-hover: #f3f3f5;
+  --surface-hover: #f5f5f3;
   --card: #ffffff;
-  --card-border: #e4e4e7;
+  --card-border: #e3e3df;
   --popover: #ffffff;
-  --popover-border: #dcdce0;
-  --overlay: rgb(28 28 31 / 0.3);
+  --popover-border: #dcdcd7;
+  --overlay: rgb(27 27 29 / 0.3);
   --input: #ffffff;
   --input-focused: #ffffff;
-  --input-border: #d4d4d8;
-  --input-border-hover: #a1a1aa;
+  --input-border: #c9c9c4;
+  --input-border-hover: #a8a8a2;
 
   /* 文本 */
-  --foreground: #1c1c1f;
-  --foreground-subtle: #55555e;
-  --foreground-subtlest: #6b6b74;
+  --foreground: #1b1b1d;
+  --foreground-subtle: #4a4a4f;
+  --foreground-subtlest: #606066;
 
   /* 边框与状态面 */
-  --border: #e4e4e7;
-  --border-hover: #cfcfd4;
-  --hover: #ececef;
-  --selected: #e2e3e8;
-  --accent: #eaeffb;
-  --tag: #e8e8eb;
-  --find-highlight: #fdf0b5;
+  --border: #e3e3df;
+  --border-hover: #cfcfca;
+  --hover: #efefec;
+  --selected: #e9e9e5;
+  --accent: #edf1f7;
+  --tag: #efefec;
+  --find-highlight: #fbe8a2;
 
   /* 强调与语义状态 */
-  --brand: #3050c8;
-  --primary: #26262b;
-  --primary-foreground: #fafafa;
-  --destructive: #c62828;
-  --trace-model: #8061ac;
-  --trace-tool: #a5620a;
-  --trace-context: #288259;
+  --brand: #23395d;
+  --primary: #23395d;
+  --primary-foreground: #ffffff;
+  --destructive: #b3261e;
+  /* 朱红：印章、编号、当前页签等装饰，不表达状态 */
+  --seal: #b0302a;
+  --seal-foreground: #ffffff;
+  --trace-model: #46578a;
+  --trace-tool: #8a5522;
+  --trace-context: #56692a;
 }
 
 .dark {
   color-scheme: dark;
-  --background: #131316;
-  --sidebar: #19191d;
-  --surface: #1d1d21;
-  --surface-hover: #242429;
-  --card: #1d1d21;
-  --card-border: #2b2b31;
-  --popover: #212126;
-  --popover-border: #34343b;
+  --background: #161615;
+  --sidebar: #1b1b1a;
+  --surface: #212120;
+  --surface-hover: #292927;
+  --card: #252523;
+  --card-border: #353533;
+  --popover: #2a2a28;
+  --popover-border: #3f3f3c;
   --overlay: rgb(0 0 0 / 0.5);
-  --input: #1d1d21;
-  --input-focused: #212126;
-  --input-border: #3a3a42;
-  --input-border-hover: #55555e;
+  --input: #252523;
+  --input-focused: #2a2a28;
+  --input-border: #4a4a46;
+  --input-border-hover: #62625e;
 
-  --foreground: #e6e6e9;
-  --foreground-subtle: #a3a3ac;
-  --foreground-subtlest: #878791;
+  --foreground: #e6e5e1;
+  --foreground-subtle: #b8b7b2;
+  --foreground-subtlest: #a3a29d;
 
-  --border: #2b2b31;
-  --border-hover: #3a3a42;
-  --hover: #26262b;
-  --selected: #2f2f36;
-  --accent: #1f2637;
-  --tag: #2a2a30;
+  --border: #353533;
+  --border-hover: #454542;
+  --hover: #2d2d2b;
+  --selected: #353533;
+  --accent: #1e2635;
+  --tag: #30302e;
   --find-highlight: #5a4a12;
 
-  --brand: #8ea2ff;
-  --primary: #e6e6e9;
-  --primary-foreground: #1c1c1f;
-  --destructive: #f07070;
-  --trace-model: #b69bdb;
-  --trace-tool: #eab36d;
-  --trace-context: #75c9a3;
+  --brand: #9fb6de;
+  --primary: #a9bde0;
+  --primary-foreground: #111a2b;
+  --destructive: #ee7a70;
+  --seal: #e06a5e;
+  --seal-foreground: #1b1b1d;
+  --trace-model: #a3b0e0;
+  --trace-tool: #dba56c;
+  --trace-context: #b0c47f;
 }
 
 @theme inline {
@@ -116,22 +121,35 @@
   --color-primary: var(--primary);
   --color-primary-foreground: var(--primary-foreground);
   --color-destructive: var(--destructive);
+  --color-seal: var(--seal);
+  --color-seal-foreground: var(--seal-foreground);
   --color-ring: var(--brand);
 
   /* 字体：系统无衬线栈，兼容中文 */
   --font-sans:
     system-ui, -apple-system, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei',
-    'Noto Sans CJK SC', 'Helvetica Neue', Arial, sans-serif;
+    'Noto Sans SC', 'Source Han Sans SC', 'Noto Sans CJK SC', 'WenQuanYi Micro Hei',
+    'Helvetica Neue', Arial, sans-serif;
+  /* 衬线用于阅读内容与标题（规则见 DESIGN.md），首选自托管的 Noto Serif SC Variable；不列宋体（SimSun 无粗体），缺字体时回落到无衬线 */
+  --font-serif:
+    'Noto Serif SC Variable', 'Songti SC', 'Noto Serif SC', 'Noto Serif CJK SC',
+    'Source Han Serif SC', system-ui, 'PingFang SC', 'Microsoft YaHei', sans-serif;
   --font-mono:
     ui-monospace, 'Cascadia Mono', 'SF Mono', Menlo, Consolas, 'Noto Sans Mono CJK SC', monospace;
 
-  /* UI 字号体系：全部由 --ui-font-size 派生，界面文字只用 text-ui-* */
+  /* UI 字号体系：全部由 --ui-font-size 派生，界面文字只用 text-ui-*；增删时同步 src/lib/cn.ts */
+  /* 只用于空会话的欢迎标题 */
+  --text-ui-display: calc(var(--ui-font-size) + 12px);
+  --text-ui-display--line-height: 1.3;
   --text-ui-xl: calc(var(--ui-font-size) + 4px);
   --text-ui-xl--line-height: 1.5;
   --text-ui-lg: calc(var(--ui-font-size) + 2px);
   --text-ui-lg--line-height: 1.5;
   --text-ui-base: var(--ui-font-size);
   --text-ui-base--line-height: 1.6;
+  /* 回答与问题正文：长文阅读，行距取 clreq 建议区间 */
+  --text-ui-prose: calc(var(--ui-font-size) + 1px);
+  --text-ui-prose--line-height: 1.75;
   --text-ui-caption: calc(var(--ui-font-size) - 1px);
   --text-ui-caption--line-height: 1.5;
   --text-ui-sm: calc(var(--ui-font-size) - 2px);

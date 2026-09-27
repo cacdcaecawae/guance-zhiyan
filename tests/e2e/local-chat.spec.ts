@@ -85,7 +85,14 @@ for (const supplier of ['deepseek-official', 'qianwen']) {
       await page.goto(appOrigin)
       await expect(page.getByText('本机研究者', { exact: true })).toBeVisible()
       const box = page.getByRole('textbox', { name: '研究问题' })
-      await page.getByRole('combobox', { name: '供应商' }).selectOption(supplier)
+      const model = page.getByRole('combobox', { name: '模型' })
+      const platform = supplier === 'qianwen' ? '千问 AI 平台' : 'DeepSeek 官方'
+      await model.click()
+      await page
+        .getByRole('group', { name: platform })
+        .getByRole('option', { name: 'DeepSeek V4.1 Flash', exact: true })
+        .click()
+      await expect(model).toContainText(`DeepSeek V4.1 Flash · ${platform}`)
       await box.fill('你好')
       await box.press('Enter')
       await expect(page.getByRole('article', { name: '回答' })).toContainText('本机协议测试回答')
