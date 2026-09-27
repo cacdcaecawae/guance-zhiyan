@@ -13,7 +13,7 @@ interface WelcomeProps {
 /** 空白会话的欢迎状态，居中排在输入区上方；示例问题会实际调用后端。 */
 export function Welcome({ onPick }: WelcomeProps) {
   return (
-    <div className="mx-auto flex w-full max-w-4xl flex-col items-center gap-3 py-6 text-center">
+    <div className="mx-auto flex w-full max-w-[52rem] flex-col items-center gap-3 py-6 text-center">
       <Seal size={52} />
       <h2 className="mt-1 font-serif text-ui-display font-bold tracking-wider">开始一项研究</h2>
       <p className="text-ui-base text-foreground-subtle">

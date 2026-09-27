@@ -82,7 +82,7 @@ export function MessageList({
     if (follow.current) scrollToBottom()
   }, [messages])
   return (
-    <div className="mx-auto w-full max-w-4xl py-8">
+    <div className="mx-auto w-full max-w-[52rem] py-8">
       <ol className="flex flex-col">
         {messages.map((message) =>
           message.role === 'user' ? (

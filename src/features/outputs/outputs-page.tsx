@@ -6,8 +6,8 @@ export function OutputsPage() {
     <>
       <TopBar title="研究成果" />
       <Placeholder
-        title="跨会话成果管理尚未实现"
-        description="已生成的报告和表格可在对应会话的文件卡片中下载。"
+        title="敬请期待"
+        description="研究成果将汇总各会话生成的报告与表格；目前可在会话文件中下载。"
       />
     </>
   )

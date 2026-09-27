@@ -82,7 +82,7 @@ export function WorkspacePage({ sessionId }: { sessionId?: string }) {
   // 连接与操作错误：放进两个视图各自的内容栏顶部，与内容左缘对齐
   const alerts = (connectionError || operationError) && (
     <div className="shrink-0 px-4 pt-3">
-      <div className="mx-auto flex max-w-4xl flex-col gap-1.5">
+      <div className="mx-auto flex max-w-[52rem] flex-col gap-1.5">
         {connectionError && (
           <div role="alert" className="flex items-start gap-2 text-ui-caption text-destructive">
             <CircleAlertIcon className="mt-0.5 size-3.5 shrink-0" aria-hidden />
@@ -205,7 +205,7 @@ export function WorkspacePage({ sessionId }: { sessionId?: string }) {
                 />
               )}
               {!!session?.artifacts.length && (
-                <section aria-label="会话文件" className="mx-auto mb-6 w-full max-w-4xl">
+                <section aria-label="会话文件" className="mx-auto mb-6 w-full max-w-[52rem]">
                   <h2 className="mb-3 flex items-center gap-2 font-serif text-ui-base font-semibold">
                     <PaperclipIcon className="size-4 text-foreground-subtlest" aria-hidden />
                     会话文件
@@ -251,7 +251,7 @@ export function WorkspacePage({ sessionId }: { sessionId?: string }) {
               )}
             </div>
             <div className="shrink-0 px-4 pt-2 pb-5">
-              <div className="mx-auto max-w-4xl">
+              <div className="mx-auto max-w-[52rem]">
                 {!error && (
                   <Composer
                     autoFocus={focusComposer}
