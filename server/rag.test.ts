@@ -380,7 +380,7 @@ test('retrieval fails as not indexed when reindex starts during an external requ
   await assert.rejects(retrieving, { code: 'RAG_NOT_INDEXED' })
 })
 
-test('the actual import and reindex CLI persists sources, rebuilds markers and preserves an existing lock', async (t) => {
+test('the actual import and reindex CLI persists sources, resumes indexing, skips invalid lines on request and preserves an existing lock', async (t) => {
   const { documents, store, config, library, control, calls, pointIds } = await backend(t)
   const path = join(store.root, 'input.jsonl')
   const lockPath = join(store.root, 'rag-import.lock')
@@ -438,22 +438,54 @@ test('the actual import and reindex CLI persists sources, rebuilds markers and p
   assert.equal(ids.length, 2)
   await assert.rejects(readFile(lockPath), { code: 'ENOENT' })
 
+  const embedCalls = () => calls.filter((call) => call.operation === 'embed').length
+  const embedded = embedCalls()
+  const again = await run(['import', path])
+  assert.equal(again.code, 0, again.stderr)
+  assert.match(again.stdout, /其中 2 篇已索引而跳过/)
+  assert.equal(embedCalls(), embedded, 'unchanged indexed documents are not embedded again')
+
+  // An interrupted rebuild leaves some documents without markers; reindex resumes with just those.
+  store.db
+    .prepare('DELETE FROM rag_indexed_versions WHERE fingerprint=? AND version_id=?')
+    .run(library.indexFingerprint!, documents.current('a-test'))
   const waiting = gate('upsert')
   control.gate = waiting
   const rebuilding = run(['reindex'])
   await waiting.entered.promise
-  assert.equal(markers(), 0, 'reindex clears completion markers before rebuilding any document')
-  assert.equal(documents.count(), 2)
+  assert.equal(markers(), 1, 'documents already indexed stay searchable during a rebuild')
   waiting.release.resolve()
   control.gate = undefined
   const rebuilt = await rebuilding
   assert.equal(rebuilt.code, 0, rebuilt.stderr)
-  assert.match(rebuilt.stdout, /已重建 2 篇/)
-  assert.match(rebuilt.stdout, /任务完成，共处理 2 篇文献/)
+  assert.match(rebuilt.stdout, /任务完成，共处理 2 篇文献，其中 1 篇已索引而跳过/)
+  assert.equal(embedCalls(), embedded + 1)
   assert.equal(markers(), 2)
   assert.deepEqual(documents.list(), sources)
   assert.deepEqual(pointIds(), ids)
   await assert.rejects(readFile(lockPath), { code: 'ENOENT' })
+
+  const mixed = join(store.root, 'mixed.jsonl')
+  const extra = { id: 'm-test', title: 'CLI 测试丙', text: '第一条 跳过无效行测试。' }
+  await writeFile(mixed, ['{bad-json}', JSON.stringify(extra)].join('\n'))
+  const strict = await run(['import', mixed])
+  assert.equal(strict.code, 1)
+  assert.match(strict.stderr, /第 1 行不是有效 UTF-8 文献 JSON/)
+  assert.equal(documents.count(), 2)
+  const lenient = await run(['import', mixed, '--skip-invalid'])
+  assert.equal(lenient.code, 0, lenient.stderr)
+  assert.match(lenient.stderr, /已跳过：第 1 行/)
+  assert.match(lenient.stdout, /另有 1 行无效数据被跳过/)
+  assert.equal(documents.current('m-test') !== null, true)
+  assert.equal((await run(['reindex', '--skip-invalid'])).code, 1)
+  assert.equal((await run(['import', path, '--force'])).code, 1)
+
+  // Vectors lost outside this process (restored or edited Qdrant data) need a forced rebuild.
+  const beforeForce = embedCalls()
+  const forced = await run(['reindex', '--force'])
+  assert.equal(forced.code, 0, forced.stderr)
+  assert.match(forced.stdout, /共处理 3 篇文献，其中 0 篇已索引而跳过/)
+  assert.equal(embedCalls(), beforeForce + 3)
 
   await writeFile(lockPath, 'another-import-test-owner', { flag: 'wx' })
   const before = calls.length
@@ -463,8 +495,8 @@ test('the actual import and reindex CLI persists sources, rebuilds markers and p
   assert.doesNotMatch(blocked.stdout, /任务完成/)
   assert.equal(await readFile(lockPath, 'utf8'), 'another-import-test-owner')
   assert.equal(calls.length, before)
-  assert.equal(markers(), 2)
-  assert.deepEqual(documents.list(), sources)
+  assert.equal(markers(), 3)
+  assert.equal(documents.count(), 3)
 })
 
 test('JSONL keeps UTF-8 text across stream boundaries and identifies invalid data by source line', async (t) => {

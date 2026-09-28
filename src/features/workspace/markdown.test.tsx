@@ -28,8 +28,8 @@ it('原文引用仅放行精确片段路径，保留 HTTP 链接并拒绝其他�
     />,
   )
   expect(screen.getAllByRole('link')).toHaveLength(3)
-  expect(screen.getByRole('link', { name: '原文' })).toHaveAttribute('href', path)
-  expect(screen.getByRole('link', { name: '原文' })).toHaveAttribute('rel', 'noopener noreferrer')
+  expect(screen.getByRole('link', { name: '原文 1' })).toHaveAttribute('href', path)
+  expect(screen.getByRole('link', { name: '原文 1' })).toHaveAttribute('rel', 'noopener noreferrer')
   expect(screen.getByRole('link', { name: '网页' })).toHaveAttribute(
     'href',
     'https://example.org/policy',
@@ -37,4 +37,33 @@ it('原文引用仅放行精确片段路径，保留 HTTP 链接并拒绝其他�
   expect(screen.getByText('其他接口')).not.toHaveAttribute('href')
   expect(document.querySelector('script')).toBeNull()
   expect(screen.queryByRole('img')).not.toBeInTheDocument()
+})
+
+it('原文引用按首次出现顺序编号，同一片段复用编号', () => {
+  const first = '/api/library/passages/01234567-89ab-5def-a123-456789abcdef'
+  const second = '/api/library/passages/fedcba98-7654-5321-afed-cba987654321'
+  render(
+    <Markdown
+      text={`养老服务[原文](${first})，住房保障[原文](${second})，再次引用[原文](${first.toUpperCase().replace('/API/LIBRARY/PASSAGES/', '/api/library/passages/')})。`}
+    />,
+  )
+  const links = screen.getAllByRole('link')
+  expect(links.map((link) => link.getAttribute('aria-label'))).toEqual([
+    '原文 1',
+    '原文 2',
+    '原文 1',
+  ])
+  expect(links.map((link) => link.textContent)).toEqual(['1', '2', '1'])
+})
+
+it('描述性标签保留为文字并附编号；未在正文中出现的片段路径不成链接', () => {
+  const path = '/api/library/passages/01234567-89ab-5def-a123-456789abcdef'
+  render(
+    <Markdown
+      text={`根据[《测试条例》第三条](${path})规定。编码写法[原文](&#47;api/library/passages/fedcba98-7654-5321-afed-cba987654321)。`}
+    />,
+  )
+  expect(screen.getByText(/《测试条例》第三条/)).toBeInTheDocument()
+  expect(screen.getAllByRole('link')).toHaveLength(1)
+  expect(screen.getByRole('link', { name: '原文 1' })).toHaveAttribute('href', path)
 })

@@ -1,4 +1,6 @@
 import { createHash } from 'node:crypto'
+import { once } from 'node:events'
+import { Worker } from 'node:worker_threads'
 import { Store, HttpError } from './store.ts'
 import { chunkText } from './rag-chunks.ts'
 
@@ -21,11 +23,40 @@ export interface Passage {
   end: number
   heading: string
   text: string
+  /** Only from neighbors(): 1 when this is the document's current version, 0 when replaced. */
+  current?: number
 }
 
 const segmenter = new Intl.Segmenter('zh', { granularity: 'word' })
 export function terms(text: string) {
   return [...segmenter.segment(text)].filter((part) => part.isWordLike).map((part) => part.segment)
+}
+/** Function characters that match nearly every passage on their own. */
+const STOP_CHARACTERS = new Set('的了和与及或在是对为等把被从向于以之其而并也就都又将由这那有个')
+
+/**
+ * Consecutive single characters (碳/达/峰) become a phrase; an isolated one is kept as a keyword
+ * (碳, 税) unless it is a function character (的, 和).
+ */
+export function lexicalQuery(query: string) {
+  const parts: string[] = []
+  let run: string[] = []
+  const flush = () => {
+    if (run.length > 1 || (run.length === 1 && !STOP_CHARACTERS.has(run[0])))
+      parts.push(run.join(' '))
+    run = []
+  }
+  for (const word of terms(query))
+    if ([...word].length === 1) run.push(word)
+    else {
+      flush()
+      parts.push(word)
+    }
+  flush()
+  return [...new Set(parts)]
+    .slice(0, 16)
+    .map((part) => `"${part.replaceAll('"', '""')}"`)
+    .join(' OR ')
 }
 function uuid(text: string) {
   const hex = createHash('sha256').update(text).digest('hex')
@@ -186,6 +217,15 @@ export class LibraryStore {
       .prepare('SELECT document_id, title FROM rag_versions WHERE id=?')
       .get(versionId)
     if (!version) throw new HttpError(404, '没有找到待发布的文献版本。')
+    // Tokenize before taking the write lock: the web server waits on it while this CLI holds it.
+    const title = terms(version.title as string).join(' ')
+    const rows =
+      versionId === expected
+        ? []
+        : db
+            .prepare('SELECT rowid, text FROM rag_chunks WHERE version_id=?')
+            .all(versionId)
+            .map((chunk) => [chunk.rowid!, terms(chunk.text as string).join(' ')] as const)
     db.exec('BEGIN IMMEDIATE')
     try {
       if (this.current(version.document_id as string) !== expected)
@@ -198,14 +238,7 @@ export class LibraryStore {
         'DELETE FROM rag_fts WHERE rowid IN (SELECT rowid FROM rag_chunks WHERE version_id=?)',
       ).run(expected)
       const insert = db.prepare('INSERT INTO rag_fts(rowid, title, body) VALUES(?, ?, ?)')
-      for (const chunk of db
-        .prepare('SELECT rowid, text FROM rag_chunks WHERE version_id=?')
-        .all(versionId))
-        insert.run(
-          chunk.rowid!,
-          terms(version.title as string).join(' '),
-          terms(chunk.text as string).join(' '),
-        )
+      for (const [rowid, body] of rows) insert.run(rowid, title, body)
       db.prepare(
         'INSERT INTO rag_documents VALUES(?, ?) ON CONFLICT(id) DO UPDATE SET version_id=excluded.version_id',
       ).run(version.document_id!, versionId)
@@ -216,21 +249,42 @@ export class LibraryStore {
       throw error
     }
   }
-  lexical(query: string, limit = 40): string[] {
-    if (typeof query !== 'string' || query.length > 8000 || !query.isWellFormed())
-      throw new HttpError(400, '检索问题须为有效文本，最长 8000 个字符。')
-    if (!Number.isInteger(limit) || limit < 1 || limit > 100)
-      throw new HttpError(400, '检索返回数量须为 1–100。')
-    const tokens = [...new Set(terms(query))].slice(0, 64)
-    if (!tokens.length) return []
-    const match = tokens.map((word) => `"${word.replaceAll('"', '""')}"`).join(' OR ')
+  /** BM25 scores every match of a common word, so the query runs off the main thread. */
+  async lexical(query: string, limit = 40, signal?: AbortSignal): Promise<string[]> {
+    const match = lexicalQuery(query)
+    if (!match) return []
+    // ponytail: one short-lived worker per query (~30 ms start, cold page cache); keep a
+    // resident worker if full-library latency needs it.
+    const worker = new Worker(new URL('./rag-lexical.ts', import.meta.url), {
+      workerData: { path: this.store.path, match, limit },
+      // Process-level flags of the parent (e.g. under node --test) are invalid in a worker.
+      execArgv: ['--disable-warning=ExperimentalWarning'],
+    })
+    // A failure racing with cancellation must not become an unhandled 'error' event.
+    worker.on('error', () => {})
+    try {
+      const [ids] = await once(worker, 'message', signal ? { signal } : {})
+      return ids as string[]
+    } finally {
+      // Wait for exit so the read-only handle is closed before callers close or delete the store.
+      await worker.terminate()
+    }
+  }
+  /** Adjacent passages of the same published version, for reading a citation in context. */
+  neighbors(id: string, before: number, after: number): Passage[] {
+    const passage = this.passage(id)
     return this.store.db
       .prepare(
-        `SELECT c.id FROM rag_fts f JOIN rag_chunks c ON c.rowid=f.rowid
-      WHERE rag_fts MATCH ? ORDER BY bm25(rag_fts, 5, 1), c.id LIMIT ?`,
+        `SELECT ${passageColumns}, d.version_id IS v.id AS current
+      FROM rag_chunks c JOIN rag_versions v ON v.id=c.version_id
+      LEFT JOIN rag_documents d ON d.id=v.document_id
+      WHERE c.version_id=? AND c.ordinal BETWEEN ? AND ? ORDER BY c.ordinal`,
       )
-      .all(match, limit)
-      .map((row) => row.id as string)
+      .all(
+        passage.versionId,
+        passage.ordinal - before,
+        passage.ordinal + after,
+      ) as unknown as Passage[]
   }
   activePassages(ids: string[]): Passage[] {
     if (ids.length > 256) throw new HttpError(400, '一次最多读取 256 个候选片段。')

@@ -78,16 +78,48 @@ for (const supplier of ['deepseek-official', 'qianwen']) {
         supplier === 'qianwen' ? 'qianwen-test-only' : 'test-only',
       )
       expect(body.model).toBe(supplier === 'qianwen' ? 'deepseek-v4.1-flash' : 'deepseek-flash')
-      expect(JSON.stringify(body.messages)).toContain(citationPath)
-      expect(JSON.stringify(body.messages)).toContain(source.text)
+      type Sent = { role: string; content: unknown }
+      const isResult = (message: Sent) => JSON.stringify(message.content).includes('tool_result')
       userTurns = body.messages.filter(
-        (message: { role: string }) => message.role === 'user',
+        (message: Sent) => message.role === 'user' && !isResult(message),
       ).length
-      const last = JSON.stringify(body.messages.at(-1))
+      const question = JSON.stringify(
+        body.messages.findLast((message: Sent) => message.role === 'user' && !isResult(message)),
+      )
       response.writeHead(200, { 'Content-Type': 'text/event-stream' })
       const emit = (event: { type: string; [key: string]: unknown }) =>
         response.write(`event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`)
       emit({ type: 'message_start', message: { usage: { input_tokens: 10, output_tokens: 0 } } })
+      if (!isResult(body.messages.at(-1))) {
+        // Retrieval is on demand: the model asks for a library search before answering.
+        expect(body.tools.map((tool: { name: string }) => tool.name)).toContain('library_search')
+        emit({
+          type: 'content_block_start',
+          index: 0,
+          content_block: {
+            type: 'tool_use',
+            id: `toolu_${userTurns}`,
+            name: 'library_search',
+            input: {},
+          },
+        })
+        emit({
+          type: 'content_block_delta',
+          index: 0,
+          delta: { type: 'input_json_delta', partial_json: '{"query":"测试事项办理期限"}' },
+        })
+        emit({ type: 'content_block_stop', index: 0 })
+        emit({
+          type: 'message_delta',
+          delta: { stop_reason: 'tool_use' },
+          usage: { output_tokens: 8 },
+        })
+        emit({ type: 'message_stop' })
+        response.end()
+        return
+      }
+      expect(JSON.stringify(body.messages.at(-1))).toContain(citationPath)
+      expect(JSON.stringify(body.messages.at(-1))).toContain(source.text)
       emit({ type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } })
       emit({
         type: 'content_block_delta',
@@ -97,7 +129,7 @@ for (const supplier of ['deepseek-official', 'qianwen']) {
           text: `本机协议测试回答：测试事项期限为三个工作日。[原文 1](${citationPath})`,
         },
       })
-      if (last.includes('停止测试')) return // Keep the real SSE transport open until cancellation.
+      if (question.includes('停止测试')) return // Keep the real SSE transport open until cancellation.
       emit({ type: 'content_block_stop', index: 0 })
       emit({
         type: 'message_delta',

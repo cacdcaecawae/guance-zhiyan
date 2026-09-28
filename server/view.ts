@@ -13,6 +13,9 @@ const textOf = (content: readonly ContentBlock[]) =>
 
 export function toolError(code?: string): string {
   const messages: Record<string, string> = {
+    ...RAG_ERRORS,
+    ABORTED: '工具执行已中断。',
+    ABORTED_BEFORE_DISPATCH: '工具执行已中断。',
     FILE_INVALID_NAME: '文件名称或格式无效。',
     FILE_INVALID_CONTENT: '文件内容为空或超过 200 KB。',
     FILE_INVALID_TABLE:
@@ -138,11 +141,7 @@ export function messagesFromEvents(
             : 'error'
       if (answer.status === 'error') {
         answer.error =
-          reason.kind === 'max-tokens'
-            ? '回答达到长度上限，已截断。'
-            : reason.kind === 'error' && Object.hasOwn(RAG_ERRORS, reason.error.code)
-              ? RAG_ERRORS[reason.error.code as keyof typeof RAG_ERRORS]
-              : '回答生成失败。'
+          reason.kind === 'max-tokens' ? '回答达到长度上限，已截断。' : '回答生成失败。'
       }
       if (reason.kind === 'aborted' && reason.reason.kind === 'hook')
         answer.error = reason.reason.reason
@@ -179,5 +178,27 @@ export function messagesFromEvents(
           part.output = '工具执行已中断。'
         }
     }
+  checkCitations(messages)
   return messages
+}
+
+const PASSAGE = /\/api\/library\/passages\/([0-9a-fA-F-]{36})/g
+
+/**
+ * A library citation must point to a passage this session's library tools actually returned.
+ * Any other passage path in answer or reasoning text (invented, copied, in any link syntax) is
+ * removed, so a link keeps only its label. Idempotent; also applied to streamed snapshots.
+ */
+export function checkCitations(messages: Message[]) {
+  const returned = new Set<string>()
+  for (const message of messages)
+    if (message.role === 'assistant')
+      for (const part of message.parts)
+        if (part.type === 'tool') {
+          if (part.name.startsWith('library_') && part.status === 'done')
+            for (const [, id] of part.output.matchAll(PASSAGE)) returned.add(id.toLowerCase())
+        } else
+          part.text = part.text.replace(PASSAGE, (path, id: string) =>
+            returned.has(id.toLowerCase()) ? path : '',
+          )
 }

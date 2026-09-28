@@ -95,7 +95,7 @@ test('embeddings reject malformed responses and never expose response bodies or 
   for (const failureStatus of [200, 401, 429, 500]) {
     status = failureStatus
     body = 'test-only-key private-source-content'
-    await assert.rejects(embeddings.embed(['text']), (error: unknown) => {
+    await assert.rejects(embeddings.embed(['text'], undefined, 0), (error: unknown) => {
       assert.ok(error instanceof Error)
       assert.doesNotMatch(error.message, /test-only-key|private-source-content/)
       assert.equal(error.cause, undefined)
@@ -138,13 +138,16 @@ test('embeddings reject redirects and invalid configuration without leaking secr
     destinationCalled = true
     response.end('{}')
   })
+  let redirects = 0
   const url = await endpoint(t, (_request, response) => {
+    redirects++
     response.writeHead(307, { Location: destination })
     response.end()
   })
   const embeddings = new Embeddings({ url, model: 'test', dimensions: 2, apiKey: 'test-only-key' })
   await assert.rejects(embeddings.embed(['text']), /向量服务请求失败/)
   assert.equal(destinationCalled, false)
+  assert.equal(redirects, 1, 'a redirect is a configuration error and is not retried')
   await assert.rejects(embeddings.embed([' ']), /输入不能为空/)
   for (const badURL of [
     'invalid-test-only-key',
@@ -162,4 +165,37 @@ test('embeddings reject redirects and invalid configuration without leaking secr
   for (const dimensions of [0, -1, 0.5, Infinity])
     assert.throws(() => new Embeddings({ url, model: 'test', dimensions }), /配置无效/)
   assert.throws(() => new Embeddings({ url, model: ' ', dimensions: 2 }), /配置无效/)
+})
+
+test('embeddings retry rate limits and server errors with backoff, but not client errors', async (t) => {
+  const statuses: number[] = []
+  let calls = 0
+  const url = await endpoint(t, (_request, response) => {
+    const status = statuses[calls++] ?? 200
+    response.writeHead(status, { 'Content-Type': 'application/json' })
+    response.end(status === 200 ? JSON.stringify({ data: [{ index: 0, embedding: [1, 0] }] }) : '')
+  })
+  const embeddings = new Embeddings({ url, model: 'test', dimensions: 2 })
+  statuses.push(429, 503)
+  assert.deepEqual(await embeddings.embed(['text']), [[1, 0]])
+  assert.equal(calls, 3)
+
+  calls = 0
+  statuses.splice(0, statuses.length, 400)
+  await assert.rejects(embeddings.embed(['text']), /HTTP 400/)
+  assert.equal(calls, 1, 'a client error is not retried')
+
+  calls = 0
+  statuses.splice(0, statuses.length, 503, 503)
+  await assert.rejects(embeddings.embed(['text'], undefined, 1), /HTTP 503/)
+  assert.equal(calls, 2, 'retries stop at the given count')
+
+  calls = 0
+  statuses.splice(0, statuses.length, 503)
+  const controller = new AbortController()
+  const pending = embeddings.embed(['text'], controller.signal)
+  while (calls < 1) await new Promise((resolve) => setImmediate(resolve))
+  controller.abort()
+  await assert.rejects(pending, { name: 'AbortError' })
+  assert.equal(calls, 1, 'cancellation stops the backoff wait')
 })

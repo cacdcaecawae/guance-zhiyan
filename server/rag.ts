@@ -7,7 +7,9 @@ export const RAG_ERRORS = {
   RAG_NOT_CONFIGURED: '后端尚未配置文献库向量服务，请联系管理员。',
   RAG_EMPTY: '共享文献库尚未导入资料，请联系管理员。',
   RAG_NOT_INDEXED: '当前向量模型的文献索引尚未完成，请联系管理员重建索引。',
-  RAG_RETRIEVAL_FAILED: '文献库检索失败，请检查后端配置与检索服务后重试。',
+  RAG_RETRIEVAL_FAILED: '文献库检索失败，请稍后重试或联系管理员。',
+  RAG_INVALID_QUERY: '检索词须为 1–1000 个有效字符。',
+  RAG_PASSAGE_NOT_FOUND: '没有找到该原文片段。',
 } as const
 
 export class RagError extends Error {
@@ -67,13 +69,32 @@ export class KnowledgeLibrary {
     );`)
   }
 
+  neighbors(id: string, before: number, after: number) {
+    return this.documents.neighbors(id, before, after)
+  }
+
+  /** Library tools are offered only when there is something configured to search. */
+  available() {
+    return !!this.embeddings && this.documents.count() > 0
+  }
+
+  private indexed(versionId: string) {
+    return !!this.documents.store.db
+      .prepare('SELECT 1 FROM rag_indexed_versions WHERE fingerprint=? AND version_id=?')
+      .get(this.indexFingerprint!, versionId)
+  }
+
   private configured() {
     if (!this.embeddings || !this.vectors) throw new RagError('RAG_NOT_CONFIGURED')
     return { embeddings: this.embeddings, vectors: this.vectors }
   }
 
-  /** Admin imports are serialized by the CLI lock; failed imports can be retried unchanged. */
-  async import(input: DocumentInput, signal?: AbortSignal) {
+  /**
+   * Admin imports are serialized by the CLI lock. A document whose current version is already
+   * indexed for this vector space is skipped, so an interrupted import or reindex resumes cheaply.
+   * force re-embeds anyway, for vectors lost outside this process (restored or edited Qdrant data).
+   */
+  async import(input: DocumentInput, signal?: AbortSignal, force = false) {
     signal?.throwIfAborted()
     input = documentInput(input)
     const { embeddings, vectors } = this.configured()
@@ -84,6 +105,23 @@ export class KnowledgeLibrary {
         .prepare('DELETE FROM rag_indexed_versions WHERE fingerprint=?')
         .run(this.indexFingerprint!)
     })
+    // Removing an old version's vectors happens after publication; it is repeated on every import
+    // of the document so a crash between the two is finished later. Old source text stays.
+    const cleanup = async () => {
+      const obsolete = this.documents.store.db
+        .prepare(
+          `SELECT c.id FROM rag_chunks c JOIN rag_versions v ON v.id=c.version_id
+          WHERE v.document_id=? AND v.id<>?`,
+        )
+        .all(input.id, staged.versionId)
+        .map((row) => row.id as string)
+      for (let offset = 0; offset < obsolete.length; offset += 128)
+        await vectors.delete(obsolete.slice(offset, offset + 128), signal)
+    }
+    if (!force && previous === staged.versionId && this.indexed(staged.versionId)) {
+      await cleanup()
+      return { versionId: staged.versionId, chunks: staged.chunks.length, skipped: true }
+    }
     // Bound memory to a batch rather than holding a full document's vectors.
     for (let offset = 0; offset < staged.chunks.length; offset += 16) {
       const batch = staged.chunks.slice(offset, offset + 16)
@@ -98,17 +136,8 @@ export class KnowledgeLibrary {
       .prepare('INSERT OR IGNORE INTO rag_indexed_versions VALUES(?, ?)')
       .run(this.indexFingerprint!, staged.versionId)
     this.documents.publish(staged.versionId, previous)
-    // Also retry cleanup after a crash between publication and deletion. Old source text stays.
-    const obsolete = this.documents.store.db
-      .prepare(
-        `SELECT c.id FROM rag_chunks c JOIN rag_versions v ON v.id=c.version_id
-        WHERE v.document_id=? AND v.id<>?`,
-      )
-      .all(input.id, staged.versionId)
-      .map((row) => row.id as string)
-    for (let offset = 0; offset < obsolete.length; offset += 128)
-      await vectors.delete(obsolete.slice(offset, offset + 128), signal)
-    return { versionId: staged.versionId, chunks: staged.chunks.length }
+    await cleanup()
+    return { versionId: staged.versionId, chunks: staged.chunks.length, skipped: false }
   }
 
   async retrieve(query: string, signal?: AbortSignal): Promise<Passage[]> {
@@ -129,7 +158,7 @@ export class KnowledgeLibrary {
     }
     assertIndexed()
     try {
-      const [encoded] = await embeddings.embed([query], signal)
+      const [encoded] = await embeddings.embed([query], signal, 1)
       const dense: string[] = []
       // ponytail: scan at most 10k candidates; finish import cleanup if abandoned vectors exceed this.
       for (let offset = 0; ; offset += 80) {
@@ -142,7 +171,7 @@ export class KnowledgeLibrary {
         if (dense.length >= 80 || page.length < 80) break
       }
       signal?.throwIfAborted()
-      const lexical = this.documents.lexical(query, 40)
+      const lexical = await this.documents.lexical(query, 40, signal)
       const scores = new Map<string, number>()
       for (const ranked of [dense.slice(0, 80), lexical])
         [...new Set(ranked)].forEach((id, rank) =>
@@ -157,6 +186,8 @@ export class KnowledgeLibrary {
     } catch (error) {
       signal?.throwIfAborted()
       if (error instanceof RagError) throw error
+      // Client errors are already free of URLs and keys; log the cause for the administrator.
+      console.warn('文献库检索失败：', error instanceof Error ? error.message : error)
       throw new RagError('RAG_RETRIEVAL_FAILED')
     }
   }

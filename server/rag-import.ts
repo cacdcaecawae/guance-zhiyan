@@ -6,8 +6,23 @@ import { LibraryStore, documentInput, type DocumentInput } from './rag-store.ts'
 import { KnowledgeLibrary, ragConfig } from './rag.ts'
 import { configureNetwork } from './network.ts'
 
-/** JSONL is our import format, not an assumption about the school's source schema. */
-export async function* readDocuments(path: string, signal?: AbortSignal) {
+/**
+ * JSONL is our import format, not an assumption about the school's source schema. An invalid line
+ * stops the import unless onInvalid is given, which then receives the error and reading continues.
+ */
+export async function* readDocuments(
+  path: string,
+  signal?: AbortSignal,
+  onInvalid?: (error: Error) => void,
+) {
+  const read = (data: Buffer, line: number) => {
+    try {
+      return parse(data, line)
+    } catch (error) {
+      if (!onInvalid) throw error
+      onInvalid(error as Error)
+    }
+  }
   let pending = Buffer.alloc(0)
   let line = 0
   // ponytail: lines are capped at 32 MiB; buffer chunks separately if large-line copying dominates imports.
@@ -20,11 +35,13 @@ export async function* readDocuments(path: string, signal?: AbortSignal) {
       line++
       if (data.length > 32 * 1024 * 1024) throw new Error(`第 ${line} 行超过 32 MiB。`)
       if (!data.toString('utf8').trim()) continue
-      yield parse(data, line)
+      const input = read(data, line)
+      if (input) yield input
     }
     if (pending.length > 32 * 1024 * 1024) throw new Error(`第 ${line + 1} 行超过 32 MiB。`)
   }
-  if (pending.toString('utf8').trim()) yield parse(pending, line + 1)
+  const last = pending.toString('utf8').trim() ? read(pending, line + 1) : undefined
+  if (last) yield last
 }
 
 function parse(data: Buffer, line: number): DocumentInput {
@@ -37,13 +54,20 @@ function parse(data: Buffer, line: number): DocumentInput {
 }
 
 async function main() {
-  const [command, path, ...extra] = process.argv.slice(2)
+  const args = process.argv.slice(2)
+  const skipInvalid = args.includes('--skip-invalid')
+  const force = args.includes('--force')
+  const [command, path, ...extra] = args.filter(
+    (arg) => arg !== '--skip-invalid' && arg !== '--force',
+  )
   if (
     extra.length ||
     (command !== 'import' && command !== 'reindex') ||
-    (command === 'import' ? !path : !!path)
+    (command === 'import' ? !path || force : !!path || skipInvalid)
   )
-    throw new Error('用法：pnpm rag import <文献.jsonl> 或 pnpm rag reindex')
+    throw new Error(
+      '用法：pnpm rag import <文献.jsonl> [--skip-invalid] 或 pnpm rag reindex [--force]',
+    )
   const config = ragConfig()
   if (!config) throw new Error('请先配置 EMBEDDING_URL、EMBEDDING_MODEL、EMBEDDING_DIMENSIONS。')
   const store = new Store(resolve(process.env.DATA_DIR ?? 'server/data'))
@@ -66,16 +90,27 @@ async function main() {
     disposeNetwork = await configureNetwork()
     const library = new KnowledgeLibrary(new LibraryStore(store), config)
     let count = 0
+    let skipped = 0
+    let invalid = 0
     if (command === 'import') {
-      for await (const input of readDocuments(resolve(path!), controller.signal)) {
+      const onInvalid = skipInvalid
+        ? (error: Error) => {
+            invalid++
+            console.warn(`已跳过：${error.message}`)
+          }
+        : undefined
+      for await (const input of readDocuments(resolve(path!), controller.signal, onInvalid)) {
         const result = await library.import(input, controller.signal)
-        console.info(`已完成 ${++count} 篇，当前文献 ${result.chunks} 个片段。`)
+        if (result.skipped) skipped++
+        console.info(
+          `已处理 ${++count} 篇，当前文献${result.skipped ? '已索引，跳过' : ` ${result.chunks} 个片段`}。`,
+        )
       }
     } else {
-      // Until every current document is rebuilt, answering fails explicitly rather than mixing spaces.
-      store.db
-        .prepare('DELETE FROM rag_indexed_versions WHERE fingerprint=?')
-        .run(library.indexFingerprint!)
+      // Documents already indexed for this vector space are skipped, so an interrupted rebuild
+      // resumes. After a model change the new space has no markers and answering fails with
+      // RAG_NOT_INDEXED until every document is rebuilt, rather than mixing vector spaces.
+      // --force re-embeds everything, e.g. after Qdrant data was restored or edited.
       let lastId = ''
       for (;;) {
         controller.signal.throwIfAborted()
@@ -87,7 +122,7 @@ async function main() {
           )
           .get(lastId)
         if (!row) break
-        await library.import(
+        const result = await library.import(
           {
             id: row.id as string,
             title: row.title as string,
@@ -96,12 +131,17 @@ async function main() {
             ...(row.published_at ? { publishedAt: row.published_at as string } : {}),
           },
           controller.signal,
+          force,
         )
         lastId = row.id as string
-        console.info(`已重建 ${++count} 篇。`)
+        if (result.skipped) skipped++
+        console.info(`已处理 ${++count} 篇${result.skipped ? '（已索引，跳过）' : ''}。`)
       }
     }
-    console.info(`任务完成，共处理 ${count} 篇文献。`)
+    console.info(
+      `任务完成，共处理 ${count} 篇文献，其中 ${skipped} 篇已索引而跳过` +
+        (skipInvalid ? `；另有 ${invalid} 行无效数据被跳过。` : '。'),
+    )
   } finally {
     process.off('SIGINT', stop)
     process.off('SIGTERM', stop)
