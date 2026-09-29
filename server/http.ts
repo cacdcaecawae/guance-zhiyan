@@ -137,7 +137,9 @@ export function createApp(
         if (formats.length > 1 || (formats.length === 1 && formats[0] !== 'json'))
           throw new HttpError(400, '原文片段格式无效。')
         const passage = library.passage(passageId[1].toLowerCase())
-        if (formats[0] === 'json') return json(response, 200, passage)
+        // Old citations stay readable after an update, but must not pass for the current text.
+        const superseded = library.current(passage.documentId) !== passage.versionId
+        if (formats[0] === 'json') return json(response, 200, { ...passage, superseded })
         response.writeHead(200, {
           'Content-Type': 'text/html; charset=utf-8',
           'Content-Security-Policy':
@@ -150,6 +152,7 @@ export function createApp(
 <body><main><h1>${escapeHtml(passage.title)}</h1><dl>
 <dt>章节</dt><dd>${escapeHtml(passage.heading || '未标注章节')}</dd>
 <dt>文献版本</dt><dd><code>${escapeHtml(passage.versionId)}</code></dd>
+<dt>版本状态</dt><dd>${superseded ? '<strong>已被新版本替代</strong>；此处为旧版本原文，仅供核对引用' : '现行版本'}</dd>
 <dt>发布日期</dt><dd>${escapeHtml(passage.publishedAt || '未提供')}</dd>
 <dt>原始来源</dt><dd>${passage.sourceUrl ? `<a href="${escapeHtml(passage.sourceUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(passage.sourceUrl)}</a>` : '未提供'}</dd>
 </dl><h2>原文片段</h2><pre>${escapeHtml(passage.text)}</pre></main></body></html>`)

@@ -19,11 +19,19 @@ for (const supplier of ['deepseek-official', 'qianwen']) {
     let collectionExists = false
     let retrievals = 0
     let citationPath = ''
+    let vectorPath = ''
     const pointIds = new Set<string>()
+    const query = '测试事项办理期限'
     const source = {
       id: 'local-e2e-source',
       title: '本机入口测试文献（非真实政策）',
       text: '第一条 本段是自动化测试夹具，不是真实政策。测试事项的办理期限为三个工作日。',
+    }
+    // Shares no word with the query, so only vector recall can return it.
+    const vectorSource = {
+      id: 'local-e2e-vector-source',
+      title: '向量召回夹具（非真实政策）',
+      text: '第一条 本段只供向量召回，不是真实政策。',
     }
     const provider = createServer(async (request, response) => {
       const chunks: Buffer[] = []
@@ -54,9 +62,12 @@ for (const supplier of ['deepseek-official', 'qianwen']) {
           result = { config: { params: { vectors: { size: 2, distance: 'Cosine' } } } }
         } else if (path.endsWith('/points/query')) {
           retrievals++
+          // Vector recall leaves out the cited source, so each source reaches the model through
+          // exactly one retrieval path and losing either path fails this test.
           result = {
             points: [...pointIds]
-              .slice(body.offset, body.offset + body.limit)
+              .filter((id) => citationPath !== `/api/library/passages/${id}`)
+              .slice(0, body.limit)
               .map((id) => ({ id, score: 1 })),
           }
         } else if (path.endsWith('/points/delete')) {
@@ -106,7 +117,7 @@ for (const supplier of ['deepseek-official', 'qianwen']) {
         emit({
           type: 'content_block_delta',
           index: 0,
-          delta: { type: 'input_json_delta', partial_json: '{"query":"测试事项办理期限"}' },
+          delta: { type: 'input_json_delta', partial_json: JSON.stringify({ query }) },
         })
         emit({ type: 'content_block_stop', index: 0 })
         emit({
@@ -120,6 +131,7 @@ for (const supplier of ['deepseek-official', 'qianwen']) {
       }
       expect(JSON.stringify(body.messages.at(-1))).toContain(citationPath)
       expect(JSON.stringify(body.messages.at(-1))).toContain(source.text)
+      expect(JSON.stringify(body.messages.at(-1))).toContain(vectorPath)
       emit({ type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } })
       emit({
         type: 'content_block_delta',
@@ -157,7 +169,12 @@ for (const supplier of ['deepseek-official', 'qianwen']) {
           qdrant: { url: providerOrigin },
         })
         const imported = await library.import(source)
-        citationPath = `/api/library/passages/${library.documents.chunks(imported.versionId)[0].id}`
+        const citedId = library.documents.chunks(imported.versionId)[0].id
+        citationPath = `/api/library/passages/${citedId}`
+        const vectorOnly = await library.import(vectorSource)
+        vectorPath = `/api/library/passages/${library.documents.chunks(vectorOnly.versionId)[0].id}`
+        // Keyword search finds only the cited source; the other one needs vector recall.
+        expect(await library.documents.lexical(query)).toEqual([citedId])
       } finally {
         store.close()
       }
@@ -234,6 +251,7 @@ for (const supplier of ['deepseek-official', 'qianwen']) {
         await expect(original.getByRole('heading', { level: 1 })).toHaveText(source.title)
         await expect(original.locator('pre')).toHaveText(source.text)
         await expect(original.getByText('文献版本', { exact: true })).toBeVisible()
+        await expect(original.getByText('现行版本', { exact: true })).toBeVisible()
         await original.close()
         await box.fill('继续')
         await page.getByRole('button', { name: '发送' }).click()

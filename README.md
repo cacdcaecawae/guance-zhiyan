@@ -8,7 +8,7 @@
 
 配置 OpenSandbox 后支持独立会话沙箱中的 Bash、原生文件读写和任意格式产物导出；普通聊天按需启动执行环境。Linux Docker 部署、权限边界与真实容器验收见 [沙箱部署](docs/SANDBOX.md)。未配置时不装载命令工具，不在宿主机执行模型命令。
 
-**首版可以在本机免登录使用。** 配置后端模型、共享知识库并导入文献后运行 `pnpm chat`，打开 `http://127.0.0.1:3001` 进入研究会话。会话归属于固定的本机研究者，刷新和重启后保留。
+**首版可以在本机免登录使用。** 配置后端模型密钥后运行 `pnpm chat`，打开 `http://127.0.0.1:3001` 进入研究会话；共享文献库可选，见下文。会话归属于固定的本机研究者，刷新和重启后保留。
 
 学校登录与账号开通方式仍待定，`server/auth.ts` 保留身份接入边界。普通服务器启动默认返回 401；本机入口不作为公网或多人共享登录方案。内部用户、会话与文件隔离已通过测试身份验证。
 
@@ -24,7 +24,7 @@ RAG 的配置、数据格式、导入、重建与备份见 [RAG 开发说明](do
 pnpm install
 pnpm exec playwright install chromium   # Linux 首次加 --with-deps
 # 复制 server/.env.example 为 server/.env，填写 DEEPSEEK_API_KEY 和/或 QIANWEN_API_KEY
-# 按 docs/RAG.md 配置 embedding、启动 Qdrant 并导入真实文献
+# 可选：按 docs/RAG.md 配置 embedding、启动 Qdrant 并导入文献，启用共享文献库检索
 pnpm chat                              # 构建并启动本机聊天 http://127.0.0.1:3001
 ```
 
