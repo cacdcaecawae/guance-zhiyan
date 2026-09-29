@@ -43,6 +43,8 @@ test('only passages returned by library tools stay linked, in any link syntax an
             `尖括号[原文](<${path(invented)}>)`,
             `引用式[原文][r]\n\n[r]: ${path(invented)}`,
             `标签含括号[原文[1]](${path(invented)})`,
+            `外部网址[原文](https://evil.example${path(returned)})`,
+            `协议相对[原文](//evil.example${path(returned)})`,
           ].join('\n\n'),
         },
         { id: 'r1', type: 'reasoning', step: 1, text: `思考中编造[原文](${path(invented)})` },
@@ -75,6 +77,7 @@ test('only passages returned by library tools stay linked, in any link syntax an
   )
   const all = texts.join('\n')
   assert.ok(!all.includes(invented), 'unreturned passages are removed in every syntax')
+  assert.ok(!all.includes(`evil.example${path(returned)}`), 'an absolute URL is not a citation')
   assert.equal(texts[0], '先写引用[原文]()', 'a citation before any search result is not kept')
   assert.ok(texts[1].startsWith(`有效[原文](${path(returned)})`))
   assert.equal(texts.at(-1), `上一轮返回的仍可引用[原文](${path(returned)})`)

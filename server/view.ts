@@ -183,6 +183,9 @@ export function messagesFromEvents(
 }
 
 const PASSAGE = /\/api\/library\/passages\/([0-9a-fA-F-]{36})/g
+// A scheme, host or path character before the passage path makes it part of an absolute URL,
+// which the answer shows as an ordinary external link rather than a citation.
+const URL_CHARACTER = /[\w.~%:/@\]-]/
 
 /** Passage ids from the structured result lines of a library tool, never from passage text. */
 function returnedPassages(output: string) {
@@ -197,10 +200,10 @@ function returnedPassages(output: string) {
 }
 
 /**
- * A library citation must point to a passage this session's library tools actually returned.
- * Any other passage path in answer or reasoning text (invented, copied from passage text, in any
- * link syntax) is removed, so a link keeps only its label. Idempotent; also applied to streamed
- * snapshots.
+ * A library citation must be the relative link of a passage this session's library tools
+ * actually returned. Any other passage path in answer or reasoning text (invented, copied from
+ * passage text, inside an absolute URL, in any link syntax) is removed, so a relative link keeps
+ * only its label. Idempotent; also applied to streamed snapshots.
  */
 export function checkCitations(messages: Message[]) {
   const returned = new Set<string>()
@@ -211,7 +214,7 @@ export function checkCitations(messages: Message[]) {
           if (part.name.startsWith('library_') && part.status === 'done')
             for (const id of returnedPassages(part.output)) returned.add(id.toLowerCase())
         } else
-          part.text = part.text.replace(PASSAGE, (path, id: string) =>
-            returned.has(id.toLowerCase()) ? path : '',
+          part.text = part.text.replace(PASSAGE, (path, id: string, at: number, text: string) =>
+            returned.has(id.toLowerCase()) && !URL_CHARACTER.test(text[at - 1] ?? '') ? path : '',
           )
 }
