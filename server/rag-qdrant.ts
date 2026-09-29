@@ -18,6 +18,7 @@ const cancelled = (signal?: AbortSignal) => {
 }
 
 export class Qdrant {
+  readonly collection: string
   private readonly config: QdrantConfig
   private readonly collectionURL: string
 
@@ -43,6 +44,7 @@ export class Qdrant {
     )
       throw new Error('Qdrant 集合名称或向量维度配置无效。')
     this.config = { ...config }
+    this.collection = config.collection
     this.collectionURL = `${url.href.replace(/\/+$/, '')}/collections/${encodeURIComponent(config.collection)}`
   }
 
@@ -104,17 +106,14 @@ export class Qdrant {
     vector: number[],
     limit: number,
     signal?: AbortSignal,
-    offset = 0,
   ): Promise<{ id: string; score: number }[]> {
     this.validateVector(vector)
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > 1000)
       throw new Error('向量检索条数须为 1 至 1000 的整数。')
-    if (!Number.isSafeInteger(offset) || offset < 0 || offset > 10_000)
-      throw new Error('向量检索偏移须为 0 至 10000 的整数。')
     const result = await this.request(
       'POST',
       '/points/query?timeout=25',
-      { query: vector, limit, offset, with_payload: false, with_vector: false },
+      { query: vector, limit, with_payload: false, with_vector: false },
       signal,
     )
     const points = record(result).points

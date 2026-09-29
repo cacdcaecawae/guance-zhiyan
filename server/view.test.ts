@@ -21,7 +21,16 @@ test('only passages returned by library tools stay linked, in any link syntax an
           type: 'tool',
           name: 'library_search',
           input: '{"query":"测试"}',
-          output: JSON.stringify({ link: path(returned.toUpperCase()) }),
+          output: [
+            '共享文献库检索结果：',
+            JSON.stringify({
+              id: returned.toUpperCase(),
+              link: path(returned.toUpperCase()),
+              text: `正文或标题里出现的路径不算 ${path(invented)}`,
+            }),
+            JSON.stringify({ id: returned, link: path(invented) }),
+            `非 JSON 行 ${path(invented)}`,
+          ].join('\n'),
           status: 'done',
         },
         {

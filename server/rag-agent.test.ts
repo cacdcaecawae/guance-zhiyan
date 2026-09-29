@@ -129,6 +129,8 @@ test('library tools are offered only with content; the model searches on demand 
     const plainRequest = model.requests.at(-1)!
     assert.ok(!toolNames(plainRequest).some((name) => name.startsWith('library_')))
     assert.ok(!systemOf(plainRequest).includes('library_search'))
+    assert.ok(!systemOf(plainRequest).includes('文献库证据'))
+    assert.match(systemOf(plainRequest), /不要声称检索过文献库/)
     const plainAnswer = (await agents.snapshot(alice.id, plain.id)).messages.at(-1)
     assert.ok(plainAnswer?.role === 'assistant' && plainAnswer.status === 'done')
   } finally {

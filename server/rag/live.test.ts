@@ -41,7 +41,7 @@ test(
       const body = JSON.parse(Buffer.concat(buffers).toString())
       assert.equal(body.model, model)
       assert.equal(body.dimensions, 2)
-      assert.ok(Array.isArray(body.input) && body.input.length <= 16)
+      assert.ok(Array.isArray(body.input) && body.input.length <= 10)
       batches.push(body.input.length)
       if (failHousing && body.input.some((text: string) => text.includes('住房'))) {
         response.writeHead(503)
@@ -101,7 +101,7 @@ test(
     const documents = new LibraryStore(store)
     const library = new KnowledgeLibrary(documents, config)
     const vectors = library.vectors!
-    const collection = `rag_v1_${library.embeddings!.fingerprint}`
+    const collection = vectors.collection
     collectionURL = `${endpoint.href.replace(/\/+$/, '')}/collections/${collection}`
     const absent = await admin('GET')
     await absent.body?.cancel()
@@ -141,9 +141,10 @@ test(
     const pension = {
       id: 'a-synthetic-pension',
       title: '养老自动化测试文献（非真实政策）',
+      // Each article is long enough to be its own chunk.
       text: Array.from(
-        { length: 18 },
-        (_, index) => `第${index + 1}条 养老测试原文，保留空格  和字符😀。`,
+        { length: 12 },
+        (_, index) => `第${index + 1}条 ` + '养老测试原文，保留空格  和字符😀。'.repeat(20),
       ).join('\r\n'),
       sourceUrl: 'https://example.org/synthetic-pension',
       publishedAt: '2024-02-29',
@@ -161,7 +162,7 @@ test(
     const imported = await run(['import', input])
     assert.equal(imported.code, 0, imported.stderr)
     assert.match(imported.stdout, /任务完成，共处理 2 篇文献/)
-    assert.deepEqual(batches, [16, 2, 1])
+    assert.deepEqual(batches, [10, 2, 1])
     assert.equal(await vectors.ensureCollection(), false)
     const oldVersion = documents.current(pension.id)!
     const oldChunks = documents.chunks(oldVersion)
@@ -175,11 +176,10 @@ test(
       assert.equal(passage.publishedAt, pension.publishedAt)
     }
     const hits = await vectors.search([1, 0], 80)
-    assert.equal(hits.length, 19)
+    assert.equal(hits.length, 13)
     assert.ok(hits[0].score > 0.999)
     assert.equal(documents.passage(hits[0].id).documentId, pension.id)
     assert.equal((await vectors.search([1, 0], 2)).length, 2)
-    assert.deepEqual(await vectors.search([1, 0], 80, undefined, 19), [])
     assert.equal((await library.retrieve('养老'))[0].documentId, pension.id)
 
     const changed = { ...pension, text: '第一条 养老修订测试原文，历史引用仍能读取。' }
@@ -201,7 +201,11 @@ test(
       changed.text,
       'deleting an index point must not remove original text',
     )
-    assert.equal((await library.import(changed)).versionId, updated.versionId)
+    // A plain import cannot see a point lost inside Qdrant; the forced rebuild restores it.
+    assert.ok((await library.import(changed)).skipped)
+    assert.equal((await vectors.search([1, 0], 80)).length, 1)
+    const forced = await run(['reindex', '--force'])
+    assert.equal(forced.code, 0, forced.stderr)
     assert.equal((await vectors.search([1, 0], 80)).length, 2)
 
     // A lost collection must fail explicitly, then rebuild from SQLite's immutable source versions.

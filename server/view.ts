@@ -184,10 +184,23 @@ export function messagesFromEvents(
 
 const PASSAGE = /\/api\/library\/passages\/([0-9a-fA-F-]{36})/g
 
+/** Passage ids from the structured result lines of a library tool, never from passage text. */
+function returnedPassages(output: string) {
+  return output.split('\n').flatMap((line) => {
+    try {
+      const { id, link } = JSON.parse(line)
+      return typeof id === 'string' && link === `/api/library/passages/${id}` ? [id] : []
+    } catch {
+      return [] // Header and notice lines are not JSON.
+    }
+  })
+}
+
 /**
  * A library citation must point to a passage this session's library tools actually returned.
- * Any other passage path in answer or reasoning text (invented, copied, in any link syntax) is
- * removed, so a link keeps only its label. Idempotent; also applied to streamed snapshots.
+ * Any other passage path in answer or reasoning text (invented, copied from passage text, in any
+ * link syntax) is removed, so a link keeps only its label. Idempotent; also applied to streamed
+ * snapshots.
  */
 export function checkCitations(messages: Message[]) {
   const returned = new Set<string>()
@@ -196,7 +209,7 @@ export function checkCitations(messages: Message[]) {
       for (const part of message.parts)
         if (part.type === 'tool') {
           if (part.name.startsWith('library_') && part.status === 'done')
-            for (const [, id] of part.output.matchAll(PASSAGE)) returned.add(id.toLowerCase())
+            for (const id of returnedPassages(part.output)) returned.add(id.toLowerCase())
         } else
           part.text = part.text.replace(PASSAGE, (path, id: string) =>
             returned.has(id.toLowerCase()) ? path : '',

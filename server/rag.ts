@@ -1,5 +1,5 @@
 import { Embeddings, type EmbeddingConfig } from './rag-embedding.ts'
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { Qdrant } from './rag-qdrant.ts'
 import { LibraryStore, documentInput, type DocumentInput, type Passage } from './rag-store.ts'
 
@@ -36,6 +36,7 @@ export function ragConfig(env: NodeJS.ProcessEnv = process.env): RagConfig | und
       model: env.EMBEDDING_MODEL!.trim(),
       dimensions: Number(env.EMBEDDING_DIMENSIONS),
       apiKey: env.EMBEDDING_API_KEY?.trim() || undefined,
+      batchSize: env.EMBEDDING_BATCH_SIZE?.trim() ? Number(env.EMBEDDING_BATCH_SIZE) : undefined,
     },
     qdrant: {
       url: env.QDRANT_URL?.trim() || 'http://127.0.0.1:6333',
@@ -43,6 +44,8 @@ export function ragConfig(env: NodeJS.ProcessEnv = process.env): RagConfig | und
     },
   }
 }
+
+const digest = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex')
 
 /** SQLite is authoritative; vector results must resolve to a current published version. */
 export class KnowledgeLibrary {
@@ -52,21 +55,26 @@ export class KnowledgeLibrary {
   readonly indexFingerprint?: string
   constructor(documents: LibraryStore, config?: RagConfig) {
     this.documents = documents
+    const db = documents.store.db
+    db.exec(`CREATE TABLE IF NOT EXISTS rag_indexed_versions(
+      fingerprint TEXT NOT NULL, version_id TEXT NOT NULL REFERENCES rag_versions(id),
+      PRIMARY KEY(fingerprint, version_id)
+    );
+    CREATE TABLE IF NOT EXISTS rag_library(one INTEGER PRIMARY KEY CHECK(one=1), id TEXT NOT NULL);`)
     if (config) {
+      // A random id per DATA_DIR keeps libraries that share a Qdrant server and embedding model
+      // out of each other's collection, where cleanup would delete the other library's points.
+      db.prepare('INSERT OR IGNORE INTO rag_library VALUES(1, ?)').run(randomUUID())
+      const library = db.prepare('SELECT id FROM rag_library').get()!.id
       this.embeddings = new Embeddings(config.embedding)
-      this.indexFingerprint = createHash('sha256')
-        .update(JSON.stringify([new URL(config.qdrant.url).href, this.embeddings.fingerprint]))
-        .digest('hex')
+      const collection = `rag_v1_${digest([library, this.embeddings.fingerprint])}`
+      this.indexFingerprint = digest([new URL(config.qdrant.url).href, collection])
       this.vectors = new Qdrant({
         ...config.qdrant,
-        collection: `rag_v1_${this.embeddings.fingerprint}`,
+        collection,
         dimensions: config.embedding.dimensions,
       })
     }
-    documents.store.db.exec(`CREATE TABLE IF NOT EXISTS rag_indexed_versions(
-      fingerprint TEXT NOT NULL, version_id TEXT NOT NULL REFERENCES rag_versions(id),
-      PRIMARY KEY(fingerprint, version_id)
-    );`)
   }
 
   neighbors(id: string, before: number, after: number) {
@@ -76,6 +84,13 @@ export class KnowledgeLibrary {
   /** Library tools are offered only when there is something configured to search. */
   available() {
     return !!this.embeddings && this.documents.count() > 0
+  }
+
+  /** Until every current document is indexed again, retrieval reports RAG_NOT_INDEXED. */
+  invalidate() {
+    this.documents.store.db
+      .prepare('DELETE FROM rag_indexed_versions WHERE fingerprint=?')
+      .run(this.indexFingerprint!)
   }
 
   private indexed(versionId: string) {
@@ -92,19 +107,14 @@ export class KnowledgeLibrary {
   /**
    * Admin imports are serialized by the CLI lock. A document whose current version is already
    * indexed for this vector space is skipped, so an interrupted import or reindex resumes cheaply.
-   * force re-embeds anyway, for vectors lost outside this process (restored or edited Qdrant data).
    */
-  async import(input: DocumentInput, signal?: AbortSignal, force = false) {
+  async import(input: DocumentInput, signal?: AbortSignal) {
     signal?.throwIfAborted()
     input = documentInput(input)
     const { embeddings, vectors } = this.configured()
     const previous = this.documents.current(input.id)
     const staged = this.documents.stage(input)
-    await vectors.ensureCollection(signal, () => {
-      this.documents.store.db
-        .prepare('DELETE FROM rag_indexed_versions WHERE fingerprint=?')
-        .run(this.indexFingerprint!)
-    })
+    await vectors.ensureCollection(signal, () => this.invalidate())
     // Removing an old version's vectors happens after publication; it is repeated on every import
     // of the document so a crash between the two is finished later. Old source text stays.
     const cleanup = async () => {
@@ -118,13 +128,13 @@ export class KnowledgeLibrary {
       for (let offset = 0; offset < obsolete.length; offset += 128)
         await vectors.delete(obsolete.slice(offset, offset + 128), signal)
     }
-    if (!force && previous === staged.versionId && this.indexed(staged.versionId)) {
+    if (previous === staged.versionId && this.indexed(staged.versionId)) {
       await cleanup()
       return { versionId: staged.versionId, chunks: staged.chunks.length, skipped: true }
     }
     // Bound memory to a batch rather than holding a full document's vectors.
-    for (let offset = 0; offset < staged.chunks.length; offset += 16) {
-      const batch = staged.chunks.slice(offset, offset + 16)
+    for (let offset = 0; offset < staged.chunks.length; offset += embeddings.batchSize) {
+      const batch = staged.chunks.slice(offset, offset + embeddings.batchSize)
       const encoded = await embeddings.embed(
         batch.map((chunk) => `${chunk.title}\n${chunk.heading}\n${chunk.text}`),
         signal,
@@ -146,6 +156,8 @@ export class KnowledgeLibrary {
       throw new Error('检索问题须为 1–8000 个有效字符。')
     const { embeddings, vectors } = this.configured()
     if (!this.documents.count()) throw new RagError('RAG_EMPTY')
+    // ponytail: anti-join over all current documents (~29 ms at 53k documents), run before and
+    // after the search; record completion per fingerprint if library size makes this matter.
     const assertIndexed = () => {
       const missing = this.documents.store.db
         .prepare(
@@ -159,16 +171,21 @@ export class KnowledgeLibrary {
     assertIndexed()
     try {
       const [encoded] = await embeddings.embed([query], signal, 1)
-      const dense: string[] = []
-      // ponytail: scan at most 10k candidates; finish import cleanup if abandoned vectors exceed this.
-      for (let offset = 0; ; offset += 80) {
-        if (offset >= 10_000) throw new Error('Too many stale candidates; finish import cleanup.')
-        const page = await vectors.search(encoded, 80, signal, offset)
-        const active = new Set(
-          this.documents.activePassages(page.map((hit) => hit.id)).map((p) => p.id),
-        )
-        dense.push(...page.filter((hit) => active.has(hit.id)).map((hit) => hit.id))
-        if (dense.length >= 80 || page.length < 80) break
+      let dense: string[] = []
+      // Every query starts from the top: offset paging could skip current points while an
+      // import's cleanup deletes stale points ranked ahead of them.
+      for (const limit of [80, 1000]) {
+        const hits = await vectors.search(encoded, limit, signal)
+        const active = new Set<string>()
+        for (let offset = 0; offset < hits.length; offset += 256)
+          for (const passage of this.documents.activePassages(
+            hits.slice(offset, offset + 256).map((hit) => hit.id),
+          ))
+            active.add(passage.id)
+        dense = hits.filter((hit) => active.has(hit.id)).map((hit) => hit.id)
+        if (dense.length >= 80 || hits.length < limit) break
+        // ponytail: 1000 candidates at most; finish import cleanup if abandoned vectors exceed this.
+        if (limit === 1000) throw new Error('Too many stale candidates; finish import cleanup.')
       }
       signal?.throwIfAborted()
       const lexical = await this.documents.lexical(query, 40, signal)

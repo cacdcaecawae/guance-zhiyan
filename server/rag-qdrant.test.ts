@@ -101,7 +101,6 @@ test('Qdrant batches point writes and deletion, preserves version payloads, and 
   const vectors = passages.map(() => [1, 2])
   const writes: unknown[][] = []
   const deletions: string[][] = []
-  const offsets: number[] = []
   const url = await endpoint(t, async (request, response) => {
     const chunks: Buffer[] = []
     for await (const chunk of request) chunks.push(chunk)
@@ -120,11 +119,9 @@ test('Qdrant batches point writes and deletion, preserves version payloads, and 
       assert.deepEqual(body, {
         query: [1, 2],
         limit: 2,
-        offset: offsets.length * 80,
         with_payload: false,
         with_vector: false,
       })
-      offsets.push(body.offset)
       response.end(
         reply({ points: [{ id: passages[0].id, score: 0.9, payload: { unexpected: true } }] }),
       )
@@ -145,10 +142,6 @@ test('Qdrant batches point writes and deletion, preserves version payloads, and 
     })),
   )
   assert.deepEqual(await client.search([1, 2], 2), [{ id: passages[0].id, score: 0.9 }])
-  assert.deepEqual(await client.search([1, 2], 2, undefined, 80), [
-    { id: passages[0].id, score: 0.9 },
-  ])
-  assert.deepEqual(offsets, [0, 80])
   await client.delete(passages.map((passage) => passage.id))
   assert.deepEqual(
     deletions.map((batch) => batch.length),
@@ -188,8 +181,6 @@ test('Qdrant refuses invalid inputs and incomplete or malformed successful respo
   )
   await assert.rejects(client.delete(['invalid']), /标识无效/)
   for (const limit of [0, -1, 0.5, 1001]) await assert.rejects(client.search([1, 2], limit), /条数/)
-  for (const offset of [-1, 0.5, 10001])
-    await assert.rejects(client.search([1, 2], 2, undefined, offset), /偏移/)
   assert.equal(calls, 0)
   body = reply({ status: 'acknowledged', operation_id: 1 })
   await assert.rejects(client.upsert([passage], [[1, 2]]), /尚未完成/)

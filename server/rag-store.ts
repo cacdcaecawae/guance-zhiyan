@@ -35,8 +35,8 @@ export function terms(text: string) {
 const STOP_CHARACTERS = new Set('的了和与及或在是对为等把被从向于以之其而并也就都又将由这那有个')
 
 /**
- * Consecutive single characters (碳/达/峰) become a phrase; an isolated one is kept as a keyword
- * (碳, 税) unless it is a function character (的, 和).
+ * Adjacent single characters (碳/达/峰) become a phrase; an isolated one, including one separated
+ * by a space or punctuation (碳 税, 碳、税), is kept as a keyword unless it is a function character.
  */
 export function lexicalQuery(query: string) {
   const parts: string[] = []
@@ -46,11 +46,12 @@ export function lexicalQuery(query: string) {
       parts.push(run.join(' '))
     run = []
   }
-  for (const word of terms(query))
-    if ([...word].length === 1) run.push(word)
+  for (const { segment, isWordLike } of segmenter.segment(query))
+    if (!isWordLike) flush()
+    else if ([...segment].length === 1) run.push(segment)
     else {
       flush()
-      parts.push(word)
+      parts.push(segment)
     }
   flush()
   return [...new Set(parts)]
@@ -145,7 +146,7 @@ export class LibraryStore {
     input = documentInput(input)
     const versionId = uuid(
       JSON.stringify([
-        'chunks-v1',
+        'chunks-v2',
         input.id,
         input.title,
         input.text,
@@ -223,9 +224,12 @@ export class LibraryStore {
       versionId === expected
         ? []
         : db
-            .prepare('SELECT rowid, text FROM rag_chunks WHERE version_id=?')
+            .prepare('SELECT rowid, ordinal, text FROM rag_chunks WHERE version_id=?')
             .all(versionId)
-            .map((chunk) => [chunk.rowid!, terms(chunk.text as string).join(' ')] as const)
+            .map(
+              (chunk) =>
+                [chunk.rowid!, chunk.ordinal === 0, terms(chunk.text as string).join(' ')] as const,
+            )
     db.exec('BEGIN IMMEDIATE')
     try {
       if (this.current(version.document_id as string) !== expected)
@@ -237,8 +241,10 @@ export class LibraryStore {
       db.prepare(
         'DELETE FROM rag_fts WHERE rowid IN (SELECT rowid FROM rag_chunks WHERE version_id=?)',
       ).run(expected)
+      // The title is indexed once per document, so a title match yields one candidate rather than
+      // every chunk of a long document.
       const insert = db.prepare('INSERT INTO rag_fts(rowid, title, body) VALUES(?, ?, ?)')
-      for (const [rowid, body] of rows) insert.run(rowid, title, body)
+      for (const [rowid, first, body] of rows) insert.run(rowid, first ? title : '', body)
       db.prepare(
         'INSERT INTO rag_documents VALUES(?, ?) ON CONFLICT(id) DO UPDATE SET version_id=excluded.version_id',
       ).run(version.document_id!, versionId)

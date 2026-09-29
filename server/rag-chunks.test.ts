@@ -31,31 +31,48 @@ test('empty input has no chunks; plain text and original whitespace remain uncha
   assert.deepEqual(chunkText(text), chunks)
 })
 
-test('chapter, article and clause labels retain their hierarchy without rewriting text', () => {
+const long = (label: string) => label + '切块测试正文。'.repeat(50)
+
+test('heading lines join their body, clauses stay in their article, short sections merge', () => {
   const text = [
     '  第一章 总则',
-    '第一条 这是切块测试文本。',
+    long('第一条 '),
     '（一）第一个事项。',
-    '（二）第二个事项。',
-    '第二条 重复正文。',
+    '1. 子项。',
+    long('第二条 '),
     '第二章 后续',
-    '第三条 重复正文。',
+    '第三条 短条文。',
+    '第四条 另一短条文。',
+    long('第五条 '),
   ].join('\r\n')
   const chunks = chunkText(text)
   verifySource(text, chunks)
   assert.deepEqual(
     chunks.map((chunk) => chunk.heading),
-    [
-      '第一章 总则',
-      '第一章 总则 / 第一条',
-      '第一章 总则 / 第一条 / （一）',
-      '第一章 总则 / 第一条 / （二）',
-      '第一章 总则 / 第二条',
-      '第二章 后续',
-      '第二章 后续 / 第三条',
-    ],
+    ['第一章 总则 / 第一条', '第一章 总则 / 第二条', '第二章 后续'],
+    'a merged chunk is labelled with the headings its sections share',
   )
-  assert.equal(chunks.filter((chunk) => chunk.text.includes('重复正文。')).length, 2)
+  assert.ok(chunks[0].text.startsWith('  第一章 总则\r\n第一条 '))
+  assert.ok(chunks[0].text.includes('（一）第一个事项。\r\n1. 子项。'))
+  assert.ok(
+    chunks[2].text.startsWith('第二章 后续\r\n第三条 短条文。\r\n第四条 另一短条文。\r\n第五条 '),
+  )
+  assert.ok(chunks.every((chunk) => chunk.text.trim().length >= 300))
+})
+
+test('a short final section and a short document stay whole', () => {
+  const text = [long('第一条 '), '第二条 本办法自发布之日起施行。'].join('\n')
+  const chunks = chunkText(text)
+  verifySource(text, chunks)
+  assert.deepEqual(
+    chunks.map((chunk) => chunk.heading),
+    ['第一条', '第二条'],
+  )
+  const short = '第一章 总则\n第一条 短条文。\n第二条 另一短条文。'
+  assert.deepEqual(
+    chunkText(short).map((chunk) => [chunk.heading, chunk.text]),
+    [['第一章 总则', short]],
+  )
 })
 
 test('long continuous text has bounded overlap and never splits a Unicode surrogate pair', () => {
@@ -86,17 +103,13 @@ test('long sections prefer paragraph boundaries, then sentence endings, with inh
 })
 
 test('Markdown and numbered headings create boundaries; repeated sections are not deduplicated', () => {
-  const text = '# 测试文档\n一、第一部分\n正文。\n（一）事项\n1. 子项。\n一、第一部分\n正文。'
+  const body = long('')
+  const text = `# 测试文档\n一、第一部分\n${body}\n（一）事项\n##### 小标题\n一、第一部分\n${body}`
   const chunks = chunkText(text)
   verifySource(text, chunks)
   assert.deepEqual(
     chunks.map((chunk) => chunk.heading),
-    [
-      '# 测试文档',
-      '# 测试文档 / 一、第一部分',
-      '# 测试文档 / 一、第一部分 / （一）',
-      '# 测试文档 / 一、第一部分 / （一） / 1.',
-      '# 测试文档 / 一、第一部分',
-    ],
+    ['# 测试文档 / 一、第一部分', '# 测试文档 / 一、第一部分'],
   )
+  assert.ok(chunks[0].text.endsWith('（一）事项\n##### 小标题\n'))
 })

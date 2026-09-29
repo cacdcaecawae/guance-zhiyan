@@ -110,7 +110,10 @@ async function main() {
       // Documents already indexed for this vector space are skipped, so an interrupted rebuild
       // resumes. After a model change the new space has no markers and answering fails with
       // RAG_NOT_INDEXED until every document is rebuilt, rather than mixing vector spaces.
-      // --force re-embeds everything, e.g. after Qdrant data was restored or edited.
+      // --force declares the vectors untrusted (Qdrant data restored or edited, same-named model
+      // weights changed): answering fails the same way until the rebuild completes, and a plain
+      // reindex resumes an interrupted one.
+      if (force) library.invalidate()
       let lastId = ''
       for (;;) {
         controller.signal.throwIfAborted()
@@ -131,7 +134,6 @@ async function main() {
             ...(row.published_at ? { publishedAt: row.published_at as string } : {}),
           },
           controller.signal,
-          force,
         )
         lastId = row.id as string
         if (result.skipped) skipped++

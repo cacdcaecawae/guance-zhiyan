@@ -1,10 +1,44 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { spawn } from 'node:child_process'
+import { once } from 'node:events'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { basename, join, resolve, sep } from 'node:path'
 import { documentInput, lexicalQuery, LibraryStore, type DocumentInput } from './rag-store.ts'
 import { Store } from './store.ts'
+
+test('a request write waits for an import process holding the SQLite write lock instead of failing', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'gczy-rag-lock-test-'))
+  const store = new Store(root)
+  // Stands in for the import CLI: another connection holds the write lock for half a second.
+  const importer = spawn(
+    process.execPath,
+    [
+      '--disable-warning=ExperimentalWarning',
+      '-e',
+      `const db = new (require('node:sqlite').DatabaseSync)(process.argv[1])
+      db.exec('BEGIN IMMEDIATE')
+      console.log('locked')
+      setTimeout(() => { db.exec('COMMIT'); db.close() }, 500)`,
+      store.path,
+    ],
+    { stdio: ['ignore', 'pipe', 'inherit'] },
+  )
+  try {
+    await once(importer.stdout, 'data')
+    const started = performance.now()
+    assert.equal(store.user('lock-test', '测试用户').name, '测试用户')
+    assert.ok(performance.now() - started >= 300, 'the write waited for the lock')
+    await once(importer, 'exit')
+  } finally {
+    importer.kill()
+    store.close()
+    assert.ok(resolve(root).startsWith(resolve(tmpdir()) + sep))
+    assert.ok(basename(root).startsWith('gczy-rag-lock-test-'))
+    await rm(root, { recursive: true })
+  }
+})
 
 const document: DocumentInput = {
   id: 'test-policy',
@@ -217,6 +251,8 @@ test('single-character runs match as phrases, isolated characters are dropped, n
     assert.equal(lexicalQuery('城市的规划'), '"城市" OR "规划"')
     assert.equal(lexicalQuery('碳达峰'), '"碳 达 峰"')
     assert.equal(lexicalQuery('碳 排放 双控'), '"碳" OR "排放" OR "双 控"')
+    for (const query of ['碳 税', '碳、税', '碳,税', '碳 的 税'])
+      assert.equal(lexicalQuery(query), '"碳" OR "税"', 'a separator ends a single-character run')
     for (const [id, text] of [
       ['peak', '第一条 实施碳达峰行动用于自动化测试。'],
       ['scattered', '第一条 碳排放达标，峰值管理用于自动化测试。'],
@@ -254,6 +290,38 @@ test('single-character runs match as phrases, isolated characters are dropped, n
     store.close()
     assert.ok(resolve(root).startsWith(resolve(tmpdir()) + sep))
     assert.ok(basename(root).startsWith('gczy-rag-phrase-test-'))
+    await rm(root, { recursive: true })
+  }
+})
+
+test('a title matches once per document and one document yields at most five lexical candidates', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'gczy-rag-title-test-'))
+  const store = new Store(root)
+  const library = new LibraryStore(store)
+  try {
+    const articles = (body: string) =>
+      Array.from({ length: 8 }, (_, index) => `第${index + 1}条 ` + body.repeat(70)).join('\n')
+    const titled = library.stage({
+      id: 'titled',
+      title: '养老服务设施测试办法',
+      text: articles('测试正文。'),
+    })
+    library.publish(titled.versionId, null)
+    const other = library.stage({ id: 'other', title: '其他测试', text: articles('住房测试。') })
+    library.publish(other.versionId, null)
+    assert.equal(titled.chunks.length, 8)
+    assert.deepEqual(
+      (await library.lexical('养老')).map((id) => library.passage(id).ordinal),
+      [0],
+      'chunks whose text lacks the term are not all matched through the title',
+    )
+    const housing = await library.lexical('住房')
+    assert.equal(housing.length, 5)
+    assert.ok(housing.every((id) => library.passage(id).documentId === 'other'))
+  } finally {
+    store.close()
+    assert.ok(resolve(root).startsWith(resolve(tmpdir()) + sep))
+    assert.ok(basename(root).startsWith('gczy-rag-title-test-'))
     await rm(root, { recursive: true })
   }
 })

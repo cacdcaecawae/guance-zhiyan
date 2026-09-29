@@ -103,8 +103,8 @@ async function backend(t: TestContext) {
     } else
       reply({
         points: (control.dense ?? [...points.keys()])
-          .slice(body.offset ?? 0, (body.offset ?? 0) + body.limit)
-          .map((id, index) => ({ id, score: 1 / ((body.offset ?? 0) + index + 1) })),
+          .slice(0, body.limit)
+          .map((id, index) => ({ id, score: 1 / (index + 1) })),
       })
   })
   server.listen(0, '127.0.0.1')
@@ -141,7 +141,11 @@ test('imports publish only completed batches; failed updates keep old sources an
   const input = {
     id: 'versioned-test',
     title: '测试版本文献',
-    text: Array.from({ length: 18 }, (_, index) => `第${index + 1}条 初版测试内容。`).join('\n'),
+    // Each article is long enough to be its own chunk: 12 chunks, embedded as 10 + 2.
+    text: Array.from(
+      { length: 12 },
+      (_, index) => `第${index + 1}条 ` + '初版测试内容。'.repeat(50),
+    ).join('\n'),
   }
   const waiting = gate('upsert', 1)
   control.gate = waiting
@@ -149,19 +153,19 @@ test('imports publish only completed batches; failed updates keep old sources an
   await waiting.entered.promise
   assert.equal(documents.current(input.id), null)
   assert.equal(documents.count(), 0)
-  assert.equal(pointIds().length, 16, 'the first batch must not make the document visible')
+  assert.equal(pointIds().length, 10, 'the first batch must not make the document visible')
   await assert.rejects(library.retrieve('测试'), { code: 'RAG_EMPTY' })
   waiting.release.resolve()
   control.gate = undefined
   const first = await importing
-  assert.equal(first.chunks, 18)
+  assert.equal(first.chunks, 12)
   assert.equal(documents.current(input.id), first.versionId)
-  assert.equal(pointIds().length, 18)
+  assert.equal(pointIds().length, 12)
   assert.deepEqual(
     calls
       .filter((call) => call.operation === 'embed')
       .map((call) => (call.body.input as string[]).length),
-    [16, 2],
+    [10, 2],
   )
   const old = documents.chunks(first.versionId)
   const changed = { ...input, text: input.text.replaceAll('初版', '更新') }
@@ -175,13 +179,13 @@ test('imports publish only completed batches; failed updates keep old sources an
   await assert.rejects(library.import(changed), /向量服务请求失败/)
   assert.equal(documents.current(input.id), first.versionId)
   assert.equal(indexed(), undefined)
-  assert.equal(pointIds().length, 18)
+  assert.equal(pointIds().length, 12)
   control.fail = 'upsert'
   control.failAfter = 1
   await assert.rejects(library.import(changed), /Qdrant 请求失败/)
   assert.equal(documents.current(input.id), first.versionId)
   assert.equal(indexed(), undefined)
-  assert.equal(pointIds().length, 34, 'a failed second batch leaves only unpublished draft vectors')
+  assert.equal(pointIds().length, 22, 'a failed second batch leaves only unpublished draft vectors')
   assert.throws(() => documents.passage(staged.chunks[0].id), { status: 404 })
 
   // Cleanup occurs after publication; retrying must finish cleanup without changing citation IDs.
@@ -189,7 +193,7 @@ test('imports publish only completed batches; failed updates keep old sources an
   control.failAfter = 0
   await assert.rejects(library.import(changed), /Qdrant 请求失败/)
   assert.equal(documents.current(input.id), staged.versionId)
-  assert.equal(pointIds().length, 36)
+  assert.equal(pointIds().length, 24)
   control.fail = undefined
   const retried = await library.import(changed)
   assert.equal(retried.versionId, staged.versionId)
@@ -269,11 +273,14 @@ test('a full page of unpublished vectors cannot hide the current source; the nex
   const oldId = documents.chunks(original.versionId)[0].id
   const changed = {
     ...input,
-    text: Array.from({ length: 96 }, (_, index) => `第${index + 1}条 未发布测试内容。`).join('\n'),
+    text: Array.from(
+      { length: 96 },
+      (_, index) => `第${index + 1}条 ` + '未发布测试内容。'.repeat(40),
+    ).join('\n'),
   }
   const draft = documents.stage(changed)
   control.fail = 'upsert'
-  control.failAfter = 5
+  control.failAfter = 8
   await assert.rejects(library.import(changed), /Qdrant 请求失败/)
   assert.equal(pointIds().length, 81)
   assert.equal(documents.current(input.id), original.versionId)
@@ -283,10 +290,20 @@ test('a full page of unpublished vectors cannot hide the current source; the nex
     (await library.retrieve('unmatchedtestword')).map((passage) => passage.id),
     [oldId],
   )
+  // A second, larger query from the top instead of paging: cleanup deleting points ahead of an
+  // offset cannot make it skip current ones.
   assert.deepEqual(
-    calls.filter((call) => call.operation === 'query').map((call) => call.body.offset),
-    [0, 80],
+    calls
+      .filter((call) => call.operation === 'query')
+      .map((call) => [call.body.limit, call.body.offset]),
+    [
+      [80, undefined],
+      [1000, undefined],
+    ],
   )
+  control.dense = Array.from({ length: 1000 }, () => randomUUID())
+  await assert.rejects(library.retrieve('unmatchedtestword'), { code: 'RAG_RETRIEVAL_FAILED' })
+  control.dense = undefined
 
   const replacement = await library.import({ ...input, text: '第一条 修订成功的测试原文。' })
   const activeId = documents.chunks(replacement.versionId)[0].id
@@ -354,6 +371,22 @@ test('configuration errors are distinct; missing collections invalidate markers 
   await assert.rejects(library.retrieve('测试'), { code: 'RAG_NOT_INDEXED' })
   await library.import(second)
   assert.equal((await library.retrieve('测试')).length, 2)
+
+  // Another DATA_DIR on the same Qdrant and model gets its own collection, whose cleanup cannot
+  // delete this library's points; reopening a DATA_DIR keeps its collection.
+  const otherRoot = await mkdtemp(join(tmpdir(), 'gczy-rag-integration-'))
+  const otherStore = new Store(otherRoot)
+  try {
+    const other = new KnowledgeLibrary(new LibraryStore(otherStore), config)
+    assert.notEqual(other.vectors!.collection, library.vectors!.collection)
+    assert.notEqual(other.indexFingerprint, library.indexFingerprint)
+  } finally {
+    otherStore.close()
+    await removeTestRoot(otherRoot)
+  }
+  const reopened = new KnowledgeLibrary(documents, config)
+  assert.equal(reopened.vectors!.collection, library.vectors!.collection)
+  assert.equal(reopened.indexFingerprint, library.indexFingerprint)
 })
 
 test('retrieval fails as not indexed when reindex starts during an external request', async (t) => {
@@ -480,9 +513,18 @@ test('the actual import and reindex CLI persists sources, resumes indexing, skip
   assert.equal((await run(['reindex', '--skip-invalid'])).code, 1)
   assert.equal((await run(['import', path, '--force'])).code, 1)
 
-  // Vectors lost outside this process (restored or edited Qdrant data) need a forced rebuild.
+  // Vectors lost outside this process (restored or edited Qdrant data) need a forced rebuild;
+  // until it completes, answering fails as not indexed instead of using untrusted vectors.
   const beforeForce = embedCalls()
-  const forced = await run(['reindex', '--force'])
+  const forcing = gate('upsert')
+  control.gate = forcing
+  const forcedRun = run(['reindex', '--force'])
+  await forcing.entered.promise
+  assert.equal(markers(), 0)
+  await assert.rejects(library.retrieve('测试'), { code: 'RAG_NOT_INDEXED' })
+  forcing.release.resolve()
+  control.gate = undefined
+  const forced = await forcedRun
   assert.equal(forced.code, 0, forced.stderr)
   assert.match(forced.stdout, /共处理 3 篇文献，其中 0 篇已索引而跳过/)
   assert.equal(embedCalls(), beforeForce + 3)

@@ -67,7 +67,11 @@ export function registerLibrary(ctx: Context, library: Library) {
             throw reject('RAG_INVALID_QUERY')
           const passages = await library.retrieve(query, exec.signal)
           return passages.length
-            ? render(passages, '共享文献库检索结果（每行一个片段）：')
+            ? render(
+                passages,
+                // Retrieval has no relevance floor yet: it always returns the nearest passages.
+                '共享文献库检索结果（按相关度从高到低，每行一个片段；排在前面也未必相关，先判断能否支撑回答）：',
+              )
             : '未在共享文献库中找到相关片段。可换关键词再检索；仍无结果时如实告诉用户。'
         } catch (error) {
           failure(error, exec.signal)

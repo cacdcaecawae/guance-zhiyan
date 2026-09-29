@@ -42,7 +42,7 @@ test('embeddings send authenticated batches, restore response order and fingerpr
   })
   const config = { url, model: 'test-embedding', dimensions: 2, apiKey: 'test-only-key' }
   const embeddings = new Embeddings(config)
-  const input = Array.from({ length: 17 }, (_, index) => String(index))
+  const input = Array.from({ length: 11 }, (_, index) => String(index))
   config.model = 'mutated'
   assert.deepEqual(
     await embeddings.embed(input),
@@ -50,8 +50,16 @@ test('embeddings send authenticated batches, restore response order and fingerpr
   )
   assert.deepEqual(
     calls.map((call) => call.length),
-    [16, 1],
+    [10, 1],
   )
+  calls.length = 0
+  await new Embeddings({ ...config, model: 'test-embedding', batchSize: 4 }).embed(input)
+  assert.deepEqual(
+    calls.map((call) => call.length),
+    [4, 4, 3],
+  )
+  for (const batchSize of [0, 1.5, NaN])
+    assert.throws(() => new Embeddings({ ...config, batchSize }), /批量条数/)
   assert.deepEqual(await embeddings.embed([]), [])
   const original = { ...config, model: 'test-embedding' }
   assert.equal(

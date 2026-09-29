@@ -6,9 +6,10 @@ export type EmbeddingConfig = {
   model: string
   dimensions: number
   apiKey?: string
+  /** Inputs per request; some services accept at most 10 (DashScope text-embedding-v3/v4). */
+  batchSize?: number
 }
 
-const BATCH_SIZE = 16
 const MAX_RESPONSE_BYTES = 16 * 1024 * 1024
 
 /** Worth retrying: timeouts, network failures, rate limits and server errors. */
@@ -16,6 +17,7 @@ class TransientError extends Error {}
 
 export class Embeddings {
   readonly fingerprint: string
+  readonly batchSize: number
   private readonly config: EmbeddingConfig
 
   constructor(config: EmbeddingConfig) {
@@ -29,6 +31,9 @@ export class Embeddings {
       throw new Error('向量服务地址必须是无内嵌凭据的 HTTP 或 HTTPS 地址。')
     if (!config.model.trim() || !Number.isSafeInteger(config.dimensions) || config.dimensions < 1)
       throw new Error('向量模型名称和维度配置无效。')
+    this.batchSize = config.batchSize ?? 10
+    if (!Number.isSafeInteger(this.batchSize) || this.batchSize < 1)
+      throw new Error('向量批量条数须为正整数。')
     this.config = { ...config, url: url.href }
     this.fingerprint = createHash('sha256')
       .update(JSON.stringify([url.href, config.model, config.dimensions]))
@@ -41,8 +46,8 @@ export class Embeddings {
     if (texts.some((text) => typeof text !== 'string' || !text.trim()))
       throw new Error('向量输入不能为空。')
     const vectors: number[][] = []
-    for (let start = 0; start < texts.length; start += BATCH_SIZE) {
-      const input = texts.slice(start, start + BATCH_SIZE)
+    for (let start = 0; start < texts.length; start += this.batchSize) {
+      const input = texts.slice(start, start + this.batchSize)
       for (let attempt = 0; ; attempt++)
         try {
           vectors.push(...(await this.batch(input, signal)))
