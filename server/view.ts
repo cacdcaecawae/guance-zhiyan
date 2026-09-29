@@ -183,10 +183,6 @@ export function messagesFromEvents(
 }
 
 const PASSAGE = /\/api\/library\/passages\/([0-9a-fA-F-]{36})/g
-// Only a whole Markdown link destination renders as a citation badge: an inline link ](path) or
-// ](<path>), or a reference definition ]: path. Inside a longer URL or plain text it is not one.
-const OPENS_DESTINATION = /(?:\]\(<?|\]:[ \t]*)$/
-const CLOSES_DESTINATION = /^(?:[>)\s]|$)/
 
 /** Passage ids from the structured result lines of a library tool, never from passage text. */
 function returnedPassages(output: string) {
@@ -201,10 +197,10 @@ function returnedPassages(output: string) {
 }
 
 /**
- * A library citation must be a whole Markdown link destination naming a passage this session's
- * library tools actually returned. Any other passage path in answer or reasoning text (invented,
- * copied from passage text, inside a longer URL or plain text) is removed, so a link keeps only
- * its label. Idempotent; also applied to streamed snapshots.
+ * A library citation must point to a passage this session's library tools actually returned.
+ * Any other passage path in answer or reasoning text (invented, copied from passage text, in any
+ * link syntax) is removed, so a link keeps only its label. Idempotent; also applied to streamed
+ * snapshots.
  */
 export function checkCitations(messages: Message[]) {
   const returned = new Set<string>()
@@ -215,11 +211,7 @@ export function checkCitations(messages: Message[]) {
           if (part.name.startsWith('library_') && part.status === 'done')
             for (const id of returnedPassages(part.output)) returned.add(id.toLowerCase())
         } else
-          part.text = part.text.replace(PASSAGE, (path, id: string, at: number, text: string) =>
-            returned.has(id.toLowerCase()) &&
-            OPENS_DESTINATION.test(text.slice(Math.max(0, at - 16), at)) &&
-            CLOSES_DESTINATION.test(text.slice(at + path.length, at + path.length + 1))
-              ? path
-              : '',
+          part.text = part.text.replace(PASSAGE, (path, id: string) =>
+            returned.has(id.toLowerCase()) ? path : '',
           )
 }

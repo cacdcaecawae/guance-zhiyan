@@ -65,7 +65,7 @@ it('描述性标签保留为文字并附编号；未在正文中出现的片段�
   const path = '/api/library/passages/01234567-89ab-5def-a123-456789abcdef'
   render(
     checked(
-      `根据[《测试条例》第三条](${path})规定。编码写法[原文](&#47;api/library/passages/fedcba98-7654-5321-afed-cba987654321)。`,
+      `根据[《测试条例》第三条](${path})规定。编码写法[原文](&#47;api/library/passages/fedcba98-7654-5321-afed-cba987654321)。转义写法[原文](\\/api\\/library\\/passages\\/fedcba98-7654-5321-afed-cba987654321)。`,
     ),
   )
   expect(screen.getByText(/《测试条例》第三条/)).toBeInTheDocument()
@@ -105,4 +105,22 @@ it('编号按整条回答统计：跨步骤的同一片段复用编号，不同�
   const links = screen.getAllByRole('link')
   expect(links.map((link) => link.getAttribute('href'))).toEqual([first, second, first])
   expect(links.map((link) => link.textContent)).toEqual(['1', '2', '1'])
+})
+
+it('只有显示为角标的引用才占编号：网址里、残缺链接、正文和代码中的片段路径都不算', () => {
+  const other = '/api/library/passages/01234567-89ab-5def-a123-456789abcdef'
+  const cited = '/api/library/passages/fedcba98-7654-5321-afed-cba987654321'
+  render(
+    checked(
+      [
+        `[外链](https://evil.example/?next=${other})`,
+        `残缺](${other})，残缺]: ${other}`,
+        `正文提及 ${other}`,
+        `\`[原文](${other})\``,
+        `真实引用[原文](${cited})`,
+      ].join('\n\n'),
+    ),
+  )
+  expect(screen.getByRole('link', { name: '原文 1' })).toHaveAttribute('href', cited)
+  expect(screen.getAllByRole('link').map((link) => link.textContent)).toEqual(['外链', '1'])
 })

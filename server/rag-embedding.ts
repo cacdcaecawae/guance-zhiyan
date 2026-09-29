@@ -92,7 +92,7 @@ export class Embeddings {
     if (!response.ok) {
       await response.body?.cancel().catch(() => {})
       const message = `向量服务请求失败（HTTP ${response.status}）。`
-      throw response.status === 429 || response.status >= 500
+      throw response.status === 408 || response.status === 429 || response.status >= 500
         ? new TransientError(message)
         : new Error(message)
     }

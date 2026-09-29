@@ -175,7 +175,7 @@ test('embeddings reject redirects and invalid configuration without leaking secr
   assert.throws(() => new Embeddings({ url, model: ' ', dimensions: 2 }), /配置无效/)
 })
 
-test('embeddings retry rate limits and server errors with backoff, but not client errors', async (t) => {
+test('embeddings retry timeouts, rate limits and server errors with backoff, but not client errors', async (t) => {
   const statuses: number[] = []
   let calls = 0
   const url = await endpoint(t, (_request, response) => {
@@ -184,7 +184,7 @@ test('embeddings retry rate limits and server errors with backoff, but not clien
     response.end(status === 200 ? JSON.stringify({ data: [{ index: 0, embedding: [1, 0] }] }) : '')
   })
   const embeddings = new Embeddings({ url, model: 'test', dimensions: 2 })
-  statuses.push(429, 503)
+  statuses.push(408, 429)
   assert.deepEqual(await embeddings.embed(['text']), [[1, 0]])
   assert.equal(calls, 3)
 
