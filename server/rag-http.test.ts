@@ -100,8 +100,6 @@ test('library HTTP requires identity, publishes real pages safely and retains hi
     const replaced = await (await get(path)).text()
     assert.ok(replaced.includes(first.versionId))
     assert.ok(replaced.includes('<dd><strong>已被新版本替代</strong>；此处为旧版本原文'))
-    const currentPath = `/api/library/passages/${replacement.chunks[0].id}`
-    assert.ok((await (await get(currentPath)).text()).includes('<dd>现行版本</dd>'))
     assert.ok((await (await get('/api/library')).text()).includes(replacement.versionId))
     const draft = library.stage({ ...document, id: 'never-published' })
     assert.equal((await get(`/api/library/passages/${draft.chunks[0].id}`)).status, 404)

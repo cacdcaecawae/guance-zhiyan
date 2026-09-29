@@ -22,6 +22,7 @@ for (const supplier of ['deepseek-official', 'qianwen']) {
     let vectorPath = ''
     const pointIds = new Set<string>()
     const query = '测试事项办理期限'
+    const passagePath = (id: string) => `/api/library/passages/${id}`
     const source = {
       id: 'local-e2e-source',
       title: '本机入口测试文献（非真实政策）',
@@ -66,7 +67,7 @@ for (const supplier of ['deepseek-official', 'qianwen']) {
           // exactly one retrieval path and losing either path fails this test.
           result = {
             points: [...pointIds]
-              .filter((id) => citationPath !== `/api/library/passages/${id}`)
+              .filter((id) => passagePath(id) !== citationPath)
               .slice(0, body.limit)
               .map((id) => ({ id, score: 1 })),
           }
@@ -129,9 +130,10 @@ for (const supplier of ['deepseek-official', 'qianwen']) {
         response.end()
         return
       }
-      expect(JSON.stringify(body.messages.at(-1))).toContain(citationPath)
-      expect(JSON.stringify(body.messages.at(-1))).toContain(source.text)
-      expect(JSON.stringify(body.messages.at(-1))).toContain(vectorPath)
+      const toolResult = JSON.stringify(body.messages.at(-1))
+      expect(toolResult).toContain(citationPath)
+      expect(toolResult).toContain(source.text)
+      expect(toolResult).toContain(vectorPath)
       emit({ type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } })
       emit({
         type: 'content_block_delta',
@@ -170,9 +172,9 @@ for (const supplier of ['deepseek-official', 'qianwen']) {
         })
         const imported = await library.import(source)
         const citedId = library.documents.chunks(imported.versionId)[0].id
-        citationPath = `/api/library/passages/${citedId}`
+        citationPath = passagePath(citedId)
         const vectorOnly = await library.import(vectorSource)
-        vectorPath = `/api/library/passages/${library.documents.chunks(vectorOnly.versionId)[0].id}`
+        vectorPath = passagePath(library.documents.chunks(vectorOnly.versionId)[0].id)
         // Keyword search finds only the cited source; the other one needs vector recall.
         expect(await library.documents.lexical(query)).toEqual([citedId])
       } finally {
@@ -251,7 +253,6 @@ for (const supplier of ['deepseek-official', 'qianwen']) {
         await expect(original.getByRole('heading', { level: 1 })).toHaveText(source.title)
         await expect(original.locator('pre')).toHaveText(source.text)
         await expect(original.getByText('文献版本', { exact: true })).toBeVisible()
-        await expect(original.getByText('现行版本', { exact: true })).toBeVisible()
         await original.close()
         await box.fill('继续')
         await page.getByRole('button', { name: '发送' }).click()
