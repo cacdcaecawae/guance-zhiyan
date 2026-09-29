@@ -8,6 +8,7 @@ import {
   WrenchIcon,
 } from 'lucide-react'
 import type { AnswerPart, AssistantMessage } from '@/types'
+import { citationOrder } from './citations'
 import { Markdown } from './markdown'
 import { Reasoning } from './reasoning'
 
@@ -71,6 +72,10 @@ export function ToolRow({ part }: { part: Extract<AnswerPart, { type: 'tool' }> 
 /** Adapted from DSH's turn-process / final-answer boundary; see THIRD_PARTY_NOTICES. */
 export function AnswerContent({ message }: { message: AssistantMessage }) {
   const { process, final } = splitAnswer(message)
+  // One numbering for the whole answer: the same passage keeps its number across steps.
+  const citations = citationOrder(
+    message.parts.flatMap((part) => (part.type === 'tool' ? [] : [part.text])),
+  )
   // 汇总按工具种类计数，如“联网搜索 2 次 · 生成文件 1 次”；没有工具时写“执行过程”。
   const counts = new Map<string, number>()
   for (const part of process)
@@ -90,6 +95,7 @@ export function AnswerContent({ message }: { message: AssistantMessage }) {
         <Reasoning
           text={part.text}
           running={message.status === 'loading' && part === message.parts.at(-1)}
+          citations={citations}
         />
       </div>
     ) : (
@@ -101,7 +107,7 @@ export function AnswerContent({ message }: { message: AssistantMessage }) {
             : 'py-1 font-serif text-ui-prose'
         }
       >
-        <Markdown text={part.text} />
+        <Markdown text={part.text} citations={citations} />
       </div>
     )
   return (

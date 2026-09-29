@@ -1,17 +1,56 @@
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+import { passagePath } from './citations'
 
-/** Raw HTML is ignored; only HTTP(S) links are navigable. */
-export function Markdown({ text }: { text: string }) {
+// U+2060 keeps a citation badge on the line of the word it follows; an inline-block can wrap alone.
+const WORD_JOINER = String.fromCodePoint(0x2060)
+
+/**
+ * Raw HTML is ignored; only HTTP(S) links and exact library citation paths are navigable.
+ * Library citations render as superscript numbers from citations, the answer-wide order of
+ * server-checked passages (citationOrder); without it, as in file previews, they stay text.
+ */
+export function Markdown({ text, citations }: { text: string; citations?: readonly string[] }) {
   return (
     <div className="answer-markdown min-w-0">
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         skipHtml
-        urlTransform={(url) => (/^https?:\/\//i.test(url) ? url : '')}
+        urlTransform={(url) => (/^https?:\/\//i.test(url) || passagePath.test(url) ? url : '')}
         components={{
-          a: ({ href, children }) =>
-            href ? (
+          a: ({ href, children }) => {
+            if (!href) return <span>{children}</span>
+            const passage = passagePath.exec(href)
+            if (passage) {
+              const number = (citations ?? []).indexOf(passage[1].toLowerCase()) + 1
+              // A passage path not written literally in the text (e.g. entity-encoded) is not linked.
+              if (!number) return <span>{children}</span>
+              const badge = (
+                <>
+                  {WORD_JOINER}
+                  <a
+                    href={href}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    aria-label={`原文 ${number}`}
+                    title="在新标签页打开原文"
+                    className="mx-0.5 rounded-sm bg-tag px-1.5 py-0.5 align-super text-ui-xs leading-none font-medium text-brand no-underline outline-none transition-colors hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring"
+                  >
+                    {number}
+                  </a>
+                </>
+              )
+              // “原文”“原文 3” become just the number; a descriptive label stays as text.
+              return typeof children === 'string' && /^原文\s*\d*$/.test(children.trim()) ? (
+                badge
+              ) : (
+                <>
+                  {children}
+                  {badge}
+                </>
+              )
+            }
+            return (
               <a
                 href={href}
                 target="_blank"
@@ -20,9 +59,8 @@ export function Markdown({ text }: { text: string }) {
               >
                 {children}
               </a>
-            ) : (
-              <span>{children}</span>
-            ),
+            )
+          },
           img: ({ alt }) => <span>[图片：{alt ?? '未加载'}]</span>,
           table: ({ children }) => (
             <div className="overflow-x-auto">

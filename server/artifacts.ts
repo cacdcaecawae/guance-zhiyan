@@ -23,7 +23,7 @@ type GeneratedFormat = 'md' | 'docx' | 'xlsx' | 'csv'
 type Workspace = {
   readOffice(data: Uint8Array, format: 'docx' | 'xlsx', signal?: AbortSignal): Promise<string>
 }
-const contentOutput = {
+export const contentOutput = {
   schema: { type: 'string' as const },
   render: (_args: unknown, text: string) => [{ type: 'text' as const, text }],
 }

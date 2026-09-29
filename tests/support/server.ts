@@ -17,7 +17,7 @@ const server = createApp(store, agents, {
     return subject ? { subject, name: '自动化测试用户' } : undefined
   },
 })
-server.listen(3001, '127.0.0.1')
+server.listen(Number(process.env.E2E_BACKEND_PORT ?? 3001), '127.0.0.1')
 let closing = false
 async function shutdown() {
   if (closing) return

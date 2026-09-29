@@ -16,11 +16,13 @@ export class HttpError extends Error {
 export class Store {
   db: DatabaseSync
   root: string
+  path: string
   constructor(root: string) {
     this.root = root
     mkdirSync(root, { recursive: true, mode: 0o700 })
     if (process.platform !== 'win32') chmodSync(root, 0o700)
     const path = join(root, 'app.sqlite')
+    this.path = path
     const fd = openSync(path, 'a', 0o600)
     try {
       if (process.platform !== 'win32') fchmodSync(fd, 0o600)
@@ -34,7 +36,9 @@ export class Store {
         if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
       }
     }
-    this.db = new DatabaseSync(path)
+    // The admin import CLI writes the same database from another process; wait for its short
+    // transactions instead of failing requests with "database is locked".
+    this.db = new DatabaseSync(path, { timeout: 5000 })
     this.db.exec(`
       PRAGMA foreign_keys=ON;
       PRAGMA journal_mode=WAL;

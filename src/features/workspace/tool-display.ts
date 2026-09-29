@@ -2,6 +2,8 @@ import type { AssistantMessage } from '@/types'
 
 export const toolNames: Record<string, string> = {
   web_search: '联网搜索',
+  library_search: '文献检索',
+  library_open: '查看原文',
   web_fetch: '读取网页',
   create_file: '生成文件',
   read_file: '读取文件',
@@ -17,6 +19,7 @@ export function toolSummary(input: string): string {
     const value = JSON.parse(input)
     const summary =
       value.queries?.join(' · ') ??
+      value.query ??
       value.command ??
       value.file_path ??
       value.path ??
