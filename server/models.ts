@@ -62,7 +62,10 @@ export function connection(selection: ModelSelection) {
     apiKey: process.env[provider.key]?.trim(),
   }
 }
-export function modelAdapter(provider: string) {
+export function modelAdapter(
+  provider: string,
+  attachments: DeepSeekAdapterOptions['resolveAttachments'],
+) {
   const anonymous = randomUUID() as ReturnType<DeepSeekAdapterOptions['resolveUserId']>
   return new DeepSeekAdapter({
     options: () => {
@@ -72,8 +75,15 @@ export function modelAdapter(provider: string) {
         baseURL: config.baseURL,
         thinking: 'enabled',
         reasoningEffort: 'high',
+        // 全部按可看图声明；不在表内的模型适配器只当纯文本。官方 Flash 沿用适配器默认表的 in-history 声明。
+        models: config.models.map(({ id }) => ({
+          id,
+          inputModalities: ['text', 'image'],
+          ...(id === 'deepseek-flash' && { systemPromptUpdate: 'in-history' as const }),
+        })),
       })
     },
+    resolveAttachments: attachments,
     resolveApiKey: async (config) => {
       const key = process.env[config.apiKeyEnv]?.trim()
       if (!key) throw new Error('供应商密钥尚未配置。')

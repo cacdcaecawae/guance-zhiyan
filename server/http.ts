@@ -9,14 +9,17 @@ import { authenticate as defaultAuthenticate, type Authenticate } from './auth.t
 import { sessionChanges, type SessionFrame } from '../src/services/session-stream.ts'
 import type { Session } from '../src/types/index.ts'
 
-async function body(request: IncomingMessage) {
+// 提问可附带 base64 图片：约 30 MB 原图；其他请求只有少量 JSON
+const MAX_MESSAGE_BODY = 40_000_000
+async function body(request: IncomingMessage, limit = 32000) {
   if (!request.headers['content-type']?.startsWith('application/json'))
     throw new HttpError(415, '请求必须为 JSON。')
   const chunks: Buffer[] = []
   let size = 0
   for await (const chunk of request) {
     size += chunk.length
-    if (size > 32000) throw new HttpError(413, '请求过大。')
+    if (size > limit)
+      throw new HttpError(413, limit > 32000 ? '图片合计不能超过 30 MB。' : '请求过大。')
     chunks.push(chunk)
   }
   try {
@@ -115,25 +118,58 @@ export function createApp(
         })
         return response.end(data)
       }
-      const match = /^\/api\/sessions\/([0-9a-f-]{36})(?:\/(messages|stop|events))?$/.exec(path)
+      const match =
+        /^\/api\/sessions\/([0-9a-f-]{36})(?:\/(messages|stop|events)|\/images\/([^/]+))?$/.exec(
+          path,
+        )
       if (!match) throw new HttpError(404, '接口不存在。')
-      const [, id, action] = match
+      const [, id, action, image] = match
       store.session(user.id, id)
-      if (!action && request.method === 'GET')
+      if (image && request.method === 'GET') {
+        let key: string
+        try {
+          key = decodeURIComponent(image)
+        } catch {
+          throw new HttpError(404, '没有找到图片。')
+        }
+        const { ref, data } = await agents.image(user.id, id, key)
+        response.writeHead(200, {
+          'Content-Type': ref.mediaType,
+          'Content-Length': data.length,
+          // 附件按内容寻址、不可变
+          'Cache-Control': 'private, max-age=31536000, immutable',
+        })
+        return response.end(data)
+      }
+      if (!action && !image && request.method === 'GET')
         return json(response, 200, await agents.snapshot(user.id, id))
       if (action === 'messages' && request.method === 'POST') {
-        const input = await body(request)
+        const input = await body(request, MAX_MESSAGE_BODY)
+        const images = input && typeof input === 'object' && 'images' in input ? input.images : []
+        if (
+          !Array.isArray(images) ||
+          !images.every(
+            (item) =>
+              item &&
+              typeof item === 'object' &&
+              typeof item.mediaType === 'string' &&
+              typeof item.data === 'string' &&
+              (item.name === undefined ||
+                (typeof item.name === 'string' && item.name.length <= 255)),
+          )
+        )
+          throw new HttpError(400, '图片格式错误。')
         if (
           !input ||
           typeof input !== 'object' ||
           !('question' in input) ||
           typeof input.question !== 'string' ||
-          !input.question.trim() ||
+          (!input.question.trim() && !images.length) ||
           input.question.length > 8000
         )
           throw new HttpError(400, '问题须为 1–8000 个字符。')
         const selection = 'selection' in input ? validateSelection(input.selection) : undefined
-        await agents.start(user.id, id, input.question.trim(), selection)
+        await agents.start(user.id, id, input.question.trim(), selection, images)
         return json(response, 202, await agents.snapshot(user.id, id))
       }
       if (action === 'stop' && request.method === 'POST') {

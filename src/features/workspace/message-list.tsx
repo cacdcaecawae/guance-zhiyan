@@ -8,6 +8,7 @@ import {
 } from 'lucide-react'
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { Button } from '@/components/ui/button'
+import { imageUrl } from '@/services/research'
 import type { AssistantMessage, Message } from '@/types'
 import { AnswerContent } from './execution-process'
 import { splitAnswer } from './tool-display'
@@ -52,11 +53,13 @@ function CopyAnswer({ text }: { text: string }) {
 }
 
 export function MessageList({
+  sessionId,
   messages,
   busy,
   onRetry,
   children,
 }: {
+  sessionId: string
   messages: Message[]
   busy: boolean
   onRetry: (message: AssistantMessage) => void
@@ -89,12 +92,39 @@ export function MessageList({
       <ol className="flex flex-col">
         {messages.map((message) =>
           message.role === 'user' ? (
-            // 参照 Claude：问题靠右、浅灰圆角气泡；回答靠左、无外框。
-            <li key={message.id} className="mt-10 flex justify-end first:mt-0">
-              <p className="max-w-[85%] rounded-2xl bg-tag px-4 py-2.5 text-ui-base whitespace-pre-wrap wrap-anywhere">
-                <span className="sr-only">问题：</span>
-                {message.text}
-              </p>
+            // 参照 Claude：问题靠右、浅灰圆角气泡，附图排在气泡上方；回答靠左、无外框。
+            <li key={message.id} className="mt-10 flex flex-col items-end gap-2 first:mt-0">
+              {message.images && (
+                <ul aria-label="问题附图" className="flex max-w-[85%] flex-wrap justify-end gap-2">
+                  {message.images.map((image, index) => (
+                    <li key={index}>
+                      <a
+                        href={imageUrl(sessionId, image)}
+                        target="_blank"
+                        rel="noreferrer"
+                        title="在新标签页查看原图"
+                        className="block rounded-xl outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                      >
+                        {/* 宽高属性先占位，图片加载后列表高度不跳 */}
+                        <img
+                          src={imageUrl(sessionId, image)}
+                          alt={image.name || '图片'}
+                          width={image.width}
+                          height={image.height}
+                          loading="lazy"
+                          className="h-auto max-h-40 w-auto max-w-full rounded-xl border border-card-border bg-card"
+                        />
+                      </a>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {message.text && (
+                <p className="max-w-[85%] rounded-2xl bg-tag px-4 py-2.5 text-ui-base whitespace-pre-wrap wrap-anywhere">
+                  <span className="sr-only">问题：</span>
+                  {message.text}
+                </p>
+              )}
             </li>
           ) : (
             <li key={message.id} className="mt-6">

@@ -39,7 +39,7 @@ describe('Composer', () => {
     const box = screen.getByRole('textbox', { name: '研究问题' })
     await userEvent.type(box, '  示例问题  ')
     await userEvent.keyboard('{Enter}')
-    expect(onSubmit).toHaveBeenCalledExactlyOnceWith('示例问题')
+    expect(onSubmit).toHaveBeenCalledExactlyOnceWith('示例问题', [])
     expect(box).toHaveValue('')
   })
 
@@ -62,7 +62,7 @@ describe('Composer', () => {
     fireEvent.keyDown(box, { key: 'Enter', keyCode: 229 })
     expect(onSubmit).not.toHaveBeenCalled()
     fireEvent.keyDown(box, { key: 'Enter' })
-    expect(onSubmit).toHaveBeenCalledExactlyOnceWith('xie tong')
+    expect(onSubmit).toHaveBeenCalledExactlyOnceWith('xie tong', [])
   })
 
   it('加载中禁止再次提交', async () => {
@@ -72,5 +72,33 @@ describe('Composer', () => {
     expect(screen.getByRole('button', { name: '发送' })).toHaveAttribute('aria-disabled', 'true')
     await userEvent.keyboard('{Enter}')
     expect(onSubmit).not.toHaveBeenCalled()
+  })
+
+  it('选择或粘贴图片后显示缩略图，只有图片也可发送，成功后清空', async () => {
+    const onSubmit = vi.fn()
+    render(<Composer onSubmit={onSubmit} />)
+    const chart = new File(['png'], '图表.png', { type: 'image/png' })
+    const form = new File(['jpg'], '表格.jpg', { type: 'image/jpeg' })
+    await userEvent.upload(screen.getByLabelText('选择图片'), chart)
+    const box = screen.getByRole('textbox', { name: '研究问题' })
+    // 剪贴板带文字时（如从 Word 复制）不取附带的截图
+    fireEvent.paste(box, { clipboardData: { files: [form], getData: () => '一段文字' } })
+    expect(screen.getAllByRole('img')).toHaveLength(1)
+    fireEvent.paste(box, { clipboardData: { files: [form], getData: () => '' } })
+    expect(screen.getByRole('img', { name: '表格.jpg' })).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: '移除图片 表格.jpg' }))
+    await userEvent.click(screen.getByRole('button', { name: '发送' }))
+    expect(onSubmit).toHaveBeenCalledExactlyOnceWith('', [chart])
+    expect(screen.queryByRole('img')).not.toBeInTheDocument()
+  })
+
+  it('不支持的文件不加入并说明原因', () => {
+    render(<Composer onSubmit={vi.fn()} />)
+    fireEvent.drop(screen.getByRole('form', { name: '提问' }), {
+      dataTransfer: { files: [new File(['%PDF'], '简历.pdf', { type: 'application/pdf' })] },
+    })
+    expect(screen.queryByRole('img')).not.toBeInTheDocument()
+    expect(screen.getByRole('alert')).toHaveTextContent('PDF 等文件敬请期待')
+    expect(screen.getByRole('button', { name: '发送' })).toHaveAttribute('aria-disabled', 'true')
   })
 })

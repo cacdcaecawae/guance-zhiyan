@@ -15,10 +15,13 @@ it('已完成的思考或工具过程没有最终正文时明确提示', () => {
       { id: 'tool', type: 'tool', name: 'create_file', input: '{}', output: '{}', status: 'done' },
     ],
   }
-  const { rerender } = render(<MessageList messages={[message]} busy={false} onRetry={() => {}} />)
+  const { rerender } = render(
+    <MessageList sessionId="s" messages={[message]} busy={false} onRetry={() => {}} />,
+  )
   expect(screen.getByText('本次未返回正文。')).toBeInTheDocument()
   rerender(
     <MessageList
+      sessionId="s"
       messages={[
         {
           ...message,
@@ -47,7 +50,7 @@ const answer: AssistantMessage = {
 it('复制只写入最终回答；剪贴板失败或不可用时明确提示', async () => {
   const writeText = vi.fn().mockResolvedValue(undefined)
   Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true })
-  render(<MessageList messages={[answer]} busy={false} onRetry={() => {}} />)
+  render(<MessageList sessionId="s" messages={[answer]} busy={false} onRetry={() => {}} />)
   const copy = screen.getByRole('button', { name: '复制回答' })
   fireEvent.click(copy)
   expect(writeText).toHaveBeenCalledExactlyOnceWith('文件已生成')
@@ -62,21 +65,23 @@ it('复制只写入最终回答；剪贴板失败或不可用时明确提示', a
 
 it('执行过程汇总只列非零计数，全为零时写“执行过程”', () => {
   const tool = { ...answer, parts: [answer.parts[1], answer.parts[2]] }
-  const { rerender } = render(<MessageList messages={[tool]} busy={false} onRetry={() => {}} />)
+  const { rerender } = render(
+    <MessageList sessionId="s" messages={[tool]} busy={false} onRetry={() => {}} />,
+  )
   expect(screen.getByText('生成文件 1 次')).toBeInTheDocument()
   const reasoning: AssistantMessage = {
     ...answer,
     status: 'error',
     parts: [{ id: 'r', type: 'reasoning', step: 1, text: '思考' }],
   }
-  rerender(<MessageList messages={[reasoning]} busy={false} onRetry={() => {}} />)
+  rerender(<MessageList sessionId="s" messages={[reasoning]} busy={false} onRetry={() => {}} />)
   expect(screen.getByText('执行过程')).toBeInTheDocument()
 })
 
 it('离开底部时出现“回到底部”，点击滚到容器底部', () => {
   render(
     <div data-message-scroll>
-      <MessageList messages={[answer]} busy={false} onRetry={() => {}} />
+      <MessageList sessionId="s" messages={[answer]} busy={false} onRetry={() => {}} />
     </div>,
   )
   const scroller = document.querySelector<HTMLElement>('[data-message-scroll]')!
@@ -110,8 +115,30 @@ it('停止时中断的工具不计为失败；复制保留开头缩进', async (
       { id: 'final', type: 'text', step: 2, text: '\n    缩进代码\n' },
     ],
   }
-  render(<MessageList messages={[message]} busy={false} onRetry={() => {}} />)
+  render(<MessageList sessionId="s" messages={[message]} busy={false} onRetry={() => {}} />)
   expect(screen.queryByText(/次失败/)).not.toBeInTheDocument()
   fireEvent.click(screen.getByRole('button', { name: '复制回答' }))
   expect(writeText).toHaveBeenCalledWith('    缩进代码')
+})
+
+it('问题附图显示在气泡上方，点开查看本会话原图；只有图片时不画空气泡', () => {
+  render(
+    <MessageList
+      sessionId="s"
+      messages={[
+        {
+          id: 'q',
+          role: 'user',
+          text: '',
+          images: [{ id: 'sha256:abc', name: '表格.png', width: 800, height: 300 }],
+        },
+      ]}
+      busy={false}
+      onRetry={() => {}}
+    />,
+  )
+  const image = screen.getByRole('img', { name: '表格.png' })
+  expect(image).toHaveAttribute('src', '/api/sessions/s/images/sha256%3Aabc')
+  expect(screen.getByRole('link')).toHaveAttribute('href', image.getAttribute('src'))
+  expect(screen.queryByText('问题：')).not.toBeInTheDocument()
 })

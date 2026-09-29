@@ -9,12 +9,14 @@ import { DatabaseSync } from 'node:sqlite'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { DEFAULT_MAX_TOKENS } from '@deepseek-ai/dsh-llm-deepseek'
 import { SessionId, type SessionEvent } from '@deepseek-ai/dsh-session'
+import type { Session } from '../src/types/index.ts'
 import { traceFromEvents } from './trace.ts'
 import { messagesFromEvents, toolInput, toolError } from './view.ts'
 import { TestModel, textChunks, toolChunks } from '../tests/support/model.ts'
 import { Store } from './store.ts'
 import { Agents } from './agent.ts'
 import { createApp } from './http.ts'
+import { modelAdapter } from './models.ts'
 
 test('existing SQLite sessions migrate without losing ownership and keep model selection on reopen', async () => {
   const root = await mkdtemp(join(tmpdir(), 'gczy-migration-test-'))
@@ -594,12 +596,24 @@ test('native Messages streaming and search protocol with cited sources and expli
   }
 })
 
+test('all catalog models accept images; official Flash keeps in-history system updates', async () => {
+  for (const [provider, model] of [
+    ['deepseek-official', 'deepseek-flash'],
+    ['deepseek-official', 'deepseek-v4-pro'],
+    ['qianwen', 'deepseek-v4.1-flash'],
+    ['qianwen', 'deepseek-v4-pro-0813'],
+  ]) {
+    const info = await modelAdapter(provider, () => undefined).resolveModel(provider, model)
+    assert.deepEqual(info.inputModalities, ['text', 'image'])
+    assert.equal(info.systemPromptUpdate, model === 'deepseek-flash' ? 'in-history' : undefined)
+  }
+})
+
 test('HTTP: authentication, ownership, request boundaries and file download', async () => {
   const root = await mkdtemp(join(tmpdir(), 'gczy-http-test-'))
   const store = new Store(root)
-  const agents = await new Agents(store, {
-    adapter: new TestModel(() => textChunks('hello')),
-  }).init()
+  const model = new TestModel(() => textChunks('hello'))
+  const agents = await new Agents(store, { adapter: model }).init()
   const server = createApp(store, agents, {
     origin: 'http://trusted.test',
     dist: root,
@@ -686,6 +700,63 @@ test('HTTP: authentication, ownership, request boundaries and file download', as
       'md',
       '# 内容',
     )
+    const ask = (body: object) =>
+      fetch(`${base}/api/sessions/${id}/messages`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(body),
+      })
+    const png =
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='
+    assert.equal((await ask({ question: '', images: [] })).status, 400)
+    // 伪造已存附件引用会被结构校验拒绝
+    const forged = await ask({
+      question: '看图',
+      images: [{ type: 'file', attachment: { attachmentId: 'sha256:0', name: 'x', bytes: 1 } }],
+    })
+    assert.equal(forged.status, 400)
+    const broken = await ask({
+      question: '',
+      images: [{ mediaType: 'image/png', data: '不是图片' }],
+    })
+    assert.equal(broken.status, 400)
+    assert.match(((await broken.json()) as { error: string }).error, /图片/)
+    const sent = await ask({
+      question: '',
+      images: [{ mediaType: 'image/png', data: png, name: '截图.png' }],
+    })
+    assert.equal(sent.status, 202)
+    await agents.active.get(id)?.done
+    const asked = model.requests.at(-1)!.messages.findLast((message) => message.role === 'user')!
+    assert.ok(asked.content.some((block) => block.type === 'image'))
+    const view = (await (await fetch(`${base}/api/sessions/${id}`, { headers })).json()) as Session
+    const question = view.messages.findLast((message) => message.role === 'user')!
+    assert.ok(question.role === 'user' && question.images?.length === 1)
+    assert.equal(question.text, '')
+    assert.deepEqual(
+      { ...question.images[0], id: '' },
+      { id: '', name: '截图.png', width: 1, height: 1 },
+    )
+    const imagePath = `/images/${encodeURIComponent(question.images[0].id)}`
+    const picture = await fetch(`${base}/api/sessions/${id}${imagePath}`, { headers })
+    assert.equal(picture.status, 200)
+    assert.match(picture.headers.get('content-type')!, /^image\//)
+    assert.ok((await picture.arrayBuffer()).byteLength > 0)
+    const other = (await (
+      await fetch(base + '/api/sessions', { method: 'POST', headers })
+    ).json()) as { id: string }
+    for (const [user, session] of [
+      ['bob', id],
+      ['alice', other.id],
+    ])
+      assert.equal(
+        (
+          await fetch(`${base}/api/sessions/${session}${imagePath}`, {
+            headers: { 'x-test-user': user },
+          })
+        ).status,
+        404,
+      )
     const download = await fetch(`${base}/api/files/${file.id}`, { headers })
     assert.equal(await download.text(), '# 内容')
     assert.match(download.headers.get('content-disposition')!, /attachment/)

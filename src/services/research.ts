@@ -1,5 +1,13 @@
 import { useSyncExternalStore } from 'react'
-import type { Artifact, ModelCatalog, ModelSelection, Session, SessionSummary, User } from '@/types'
+import type {
+  Artifact,
+  ImageAttachment,
+  ModelCatalog,
+  ModelSelection,
+  Session,
+  SessionSummary,
+  User,
+} from '@/types'
 import { applySessionFrame, type SessionFrame } from './session-stream'
 
 interface State {
@@ -136,11 +144,47 @@ export function watchSession(id?: string) {
   }
 }
 
+export const imageUrl = (sessionId: string, image: Pick<ImageAttachment, 'id'>) =>
+  `/api/sessions/${sessionId}/images/${encodeURIComponent(image.id)}`
+
+async function loadImage(sessionId: string, image: ImageAttachment) {
+  const response = await send(imageUrl(sessionId, image), { credentials: 'same-origin' })
+  if (!response.ok) throw new Error(`原图读取失败（${response.status}），请重新上传。`)
+  return new File([await response.blob().catch(offline())], image.name ?? '', {
+    type: response.headers.get('Content-Type') ?? '',
+  })
+}
+
+/** 图片以 base64 随问题提交；重新提问时传入原图引用，先从本会话取回再同路重发。 */
+async function encodeImage(sessionId: string, image: Blob | ImageAttachment) {
+  const file = image instanceof Blob ? image : await loadImage(sessionId, image)
+  const data = await new Promise<string>((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(String(reader.result).replace(/^[^,]*,/, ''))
+    reader.onerror = () => reject(new Error('图片读取失败，请重新选择。'))
+    reader.readAsDataURL(file)
+  })
+  return {
+    mediaType: file.type,
+    data,
+    ...(file instanceof File && file.name && { name: file.name }),
+  }
+}
+
 // POST acknowledgements never overwrite a newer stream snapshot.
-export const askQuestion = (id: string, question: string, selection?: ModelSelection) =>
+export const askQuestion = async (
+  id: string,
+  question: string,
+  selection?: ModelSelection,
+  images: (Blob | ImageAttachment)[] = [],
+) =>
   request(`/sessions/${id}/messages`, {
     method: 'POST',
-    body: JSON.stringify({ question, selection }),
+    body: JSON.stringify({
+      question,
+      selection,
+      images: await Promise.all(images.map((image) => encodeImage(id, image))),
+    }),
   })
 export const stopAnswer = (id: string) => request(`/sessions/${id}/stop`, { method: 'POST' })
 export const artifactUrl = (file: Pick<Artifact, 'id'>) =>

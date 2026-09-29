@@ -1,6 +1,6 @@
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import { expandAssistantStream, type StreamChunk, type ContentBlock } from '@deepseek-ai/dsh-llm'
-import type { AnswerPart, AssistantMessage, Message } from '../src/types/index.ts'
+import type { AnswerPart, AssistantMessage, ImageAttachment, Message } from '../src/types/index.ts'
 
 export interface LiveAttempt {
   turn: number
@@ -9,6 +9,8 @@ export interface LiveAttempt {
 }
 const textOf = (content: readonly ContentBlock[]) =>
   content.flatMap((block) => (block.type === 'text' ? [block.text] : [])).join('\n')
+export const imagesOf = (content: readonly ContentBlock[]) =>
+  content.flatMap((block) => (block.type === 'image' ? [block.attachment] : []))
 
 export function toolError(code?: string): string {
   const messages: Record<string, string> = {
@@ -78,15 +80,25 @@ export function messagesFromEvents(
   const messages: Message[] = []
   let answer: AssistantMessage | undefined
   let question = ''
+  let images: ImageAttachment[] = []
   let turn = 0
   const userIds = new Set<string>()
   const addUser = (id: string, content: readonly ContentBlock[]) => {
     question = textOf(content)
+    images = imagesOf(content).map(({ attachmentId, name, width, height }) => ({
+      id: attachmentId,
+      ...(name && { name }),
+      width,
+      height,
+    }))
     if (!userIds.has(id)) {
-      messages.push({ id, role: 'user', text: question })
+      messages.push({ id, role: 'user', text: question, ...(images.length && { images }) })
       userIds.add(id)
     }
-    if (answer?.status === 'loading') answer.question = question
+    if (answer?.status === 'loading') {
+      answer.question = question
+      answer.questionImages = images
+    }
   }
   for (const event of events) {
     if (event.type === 'agent/inbox/spliced') {
@@ -96,7 +108,14 @@ export function messagesFromEvents(
       if (event.data.source.kind === 'user') addUser(event.data.id, event.data.content)
     } else if (event.type === 'turn/start') {
       turn = event.data.turn
-      answer = { id: `turn-${turn}`, role: 'assistant', question, status: 'loading', parts: [] }
+      answer = {
+        id: `turn-${turn}`,
+        role: 'assistant',
+        question,
+        questionImages: images,
+        status: 'loading',
+        parts: [],
+      }
       messages.push(answer)
     } else if (
       answer &&

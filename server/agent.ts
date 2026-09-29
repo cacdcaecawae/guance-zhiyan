@@ -2,6 +2,8 @@ import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
 import AgentRegistry, { type AgentHandle } from '@deepseek-ai/dsh-agent'
 import AgentLoop from '@deepseek-ai/dsh-agent-loop'
+import { isImageAdmissionError, type EncodedImageAttachment } from '@deepseek-ai/dsh-attachment'
+import LocalAttachmentStore from '@deepseek-ai/dsh-attachment-local'
 import LlmRuntime, { createUserMessage, type LlmAdapter } from '@deepseek-ai/dsh-llm'
 import SessionStore, { SessionId, type SessionEvent } from '@deepseek-ai/dsh-session'
 import SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
@@ -17,7 +19,7 @@ import { connection, modelAdapter, modelCatalog, validateSelection } from './mod
 import { qianwenSearch } from './qianwen-search.ts'
 import { Store, HttpError } from './store.ts'
 import { Artifacts } from './artifacts.ts'
-import { appendChunks, messagesFromEvents, type LiveAttempt } from './view.ts'
+import { appendChunks, imagesOf, messagesFromEvents, type LiveAttempt } from './view.ts'
 import { traceFromEvents } from './trace.ts'
 import type { Sandboxes } from './sandboxes.ts'
 import { SessionSandbox, registerSandbox } from './sandbox-tools.ts'
@@ -74,8 +76,12 @@ export class Agents {
       compression: 'none',
     })
     await ctx.plugin(AgentLoop, { agents: [] })
+    await ctx.plugin(LocalAttachmentStore, { dshHome: join(this.store.root, 'dsh') })
     for (const provider of modelCatalog().providers)
-      ctx.llm.registerAdapter([provider.id], this.options.adapter ?? modelAdapter(provider.id))
+      ctx.llm.registerAdapter(
+        [provider.id],
+        this.options.adapter ?? modelAdapter(provider.id, () => ctx.get('attachments')),
+      )
     ctx.on('session/event', (session) => this.notify(session.id))
     ctx.on('agent/assistant-stream', ({ agent, frame }) => {
       const run = this.active.get(agent.session.id)
@@ -159,7 +165,30 @@ export class Agents {
       trace,
     }
   }
-  async start(userId: string, id: string, question: string, requested?: ModelSelection) {
+  /** 只返回本会话提问中出现过的图片，其他用户或会话的附件 id 一律视为不存在。 */
+  async image(userId: string, id: string, attachmentId: string) {
+    this.store.session(userId, id)
+    // ponytail: 每次读图都扫描整段会话事件；会话很长、图片很多时再按会话缓存图片引用
+    const ref = (await this.events(id))
+      .flatMap((event) =>
+        event.type === 'user/message'
+          ? [event.data]
+          : event.type === 'agent/inbox/spliced'
+            ? event.data.inserted
+            : [],
+      )
+      .flatMap((message) => imagesOf(message.content))
+      .find((image) => image.attachmentId === attachmentId)
+    if (!ref) throw new HttpError(404, '没有找到图片。')
+    return this.ctx.attachments.readImage(ref)
+  }
+  async start(
+    userId: string,
+    id: string,
+    question: string,
+    requested?: ModelSelection,
+    images: readonly EncodedImageAttachment[] = [],
+  ) {
     const session = this.store.session(userId, id)
     const selection = validateSelection(requested ?? session)
     const config = connection(selection)
@@ -172,6 +201,31 @@ export class Agents {
     const run: ActiveRun = { ready: ready.promise, stopped: false }
     this.active.set(id, run)
     try {
+      // 图片先校验并持久保存，全部成功才写入用户消息；任何一张被拒绝整条消息失败。
+      const content = await this.ctx.attachments
+        .admitPromptContent([
+          // 只取这三个字段：客户端多传的 type / attachment 不能冒充已存附件
+          ...images.map(({ mediaType, data, name }) => ({
+            type: 'image' as const,
+            mediaType,
+            data,
+            ...(name && { name }),
+          })),
+          ...(question ? [{ type: 'text' as const, text: question }] : []),
+        ])
+        .catch((error: unknown) => {
+          // 存储读写失败不是用户能改正的问题，按服务器错误返回
+          if (!isImageAdmissionError(error)) throw error
+          const limits = this.ctx.attachments.imageLimits
+          const messages: Record<string, string> = {
+            TOO_MANY_IMAGES: `一次最多上传 ${limits.maxImagesPerMessage} 张图片。`,
+            UNSUPPORTED_IMAGE_TYPE: '仅支持 PNG、JPEG、WebP 和 GIF 图片。',
+            IMAGE_TOO_LARGE: `单张图片不能超过 ${limits.maxImageBytes / 2 ** 20} MB。`,
+            IMAGE_TOO_MANY_PIXELS: '图片尺寸过大，请缩小后重试。',
+            IMAGE_DIMENSION_TOO_LARGE: '图片尺寸过大，请缩小后重试。',
+          }
+          throw new HttpError(400, messages[error.code] ?? '图片无法读取，请换一张重试。')
+        })
       const setup = async (ctx: Context, agent: AgentHandle['agent']) => {
         const web = ctx.isolate('web')
         await web.plugin(WebRuntime)
@@ -221,13 +275,8 @@ export class Agents {
         return
       }
       this.store.selectModel(userId, id, selection)
-      this.store.title(userId, id, question)
-      run.handle.agent.followup(
-        createUserMessage({
-          content: [{ type: 'text', text: question }],
-          source: { kind: 'user' },
-        }),
-      )
+      this.store.title(userId, id, question || '图片提问')
+      run.handle.agent.followup(createUserMessage({ content, source: { kind: 'user' } }))
       run.done = (async () => {
         try {
           await run.handle!.agent.whenIdle()

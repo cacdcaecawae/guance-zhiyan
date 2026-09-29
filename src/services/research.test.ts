@@ -58,6 +58,8 @@ it('会话切换丢弃过时读取；HTTP 确认不覆盖较新的流式状态',
         }),
       )
     })
+    // 提问先编码图片再发出请求
+    await vi.waitFor(() => expect(pending.has('/api/sessions/new/messages')).toBe(true))
     await act(async () => {
       pending.get('/api/sessions/new/messages')!(Response.json(session('new', '过时确认')))
       await post
