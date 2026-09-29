@@ -137,9 +137,9 @@ export function createApp(
         if (formats.length > 1 || (formats.length === 1 && formats[0] !== 'json'))
           throw new HttpError(400, '原文片段格式无效。')
         const passage = library.passage(passageId[1].toLowerCase())
+        if (formats[0] === 'json') return json(response, 200, passage)
         // Old citations stay readable after an update, but must not pass for the current text.
         const superseded = library.current(passage.documentId) !== passage.versionId
-        if (formats[0] === 'json') return json(response, 200, { ...passage, superseded })
         response.writeHead(200, {
           'Content-Type': 'text/html; charset=utf-8',
           'Content-Security-Policy':

@@ -85,18 +85,12 @@ test('library HTTP requires identity, publishes real pages safely and retains hi
     assert.ok(html.includes('<dt>版本状态</dt><dd>现行版本</dd>'))
     assert.ok(html.includes('2024-02-29'))
     assert.doesNotMatch(html, /<(?:script|img|svg)\b/)
-    assert.deepEqual(await (await get(path + '?format=json')).json(), {
-      ...first.chunks[0],
-      superseded: false,
-    })
+    assert.deepEqual(await (await get(path + '?format=json')).json(), { ...first.chunks[0] })
     assert.equal((await fetch(base + path, { headers: { 'x-test-user': 'bob' } })).status, 200)
 
     const replacement = library.stage({ ...document, text: '第一条 更新后的自动化测试原文。' })
     library.publish(replacement.versionId, first.versionId)
-    assert.deepEqual(await (await get(path + '?format=json')).json(), {
-      ...first.chunks[0],
-      superseded: true,
-    })
+    assert.deepEqual(await (await get(path + '?format=json')).json(), { ...first.chunks[0] })
     const replaced = await (await get(path)).text()
     assert.ok(replaced.includes(first.versionId))
     assert.ok(replaced.includes('<dd><strong>已被新版本替代</strong>；此处为旧版本原文'))
