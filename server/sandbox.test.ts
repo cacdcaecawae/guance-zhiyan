@@ -246,6 +246,8 @@ test('DSH tools use isolated OpenSandbox SDK sessions, persist exports and kill 
     assert.equal(fixture.creations.length, 0, 'create_file must not request a sandbox')
     assert.ok(model.requests[0].tools?.some((tool) => tool.name === 'bash'))
     assert.ok(model.requests[0].tools?.some((tool) => tool.name === 'read'))
+    // DSH 0.1.7-rc.1 的 read_image 在沙箱中无法执行，也不计入附图配额，不向模型提供
+    assert.ok(!model.requests[0].tools?.some((tool) => tool.name === 'read_image'))
     let step = 0
     model.respond = () =>
       ++step === 1

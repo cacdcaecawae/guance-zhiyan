@@ -210,11 +210,10 @@ export class Agents {
       trace,
     }
   }
-  /** 只返回本会话提问中出现过的图片，其他用户或会话的附件 id 一律视为不存在。 */
-  async image(userId: string, id: string, attachmentId: string) {
-    this.store.session(userId, id)
-    // ponytail: 每次读图都扫描整段会话事件；会话很长、图片很多时再按会话缓存图片引用
-    const ref = (await this.events(id))
+  /** 本会话提问中出现过的图片；其他用户或会话的附件 id 一律视为不存在。 */
+  async sessionImages(id: string) {
+    // ponytail: 每次都扫描整段会话事件；会话很长、图片很多时再按会话缓存图片引用
+    return (await this.events(id))
       .flatMap((event) =>
         event.type === 'user/message'
           ? [event.data]
@@ -223,7 +222,10 @@ export class Agents {
             : [],
       )
       .flatMap((message) => imagesOf(message.content))
-      .find((image) => image.attachmentId === attachmentId)
+  }
+  async image(userId: string, id: string, attachmentId: string) {
+    this.store.session(userId, id)
+    const ref = (await this.sessionImages(id)).find((image) => image.attachmentId === attachmentId)
     if (!ref) throw new HttpError(404, '没有找到图片。')
     return this.ctx.attachments.readImage(ref)
   }
@@ -232,7 +234,7 @@ export class Agents {
     id: string,
     question: string,
     requested?: ModelSelection,
-    images: readonly EncodedImageAttachment[] = [],
+    images: readonly (EncodedImageAttachment | { id: string })[] = [],
   ) {
     const session = this.store.session(userId, id)
     const selection = validateSelection(requested ?? session)
@@ -246,13 +248,25 @@ export class Agents {
     const run: ActiveRun = { ready: ready.promise, stopped: false }
     this.active.set(id, run)
     try {
-      // 图片全部校验并规范化后，按实际存储大小记入配额，通过才写入；任何一张被拒绝或超出配额，
-      // 整条消息失败，也不写入图片。记入配额后写入失败时不退回，宁可偏严。
       const store = this.ctx.attachments as CountedAttachmentStore
-      const refs = images.length
+      const limits = store.imageLimits
+      if (images.length > limits.maxImagesPerMessage)
+        throw new HttpError(400, `一次最多上传 ${limits.maxImagesPerMessage} 张图片。`)
+      // 重新提问引用本会话提问中已有的图片：核对归属后直接复用，不重新入库，也不重复计入配额
+      const history = images.some((image) => 'id' in image) ? await this.sessionImages(id) : []
+      const reused = images.map((image) => {
+        if (!('id' in image)) return undefined
+        const ref = history.find((item) => item.attachmentId === image.id)
+        if (!ref) throw new HttpError(404, '没有找到图片。')
+        return ref
+      })
+      // 新图片全部校验并规范化后，按实际存储大小记入配额，通过才写入；任何一张被拒绝或超出配额，
+      // 整条消息失败，也不写入图片。记入配额后写入失败时不退回，宁可偏严。
+      const uploads = images.flatMap((image) => ('id' in image ? [] : [image]))
+      const saved = uploads.length
         ? await store
             .saveCounted(
-              images.map(({ mediaType, data, name }) => {
+              uploads.map(({ mediaType, data, name }) => {
                 // 与 DSH 一致，只接受规范 base64
                 const bytes = Buffer.from(data, 'base64')
                 if (bytes.toString('base64') !== data)
@@ -264,9 +278,7 @@ export class Agents {
             .catch((error: unknown) => {
               // 存储读写失败不是用户能改正的问题，按服务器错误返回
               if (!isImageAdmissionError(error)) throw error
-              const limits = store.imageLimits
               const messages: Record<string, string> = {
-                TOO_MANY_IMAGES: `一次最多上传 ${limits.maxImagesPerMessage} 张图片。`,
                 UNSUPPORTED_IMAGE_TYPE: '仅支持 PNG、JPEG、WebP 和 GIF 图片。',
                 IMAGE_TOO_LARGE: `单张图片不能超过 ${limits.maxImageBytes / 2 ** 20} MB。`,
                 IMAGE_TOO_MANY_PIXELS: '图片尺寸过大，请缩小后重试。',
@@ -275,6 +287,7 @@ export class Agents {
               throw new HttpError(400, messages[error.code] ?? '图片无法读取，请换一张重试。')
             })
         : []
+      const refs = reused.map((ref) => ref ?? saved.shift()!)
       const content = [
         ...refs.map((attachment) => ({ type: 'image' as const, attachment })),
         ...(question ? [{ type: 'text' as const, text: question }] : []),

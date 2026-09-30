@@ -773,6 +773,33 @@ test('HTTP: authentication, ownership, request boundaries and file download', as
         ).status,
         404,
       )
+    // 重新提问只引用本会话已有的图片：满额时也能发送，不重新入库、不重复计入配额；
+    // 没在本会话提问中出现过的 id（包括其他会话的图片）一律视为不存在
+    const again = await ask({ question: '', images: [{ id: question.images[0].id }] })
+    assert.equal(again.status, 202)
+    await agents.active.get(id)?.done
+    assert.equal(store.imageBytes(alice.id), used)
+    const reasked = model.requests.at(-1)!.messages.findLast((message) => message.role === 'user')!
+    assert.deepEqual(
+      reasked.content.flatMap((block) =>
+        block.type === 'image' ? [block.attachment.attachmentId] : [],
+      ),
+      [question.images[0].id],
+    )
+    for (const [session, image] of [
+      [id, `sha256:${'0'.repeat(64)}`],
+      [other.id, question.images[0].id],
+    ])
+      assert.equal(
+        (
+          await fetch(`${base}/api/sessions/${session}/messages`, {
+            method: 'POST',
+            headers,
+            body: JSON.stringify({ question: '', images: [{ id: image }] }),
+          })
+        ).status,
+        404,
+      )
     const download = await fetch(`${base}/api/files/${file.id}`, { headers })
     assert.equal(await download.text(), '# 内容')
     assert.match(download.headers.get('content-disposition')!, /attachment/)
@@ -813,16 +840,34 @@ test('question images count by their stored size and are never written past the 
     assert.equal(store.imageBytes(user.id), limit - 100, 'a refused image is not counted')
     assert.deepEqual(await saved(), before, 'a refused image is not written')
     store.db.prepare("UPDATE images SET bytes=? WHERE id='filler'").run(limit - 10_000)
-    for (const question of ['第一次', '同一张图再发一次']) {
-      await agents.start(user.id, session.id, question, undefined, [gif])
+    // 两张图保存后都比上传时大；同样的图再发一次不重复计入
+    const dot = {
+      mediaType: 'image/gif' as const,
+      data: 'R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7',
+    }
+    for (const question of ['第一次', '同样的图再发一次']) {
+      await agents.start(user.id, session.id, question, undefined, [gif, dot])
       await agents.active.get(session.id)?.done
     }
-    const [image] = (await agents.snapshot(user.id, session.id)).messages.flatMap((message) =>
-      message.role === 'user' ? (message.images ?? []) : [],
+    const images = (await agents.snapshot(user.id, session.id)).messages
+      .flatMap((message) => (message.role === 'user' ? (message.images ?? []) : []))
+      .slice(0, 2)
+    const sizes = await Promise.all(
+      images.map(async ({ id }) => (await agents.image(user.id, session.id, id)).data.byteLength),
     )
-    const { data } = await agents.image(user.id, session.id, image.id)
-    assert.ok(data.byteLength > 100, 'the stored image is larger than the room left before')
-    assert.equal(store.imageBytes(user.id), limit - 10_000 + data.byteLength, 'counted once')
+    assert.ok(sizes[0] > 100, 'the stored image is larger than the room left before')
+    const counted = limit - 10_000 + sizes[0] + sizes[1]
+    assert.equal(store.imageBytes(user.id), counted, 'counted once, by stored size')
+    // 重新提问引用已存的图片，不再上传转换后更大的图，也不重复计入
+    await agents.start(
+      user.id,
+      session.id,
+      '',
+      undefined,
+      images.map(({ id }) => ({ id })),
+    )
+    await agents.active.get(session.id)?.done
+    assert.equal(store.imageBytes(user.id), counted)
   } finally {
     await agents.close()
     store.close()

@@ -210,10 +210,12 @@ export function createApp(
             (item) =>
               item &&
               typeof item === 'object' &&
-              typeof item.mediaType === 'string' &&
-              typeof item.data === 'string' &&
-              (item.name === undefined ||
-                (typeof item.name === 'string' && item.name.length <= 255)),
+              // 新图片带编码后的内容；重新提问只带本会话已有图片的 id
+              (typeof item.id === 'string' ||
+                (typeof item.mediaType === 'string' &&
+                  typeof item.data === 'string' &&
+                  (item.name === undefined ||
+                    (typeof item.name === 'string' && item.name.length <= 255)))),
           )
         )
           throw new HttpError(400, '图片格式错误。')

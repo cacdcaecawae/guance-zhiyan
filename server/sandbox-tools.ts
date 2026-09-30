@@ -446,7 +446,9 @@ export class RemoteShell extends ShellExecutor {
 }
 
 export async function registerSandbox(ctx: Context, session: SessionSandbox, files: Artifacts) {
-  const scope = ctx.isolate('shell').isolate('fs').isolate('shellEnv')
+  // 隔离 attachments：DSH 0.1.7-rc.1 的文件工具见到附件服务就注册 read_image，但该工具缺少 fs 注入、
+  // 执行必然失败，且写入附件存储不计入附图配额；修复前不向模型提供
+  const scope = ctx.isolate('shell').isolate('fs').isolate('shellEnv').isolate('attachments')
   await scope.plugin({
     name: 'session-sandbox',
     apply: (inner: Context) => {

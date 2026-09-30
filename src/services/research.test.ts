@@ -84,3 +84,19 @@ it('网络不通时给出中文错误，而不是浏览器的英文原文', asyn
   await expect(createSession()).rejects.toThrow('网络连接失败，请检查网络后重试。')
   vi.unstubAllGlobals()
 })
+
+it('重新提问只传本会话已存图片的 id，不下载原图再上传', async () => {
+  const fetch = vi.fn(async (_path: string, _init?: RequestInit) => Response.json({}))
+  vi.stubGlobal('fetch', fetch)
+  try {
+    await askQuestion('s1', '', undefined, [
+      { id: 'sha256:1', name: '表格.png', width: 1, height: 1 },
+    ])
+    expect(fetch).toHaveBeenCalledOnce()
+    const [path, init] = fetch.mock.calls[0]
+    expect(path).toBe('/api/sessions/s1/messages')
+    expect(JSON.parse(String(init?.body))).toEqual({ question: '', images: [{ id: 'sha256:1' }] })
+  } finally {
+    vi.unstubAllGlobals()
+  }
+})
