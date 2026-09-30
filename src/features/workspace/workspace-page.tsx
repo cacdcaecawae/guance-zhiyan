@@ -31,8 +31,9 @@ export function WorkspacePage({ sessionId }: { sessionId?: string }) {
   const [previewId, setPreviewId] = useState<string | null>(null)
   const wide = useMediaQuery('(min-width: 1024px)')
   const navigate = useNavigate()
+  const location = useLocation()
   // 从“新建研究”进入时直接聚焦输入框
-  const focusComposer = !!(useLocation().state as { focusComposer?: boolean } | null)?.focusComposer
+  const focusComposer = !!(location.state as { focusComposer?: boolean } | null)?.focusComposer
   // 关闭宽屏预览后把焦点还给对应的文件卡
   const closePreview = () => {
     document.getElementById(`artifact-${previewId}`)?.focus()
@@ -62,7 +63,8 @@ export function WorkspacePage({ sessionId }: { sessionId?: string }) {
       createdSession.current = id
       // Admit the request before navigation, preserving the draft on failure.
       await askQuestion(id, question, selection, images)
-      if (!sessionId && mounted.current) navigate(`/workspace/${id}`)
+      if (!sessionId && mounted.current)
+        navigate(`/workspace/${id}`, { state: { createdFrom: location.key } })
       return true
     } catch (failure) {
       setOperationError(failure instanceof Error ? failure.message : '发送失败，请重试。')

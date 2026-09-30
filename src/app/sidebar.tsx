@@ -1,6 +1,6 @@
 import { BookOpenIcon, FileTextIcon, MessageSquareIcon, PlusIcon } from 'lucide-react'
-import { NavLink, useNavigate } from 'react-router'
-import { useState } from 'react'
+import { NavLink, useLocation, useNavigate } from 'react-router'
+import { useEffect, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/cn'
 import { createSession, useResearch } from '@/services/research'
@@ -24,19 +24,37 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
   const [creating, setCreating] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const navigate = useNavigate()
+  const location = useLocation()
+  const [previousLocation, setPreviousLocation] = useState(location)
+  const pending = useRef<symbol | null>(null)
+  if (previousLocation !== location) {
+    setPreviousLocation(location)
+    setCreating(false)
+    setError(null)
+  }
+  useEffect(() => {
+    // 侧栏可能一直挂载；每次导航及关闭抽屉都使旧请求的界面操作失效。
+    return () => {
+      pending.current = null
+    }
+  }, [location])
 
   const newResearch = async () => {
     if (creating) return
+    const request = Symbol()
+    pending.current = request
     setCreating(true)
     setError(null)
     try {
       const s = await createSession()
+      if (pending.current !== request) return
       navigate(`/workspace/${s.id}`, { state: { focusComposer: true } })
       onNavigate?.()
     } catch (failure) {
-      setError(failure instanceof Error ? failure.message : '新建失败，请重试。')
+      if (pending.current === request)
+        setError(failure instanceof Error ? failure.message : '新建失败，请重试。')
     } finally {
-      setCreating(false)
+      if (pending.current === request) setCreating(false)
     }
   }
 
