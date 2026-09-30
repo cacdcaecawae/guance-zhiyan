@@ -129,7 +129,10 @@ export function Composer({ onSubmit, busy = false, onStop, children, autoFocus }
                   type="button"
                   aria-label={`移除图片 ${file.name}`}
                   title="移除"
-                  onClick={() => setImages((current) => current.filter((item) => item !== file))}
+                  onClick={() => {
+                    setImages((current) => current.filter((item) => item !== file))
+                    box.current?.focus()
+                  }}
                   className="absolute top-0.5 right-0.5 flex size-5 items-center justify-center rounded-sm border border-popover-border bg-popover text-foreground-subtle outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
                 >
                   <XIcon className="size-3" />
