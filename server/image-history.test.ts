@@ -35,6 +35,10 @@ for (const mode of ['files', 'inline'] as const)
     process.env.DSH_HOME = join(root, 'dsh')
     const requests: WireRequest[] = []
     let uploads = 0
+    let holdStream = false
+    let held: ReadableStreamDefaultController<Uint8Array> | undefined
+    const encode = (items: unknown[]) =>
+      new TextEncoder().encode(items.map((event) => `data: ${JSON.stringify(event)}\n\n`).join(''))
     t.mock.method(
       globalThis,
       'fetch',
@@ -61,9 +65,14 @@ for (const mode of ['files', 'inline'] as const)
         assert.equal(typeof init?.body, 'string')
         requests.push(JSON.parse(init!.body as string) as WireRequest)
         return new Response(
-          events
-            .map((event) => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`)
-            .join(''),
+          holdStream
+            ? new ReadableStream<Uint8Array>({
+                start(controller) {
+                  held = controller
+                  controller.enqueue(encode(events.slice(0, 3)))
+                },
+              })
+            : encode(events),
           { headers: { 'Content-Type': 'text/event-stream' } },
         )
       },
@@ -94,9 +103,65 @@ for (const mode of ['files', 'inline'] as const)
     try {
       const user = store.user('image-history-test', 'Test')
       const session = store.create(user.id)
+      const liveAtSettlement: boolean[] = []
+      agents.ctx.on('session/event', (source, event) => {
+        if (
+          source.id === session.id &&
+          (event.type === 'assistant/message' || event.type === 'assistant/attempt')
+        )
+          liveAtSettlement.push(agents.active.get(session.id)?.live !== undefined)
+      })
       const ask = async (images: Parameters<Agents['start']>[4] = []) => {
         const before = requests.length
         await agents.start(user.id, session.id, '继续分析', undefined, images)
+        if (holdStream) {
+          const waitForText = (text: string) =>
+            new Promise<void>((resolve) => {
+              const check = () => {
+                if (
+                  agents.active
+                    .get(session.id)
+                    ?.live?.chunks.some(
+                      (chunk) => chunk.type === 'text-delta' && chunk.text === text,
+                    )
+                ) {
+                  unsubscribe()
+                  resolve()
+                }
+              }
+              const unsubscribe = agents.subscribe(user.id, session.id, check)
+              check()
+            })
+          const assertLive = async (text: string) => {
+            const snapshot = await agents.snapshot(user.id, session.id)
+            const answer = snapshot.messages.at(-1)
+            assert.ok(answer?.role === 'assistant' && answer.status === 'loading')
+            assert.equal(
+              answer.parts.flatMap((part) => (part.type === 'text' ? [part.text] : [])).join(''),
+              text,
+              'a prior failed attempt at this step must not hide the retry prefix',
+            )
+            const live = snapshot.trace.filter((row) => row.status === 'running')
+            assert.equal(live.length, 1)
+            assert.equal(live[0].text, text)
+          }
+          await waitForText('完成')
+          await assertLive('完成') // Full projection, as on first SSE delivery or reconnect.
+          held!.enqueue(
+            encode([
+              {
+                type: 'content_block_delta',
+                index: 0,
+                delta: { type: 'text_delta', text: '继续' },
+              },
+            ]),
+          )
+          await waitForText('继续')
+          await assertLive('完成继续') // Incremental cached projection.
+          held!.enqueue(encode(events.slice(3)))
+          held!.close()
+          holdStream = false
+        }
         await agents.active.get(session.id)?.done
         const snapshot = await agents.snapshot(user.id, session.id)
         const answer = snapshot.messages.at(-1)
@@ -115,7 +180,20 @@ for (const mode of ['files', 'inline'] as const)
       const original = await agents.image(user.id, session.id, id)
       const charged = store.imageBytes(user.id)
       await ask([{ id }])
+      holdStream = true
       const recovered = await ask([{ id }])
+      const answer = recovered.messages.at(-1)
+      assert.ok(answer?.role === 'assistant')
+      assert.equal(
+        answer.parts.flatMap((part) => (part.type === 'text' ? [part.text] : [])).join(''),
+        '完成继续',
+        'settling the recovered stream must not duplicate its chunks',
+      )
+      assert.ok(liveAtSettlement.length >= 4, 'observe both the failed and recovered attempts')
+      assert.ok(
+        liveAtSettlement.every((live) => !live),
+        'durable settlement replaces live chunks before readers are notified',
+      )
       const offloads = (await agents.events(session.id)).filter(
         (event) => event.type === 'image/offload',
       )

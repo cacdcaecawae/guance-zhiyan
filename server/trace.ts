@@ -28,11 +28,8 @@ export function traceFromEvents(
     events.flatMap((event) => (event.type === 'user/message' ? [event.data.id] : [])),
   )
   const starts = new Map<string, number>()
-  const finished = new Set<string>()
   for (const event of events) {
     if (event.type === 'step/start') starts.set(`${event.data.turn}-${event.data.step}`, event.time)
-    if (event.type === 'assistant/message' || event.type === 'assistant/attempt')
-      finished.add(`${event.data.turn}-${event.data.step}`)
   }
   const tools = new Map<string, TraceEntry>()
   const models = new Map<number, TraceEntry>()
@@ -142,7 +139,7 @@ export function traceFromEvents(
         }
     }
   }
-  if (live && !finished.has(`${live.turn}-${live.step}`)) {
+  if (live) {
     const start = starts.get(`${live.turn}-${live.step}`)
     if (start !== undefined)
       rows.push({

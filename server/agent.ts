@@ -134,7 +134,18 @@ export class Agents {
         [provider.id],
         this.options.adapter ?? modelAdapter(provider.id, () => ctx.get('attachments')),
       )
-    ctx.on('session/event', (session) => this.notify(session.id))
+    ctx.on('session/event', (session, event) => {
+      const run = this.active.get(session.id)
+      // 先用持久事件替换当前流，再通知投影；同一步的重试有自己的新流。
+      if (
+        run?.live &&
+        (event.type === 'assistant/message' || event.type === 'assistant/attempt') &&
+        event.data.turn === run.live.turn &&
+        event.data.step === run.live.step
+      )
+        run.live = undefined
+      this.notify(session.id)
+    })
     ctx.on('agent/assistant-stream', ({ agent, frame }) => {
       const run = this.active.get(agent.session.id)
       if (!run) return
