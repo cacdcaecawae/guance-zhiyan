@@ -1,4 +1,5 @@
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
+import type {} from '@deepseek-ai/dsh-compaction-image-offload/projection'
 import { assembleAssistantStream, type ContentBlock } from '@deepseek-ai/dsh-llm'
 import type { TraceEntry } from '../src/types/index.ts'
 import type { LiveAttempt } from './view.ts'
@@ -27,11 +28,8 @@ export function traceFromEvents(
     events.flatMap((event) => (event.type === 'user/message' ? [event.data.id] : [])),
   )
   const starts = new Map<string, number>()
-  const finished = new Set<string>()
   for (const event of events) {
     if (event.type === 'step/start') starts.set(`${event.data.turn}-${event.data.step}`, event.time)
-    if (event.type === 'assistant/message' || event.type === 'assistant/attempt')
-      finished.add(`${event.data.turn}-${event.data.step}`)
   }
   const tools = new Map<string, TraceEntry>()
   const models = new Map<number, TraceEntry>()
@@ -66,6 +64,16 @@ export function traceFromEvents(
           time: event.time,
         })
       }
+    } else if (event.type === 'image/offload') {
+      const count = event.data.targets.reduce((sum, target) => sum + target.imageIndexes.length, 0)
+      rows.push({
+        id: `event-${event.seq}`,
+        turn,
+        kind: 'context',
+        label: '图片上下文调整',
+        text: `图片超出模型请求上限，已将最早的 ${count} 个图片引用改为文字占位后重试。原图仍可查看；需要模型重新看图时，请重新附图提问。`,
+        time: event.time,
+      })
     } else if (event.type === 'assistant/message' || event.type === 'assistant/attempt') {
       if (event.type === 'assistant/attempt') attempts.add(`event-${event.seq}`)
       const row: TraceEntry = {
@@ -131,7 +139,7 @@ export function traceFromEvents(
         }
     }
   }
-  if (live && !finished.has(`${live.turn}-${live.step}`)) {
+  if (live) {
     const start = starts.get(`${live.turn}-${live.step}`)
     if (start !== undefined)
       rows.push({

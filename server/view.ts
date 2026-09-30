@@ -3,6 +3,7 @@ import { expandAssistantStream, type StreamChunk, type ContentBlock } from '@dee
 import type { AnswerPart, AssistantMessage, ImageAttachment, Message } from '../src/types/index.ts'
 import { RAG_ERRORS } from './rag.ts'
 
+/** Only the current, not-yet-committed attempt; earlier attempts may share its turn and step. */
 export interface LiveAttempt {
   turn: number
   step: number
@@ -166,17 +167,7 @@ export function messagesFromEvents(
         answer.error = reason.reason.reason
     }
   }
-  if (
-    answer &&
-    live &&
-    live.turn === turn &&
-    !events.some(
-      (e) =>
-        (e.type === 'assistant/message' || e.type === 'assistant/attempt') &&
-        e.data.turn === live.turn &&
-        e.data.step === live.step,
-    )
-  ) {
+  if (answer && live && live.turn === turn) {
     appendChunks(answer.parts, live.chunks, `live-${live.step}`, live.step)
   }
   for (const message of messages)

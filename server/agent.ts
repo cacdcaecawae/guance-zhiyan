@@ -2,6 +2,7 @@ import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
 import AgentRegistry, { type AgentHandle } from '@deepseek-ai/dsh-agent'
 import AgentLoop from '@deepseek-ai/dsh-agent-loop'
+import * as ImageOffload from '@deepseek-ai/dsh-compaction-image-offload'
 import {
   isImageAdmissionError,
   type EncodedImageAttachment,
@@ -56,12 +57,17 @@ class CountedAttachmentStore extends LocalAttachmentStore {
   saveCounted(
     inputs: readonly SaveImageAttachment[],
     count: (refs: readonly ImageAttachmentRef[]) => boolean,
+    stopped: () => boolean,
   ) {
     const saved = this.queue.then(async () => {
+      if (stopped()) return
       this.validateImageBatch(inputs)
       const prepared: PreparedImageFile[] = []
-      for (const input of inputs)
+      for (const input of inputs) {
         prepared.push(await prepareImageFile(input, this.imageLimits, this.normalizationPolicy))
+        if (stopped()) return
+      }
+      // 记账是接收边界：之后即使停止也完成写入，由调用方保存可用的提问引用，不启动模型。
       if (!count(prepared.map(({ ref }) => ref)))
         throw new HttpError(413, '图片空间已达上限，请联系管理员。')
       const refs: ImageAttachmentRef[] = []
@@ -120,13 +126,26 @@ export class Agents {
       compression: 'none',
     })
     await ctx.plugin(AgentLoop, { agents: [] })
+    // 图片请求超出适配器预算时，记录旧图片的省略位置并重试；原始消息和图片仍保留。
+    await ctx.plugin(ImageOffload)
     await ctx.plugin(CountedAttachmentStore, { dshHome: join(this.store.root, 'dsh') })
     for (const provider of modelCatalog().providers)
       ctx.llm.registerAdapter(
         [provider.id],
         this.options.adapter ?? modelAdapter(provider.id, () => ctx.get('attachments')),
       )
-    ctx.on('session/event', (session) => this.notify(session.id))
+    ctx.on('session/event', (session, event) => {
+      const run = this.active.get(session.id)
+      // 先用持久事件替换当前流，再通知投影；同一步的重试有自己的新流。
+      if (
+        run?.live &&
+        (event.type === 'assistant/message' || event.type === 'assistant/attempt') &&
+        event.data.turn === run.live.turn &&
+        event.data.step === run.live.step
+      )
+        run.live = undefined
+      this.notify(session.id)
+    })
     ctx.on('agent/assistant-stream', ({ agent, frame }) => {
       const run = this.active.get(agent.session.id)
       if (!run) return
@@ -274,6 +293,7 @@ export class Agents {
                 return { mediaType, data: new Uint8Array(bytes), ...(name && { name }) }
               }),
               (counted) => this.store.addImages(userId, counted, MAX_USER_IMAGE_BYTES),
+              () => run.stopped,
             )
             .catch((error: unknown) => {
               // 存储读写失败不是用户能改正的问题，按服务器错误返回
@@ -287,6 +307,11 @@ export class Agents {
               throw new HttpError(400, messages[error.code] ?? '图片无法读取，请换一张重试。')
             })
         : []
+      if (!saved) {
+        this.active.delete(id)
+        this.notify(id)
+        return
+      }
       const refs = reused.map((ref) => ref ?? saved.shift()!)
       const content = [
         ...refs.map((attachment) => ({ type: 'image' as const, attachment })),
@@ -344,8 +369,19 @@ export class Agents {
             ...(this.options.sandboxes ? { meta: { cwd: '/workspace' } } : {}),
           })
       if (run.stopped) {
+        if (uploads.length) {
+          // 已接收的图片不可遗失引用；只保存提问，不放入会唤醒模型的 inbox。
+          this.store.selectModel(userId, id, selection)
+          this.store.title(userId, id, question || '图片提问')
+          run.handle.agent.session.append(
+            'user/message',
+            createUserMessage({ content, source: { kind: 'user' } }),
+            { surfaceOp: 'append' },
+          )
+        }
         await run.handle.dispose()
         this.active.delete(id)
+        this.notify(id)
         return
       }
       this.store.selectModel(userId, id, selection)
