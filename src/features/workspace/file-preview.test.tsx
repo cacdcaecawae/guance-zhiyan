@@ -24,6 +24,23 @@ it('Markdown 渲染为格式文本，CSV 渲染为表格', async () => {
   expect(screen.getByRole('cell', { name: '面板,多期' })).toBeInTheDocument()
 })
 
+it('CSV 空表头和空值行保留，不把第一条数据提升为表头', async () => {
+  vi.stubGlobal(
+    'fetch',
+    vi.fn().mockResolvedValue(new Response('\uFEFF""\r\n"2026-01"\r\n""\r\n"2026-03"\r\n""')),
+  )
+  render(<FilePreview file={file('csv')} />)
+  expect(await screen.findByRole('cell', { name: '2026-01' })).toBeInTheDocument()
+  expect(screen.getByRole('columnheader')).toBeEmptyDOMElement()
+  expect(screen.getAllByRole('cell').map((cell) => cell.textContent)).toEqual([
+    '2026-01',
+    '',
+    '2026-03',
+    '',
+  ])
+  expect(screen.getAllByRole('row')).toHaveLength(5)
+})
+
 it('不支持的格式与过大文件不请求内容；读取失败可重试', async () => {
   const fetch = vi.fn().mockResolvedValueOnce(new Response('', { status: 500 }))
   vi.stubGlobal('fetch', fetch)
