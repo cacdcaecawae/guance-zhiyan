@@ -21,7 +21,15 @@ function latestCompletedParagraphFirstLine(text: string): string {
   }
 }
 
-export function Reasoning({ text, running }: { text: string; running: boolean }) {
+export function Reasoning({
+  text,
+  running,
+  citations,
+}: {
+  text: string
+  running: boolean
+  citations: readonly string[]
+}) {
   const [open, setOpen] = useState(false)
   const summary = (
     running ? latestCompletedParagraphFirstLine(text) : text.split('\n', 1)[0]
@@ -44,7 +52,7 @@ export function Reasoning({ text, running }: { text: string; running: boolean })
         />
       </summary>
       <div className="mb-2 ml-5 rounded-md bg-surface-hover p-3 text-ui-caption text-foreground-subtle">
-        <Markdown text={text} />
+        <Markdown text={text} citations={citations} />
       </div>
     </details>
   )

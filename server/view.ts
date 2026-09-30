@@ -1,6 +1,7 @@
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import { expandAssistantStream, type StreamChunk, type ContentBlock } from '@deepseek-ai/dsh-llm'
 import type { AnswerPart, AssistantMessage, ImageAttachment, Message } from '../src/types/index.ts'
+import { RAG_ERRORS } from './rag.ts'
 
 export interface LiveAttempt {
   turn: number
@@ -14,6 +15,9 @@ export const imagesOf = (content: readonly ContentBlock[]) =>
 
 export function toolError(code?: string): string {
   const messages: Record<string, string> = {
+    ...RAG_ERRORS,
+    ABORTED: '工具执行已中断。',
+    ABORTED_BEFORE_DISPATCH: '工具执行已中断。',
     FILE_INVALID_NAME: '文件名称或格式无效。',
     FILE_INVALID_CONTENT: '文件内容为空或超过 200 KB。',
     FILE_INVALID_TABLE:
@@ -193,5 +197,40 @@ export function messagesFromEvents(
           part.output = '工具执行已中断。'
         }
     }
+  checkCitations(messages)
   return messages
+}
+
+const PASSAGE = /\/api\/library\/passages\/([0-9a-fA-F-]{36})/g
+
+/** Passage ids from the structured result lines of a library tool, never from passage text. */
+function returnedPassages(output: string) {
+  return output.split('\n').flatMap((line) => {
+    try {
+      const { id, link } = JSON.parse(line)
+      return typeof id === 'string' && link === `/api/library/passages/${id}` ? [id] : []
+    } catch {
+      return [] // Header and notice lines are not JSON.
+    }
+  })
+}
+
+/**
+ * A library citation must point to a passage this session's library tools actually returned.
+ * Any other passage path in answer or reasoning text (invented, copied from passage text, in any
+ * link syntax) is removed, so a link keeps only its label. Idempotent; also applied to streamed
+ * snapshots.
+ */
+export function checkCitations(messages: Message[]) {
+  const returned = new Set<string>()
+  for (const message of messages)
+    if (message.role === 'assistant')
+      for (const part of message.parts)
+        if (part.type === 'tool') {
+          if (part.name.startsWith('library_') && part.status === 'done')
+            for (const id of returnedPassages(part.output)) returned.add(id.toLowerCase())
+        } else
+          part.text = part.text.replace(PASSAGE, (path, id: string) =>
+            returned.has(id.toLowerCase()) ? path : '',
+          )
 }
