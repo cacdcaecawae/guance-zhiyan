@@ -24,3 +24,17 @@ test('跳过空行；字段中间的引号不开启引号模式', () => {
     ['下一行', 'x'],
   ])
 })
+
+test.each(['\n', '\r\n', '\r'])('保留空表头与中间、末尾的引号空字段：%j', (newline) => {
+  const rows = [[''], ['2026-01'], [''], ['2026-03'], ['']]
+  // The file generator quotes every cell and includes a BOM, with no trailing newline.
+  const csv = '\uFEFF' + rows.map(([value]) => `"${value}"`).join(newline)
+  expect(parseCsv(csv)).toEqual(rows)
+  expect(parseCsv(csv + newline)).toEqual(rows)
+  expect(parseCsv(`${newline}""${newline}${newline}`)).toEqual([['']])
+})
+
+test('空引号字段本身也是记录，多个空字段与转义引号保持原值', () => {
+  expect(parseCsv('""')).toEqual([['']])
+  expect(parseCsv('"",\n,""\n""""')).toEqual([['', ''], ['', ''], ['"']])
+})
