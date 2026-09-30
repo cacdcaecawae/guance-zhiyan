@@ -1,14 +1,20 @@
 import remarkGfm from 'remark-gfm'
 import remarkParse from 'remark-parse'
+import remarkRehype from 'remark-rehype'
 import { unified } from 'unified'
 
 const PASSAGE = '/api/library/passages/([0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12})'
 export const passagePath = new RegExp(`^${PASSAGE}$`)
 const passageInText = new RegExp(PASSAGE, 'g')
-// The parser and plugins <Markdown> renders with, so only links that become badges are numbered.
-const parser = unified().use(remarkParse).use(remarkGfm)
+// Match <Markdown>'s conversion: only rendered links count, with footnotes moved to the end.
+const parser = unified().use(remarkParse).use(remarkGfm).use(remarkRehype)
 
-type Node = { type: string; url?: string; identifier?: string; children?: Node[] }
+type Node = {
+  type: string
+  tagName?: string
+  properties?: Record<string, unknown>
+  children?: Node[]
+}
 const walk = (node: Node, visit: (node: Node) => void) => {
   visit(node)
   node.children?.forEach((child) => walk(child, visit))
@@ -28,21 +34,10 @@ export function citationOrder(texts: string[]) {
   const order = new Set<string>()
   if (!checked.size) return []
   for (const text of texts) {
-    const tree: Node = parser.parse(text)
-    const definitions = new Map<string, string>()
+    const tree = parser.runSync(parser.parse(text))
     walk(tree, (node) => {
-      // Markdown renders the first definition of a normalized reference label.
-      if (node.type === 'definition' && !definitions.has(node.identifier!))
-        definitions.set(node.identifier!, node.url!)
-    })
-    walk(tree, (node) => {
-      const url =
-        node.type === 'link'
-          ? node.url
-          : node.type === 'linkReference'
-            ? definitions.get(node.identifier!)
-            : undefined
-      const id = url && passagePath.exec(url)?.[1].toLowerCase()
+      const url = node.type === 'element' && node.tagName === 'a' && node.properties?.href
+      const id = typeof url === 'string' && passagePath.exec(url)?.[1].toLowerCase()
       if (id && checked.has(id)) order.add(id)
     })
   }
