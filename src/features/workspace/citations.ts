@@ -31,7 +31,9 @@ export function citationOrder(texts: string[]) {
     const tree: Node = parser.parse(text)
     const definitions = new Map<string, string>()
     walk(tree, (node) => {
-      if (node.type === 'definition') definitions.set(node.identifier!, node.url!)
+      // Markdown renders the first definition of a normalized reference label.
+      if (node.type === 'definition' && !definitions.has(node.identifier!))
+        definitions.set(node.identifier!, node.url!)
     })
     walk(tree, (node) => {
       const url =

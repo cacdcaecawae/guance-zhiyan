@@ -124,3 +124,33 @@ it('只有显示为角标的引用才占编号：网址里、残缺链接、正�
   expect(screen.getByRole('link', { name: '原文 1' })).toHaveAttribute('href', cited)
   expect(screen.getAllByRole('link').map((link) => link.textContent)).toEqual(['外链', '1'])
 })
+
+it.each(['依据', 'REF', '两个  词'])('重复定义保留首条引用并与实际渲染一致：%s', (label) => {
+  const first = '/api/library/passages/01234567-89ab-5def-a123-456789abcdef'
+  const second = '/api/library/passages/fedcba98-7654-5321-afed-cba987654321'
+  const normalized = label.toLowerCase().replace(/ +/g, ' ')
+  const text = `[原文][${normalized}]，第二处[原文](${second})\n\n[${label}]: ${first}\n[${normalized}]: ${second}`
+  expect(citationOrder([text])).toEqual([
+    '01234567-89ab-5def-a123-456789abcdef',
+    'fedcba98-7654-5321-afed-cba987654321',
+  ])
+  render(checked(text))
+  expect(screen.getByRole('link', { name: '原文 1' })).toHaveAttribute('href', first)
+  expect(screen.getByRole('link', { name: '原文 2' })).toHaveAttribute('href', second)
+})
+
+it('后续被忽略的文献定义不为普通网页链接占用角标编号', () => {
+  const unused = '/api/library/passages/01234567-89ab-5def-a123-456789abcdef'
+  const cited = '/api/library/passages/fedcba98-7654-5321-afed-cba987654321'
+  render(
+    checked(
+      `[网页][ref]，真实文献[原文](${cited})\n\n[ref]: https://example.org/policy\n[ref]: ${unused}`,
+    ),
+  )
+  expect(screen.getByRole('link', { name: '网页' })).toHaveAttribute(
+    'href',
+    'https://example.org/policy',
+  )
+  expect(screen.getByRole('link', { name: '原文 1' })).toHaveAttribute('href', cited)
+  expect(screen.getAllByRole('link')).toHaveLength(2)
+})
