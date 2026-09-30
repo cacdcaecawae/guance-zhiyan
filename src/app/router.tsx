@@ -1,5 +1,13 @@
-import { BrowserRouter, Navigate, Route, Routes, useParams } from 'react-router'
-import { useEffect, type ReactNode } from 'react'
+import {
+  BrowserRouter,
+  Navigate,
+  Route,
+  Routes,
+  useLocation,
+  useNavigationType,
+  useParams,
+} from 'react-router'
+import { useEffect, useState, type ReactNode } from 'react'
 import { initialize, useResearch } from '@/services/research'
 import { Button } from '@/components/ui/button'
 import { ThemeToggle } from './theme-toggle'
@@ -11,8 +19,17 @@ import { Seal } from './logo'
 
 function WorkspaceRoute() {
   const { sessionId } = useParams()
-  // 切换会话时重置草稿和操作错误。
-  return <WorkspacePage key={sessionId} sessionId={sessionId} />
+  const location = useLocation()
+  const navigationType = useNavigationType()
+  const [workspace, setWorkspace] = useState({ location, key: 0 })
+  if (workspace.location !== location) {
+    // 仅首次发送的自动跳转延续工作区；普通导航和历史前进 / 后退均重置草稿。
+    const promoted =
+      navigationType === 'PUSH' &&
+      (location.state as { createdFrom?: string } | null)?.createdFrom === workspace.location.key
+    setWorkspace({ location, key: workspace.key + (promoted ? 0 : 1) })
+  }
+  return <WorkspacePage key={workspace.key} sessionId={sessionId} />
 }
 
 export function AppRouter() {
@@ -22,8 +39,7 @@ export function AppRouter() {
         <Routes>
           <Route element={<AppShell />}>
             <Route index element={<Navigate to="/workspace" replace />} />
-            <Route path="/workspace" element={<WorkspaceRoute />} />
-            <Route path="/workspace/:sessionId" element={<WorkspaceRoute />} />
+            <Route path="/workspace/:sessionId?" element={<WorkspaceRoute />} />
             <Route path="/library" element={<LibraryPage />} />
             <Route path="/outputs" element={<OutputsPage />} />
             <Route path="*" element={<Navigate to="/workspace" replace />} />
