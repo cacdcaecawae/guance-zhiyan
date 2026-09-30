@@ -8,16 +8,14 @@ import type { Passage } from './rag-store.ts'
 
 export type Library = Pick<KnowledgeLibrary, 'available' | 'retrieve' | 'neighbors'>
 
-/** Per tool result; about 5K tokens, so a few searches fit alongside the conversation. */
+/** Per tool result; a required passage stays whole even if its serialization exceeds this. */
 const MAX_CHARS = 6000
 
 const GUIDE = `共享文献库（管理员导入的政策、规划等文件）通过 library_search 按需检索。涉及政策、规划、法规、标准等资料的问题，先检索再回答，结果不足时换关键词再检索；陈述文献中的事实只依据检索返回的片段，并用 [原文](链接) 引用，链接只能使用工具返回的 link；需要某个片段的前后文时调用 library_open；标有 superseded 的片段已被新版本替代，不作为现行规定引用。检索不到或片段不足以回答时，明确说明未在文献库中找到，不凭记忆编造。闲聊和一般常识不必检索。联网资料与文献库证据分开说明。`
 
-function render(passages: Passage[], header: string) {
-  const lines = [header]
-  let spent = 0
-  for (const [index, passage] of passages.entries()) {
-    const line = JSON.stringify({
+function render(passages: Passage[], header: string, requiredId?: string) {
+  const rendered = passages.map((passage) =>
+    JSON.stringify({
       id: passage.id,
       link: `/api/library/passages/${passage.id}`,
       title: passage.title,
@@ -26,14 +24,25 @@ function render(passages: Passage[], header: string) {
       // library_open can reach versions that a later import replaced.
       ...(passage.current === 0 ? { superseded: true } : {}),
       text: passage.text,
-    })
-    if (spent > 0 && spent + line.length > MAX_CHARS) {
-      lines.push(`（另有 ${passages.length - index} 个片段因长度限制未展开。）`)
-      break
+    }),
+  )
+  const required = passages.findIndex((passage) => passage.id === requiredId)
+  if (requiredId && required < 0) throw reject('RAG_PASSAGE_NOT_FOUND')
+  const lines = [header]
+  // Reserve the requested passage before spending the remaining budget on its neighbors.
+  let spent = required < 0 ? 0 : rendered[required].length
+  for (const [index, line] of rendered.entries()) {
+    if (index !== required) {
+      if (spent > 0 && spent + line.length > MAX_CHARS) {
+        if (required < 0) break // Search keeps the highest-ranked prefix.
+        continue
+      }
+      spent += line.length
     }
     lines.push(line)
-    spent += line.length
   }
+  const omitted = passages.length - (lines.length - 1)
+  if (omitted) lines.push(`（另有 ${omitted} 个片段因长度限制未展开。）`)
   return lines.join('\n')
 }
 
@@ -90,7 +99,7 @@ export function registerLibrary(ctx: Context, library: Library) {
           const id = args.id.trim().toLowerCase()
           if (!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(id))
             throw reject('RAG_PASSAGE_NOT_FOUND')
-          return render(library.neighbors(id, 1, 1), '原文片段及相邻内容（每行一个片段）：')
+          return render(library.neighbors(id, 1, 1), '原文片段及相邻内容（每行一个片段）：', id)
         } catch (error) {
           failure(error, exec.signal)
         }

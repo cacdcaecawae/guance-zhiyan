@@ -142,6 +142,106 @@ test('library tools are offered only with content; the model searches on demand 
   }
 })
 
+test('library_open retains the requested passage, budgets neighbors and preserves source order', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'gczy-rag-open-test-'))
+  const store = new Store(root)
+  const sources = new LibraryStore(store)
+  const headings = (character: string) =>
+    [1, 2, 3, 4].map((level) => '#'.repeat(level) + ' ' + character.repeat(115 - level)).join('\n')
+  const publish = (id: string, title: string, text: string) => {
+    const staged = sources.stage({ id, title, text })
+    sources.publish(staged.versionId, null)
+    return staged.chunks
+  }
+  const ordinary = publish('ordinary', '测试文献', '测试'.repeat(3680))
+  const long = publish('long', '长'.repeat(1000), headings('节') + '\n' + '文'.repeat(6892))
+  const shortTail = publish(
+    'short-tail',
+    '长'.repeat(1000),
+    headings('节') + '\n' + '文'.repeat(6000),
+  )
+  const escaped = publish('escaped', '"'.repeat(1000), headings('"') + '\n' + '"'.repeat(6892))
+  const model = new TestModel((request) => {
+    if (request.messages.at(-1)?.role === 'tool') return textChunks('已查看返回的片段。')
+    const input = lastText(request)
+    return input === 'search'
+      ? toolChunks('library_search', { query: '测试' })
+      : toolChunks('library_open', { id: input })
+  })
+  const agents = await new Agents(store, {
+    adapter: model,
+    library: {
+      available: () => true,
+      retrieve: async () => shortTail,
+      neighbors: (id, before, after) => sources.neighbors(id, before, after),
+    },
+  }).init()
+  try {
+    const user = store.user('test-rag-open', 'Test')
+    const run = async (input: string) => {
+      const session = store.create(user.id)
+      await agents.start(user.id, session.id, input)
+      await agents.active.get(session.id)?.done
+      return { session, output: lastText(model.requests.at(-1)!) }
+    }
+    const check = (output: string, expected: Passage[], omitted: number) => {
+      const lines = output.split('\n').filter((line) => line.startsWith('{'))
+      const returned = lines.map((line) => JSON.parse(line) as Passage & { link: string })
+      assert.deepEqual(
+        returned.map((passage) => passage.id),
+        expected.map((passage) => passage.id),
+      )
+      for (const [index, passage] of returned.entries()) {
+        assert.equal(passage.link, `/api/library/passages/${expected[index].id}`)
+        assert.equal(passage.text, expected[index].text, 'passages remain whole')
+        assert.equal(passage.title, expected[index].title)
+        assert.equal(passage.heading, expected[index].heading)
+      }
+      if (omitted) assert.ok(output.endsWith(`（另有 ${omitted} 个片段因长度限制未展开。）`))
+      else assert.ok(!output.includes('因长度限制未展开'))
+      return lines.reduce((length, line) => length + line.length, 0)
+    }
+
+    // The target is first, in the middle, or last in the available neighbor window.
+    for (const passages of [ordinary, long]) {
+      assert.equal(passages.length, 5)
+      for (const index of [0, 2, 4]) {
+        const target = passages[index]
+        const neighbors = sources.neighbors(target.id, 1, 1)
+        const expected = passages === ordinary ? neighbors : [target]
+        const { output } = await run(` ${target.id.toUpperCase()} `)
+        assert.ok(check(output, expected, neighbors.length - expected.length) <= 6000)
+      }
+    }
+
+    // An oversized earlier neighbor must not prevent a later, smaller neighbor from fitting.
+    const { output: tail } = await run(shortTail[3].id)
+    assert.ok(check(tail, shortTail.slice(3), 1) <= 6000)
+    // JSON escaping can make even one valid passage exceed the soft budget.
+    const { output: oversized } = await run(escaped[2].id)
+    assert.ok(check(oversized, [escaped[2]], 2) > 6000)
+
+    // Search still returns a relevance-ranked prefix, not smaller lower-ranked passages.
+    const { output: search } = await run('search')
+    check(search, [shortTail[0]], shortTail.length - 1)
+
+    const { session, output: missing } = await run(INVENTED)
+    assert.match(missing, /没有找到该原文片段/)
+    assert.ok(!missing.includes('/api/library/passages/'))
+    const answer = (await agents.snapshot(user.id, session.id)).messages.at(-1)
+    assert.ok(answer?.role === 'assistant')
+    const tool = answer.parts.find((part) => part.type === 'tool')
+    assert.ok(tool?.type === 'tool' && tool.status === 'error')
+    assert.equal(tool.output, RAG_ERRORS.RAG_PASSAGE_NOT_FOUND)
+  } finally {
+    await agents.close()
+    store.close()
+    assert.ok(resolve(root).startsWith(resolve(tmpdir()) + sep))
+    assert.ok(basename(root).startsWith('gczy-rag-open-test-'))
+    await rm(root, { recursive: true })
+  }
+})
+
 test('library search cancellation and failures stay tool-level, truthful and free of internal detail', async () => {
   const root = await mkdtemp(join(tmpdir(), 'gczy-rag-cancel-test-'))
   const store = new Store(root)
