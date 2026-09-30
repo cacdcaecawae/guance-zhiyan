@@ -112,7 +112,7 @@ export function MessageList({
                           width={image.width}
                           height={image.height}
                           loading="lazy"
-                          className="h-auto max-h-40 w-auto max-w-full rounded-xl border border-card-border bg-card"
+                          className="h-40 w-auto max-w-full rounded-xl border border-card-border bg-card object-contain"
                         />
                       </a>
                     </li>

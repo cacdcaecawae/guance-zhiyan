@@ -246,6 +246,9 @@ test('上传图片随问题发送，气泡上方显示原图，刷新保留，�
   await expect(form.getByRole('img')).toHaveCount(0)
   const attached = page.getByRole('list', { name: '问题附图' })
   await expect(attached.getByRole('img', { name: '表格.png' })).toHaveJSProperty('naturalWidth', 1)
+  // 1×1 的图也按固定高度显示，不会只剩一个像素
+  const shown = await attached.getByRole('img', { name: '表格.png' }).boundingBox()
+  expect(shown!.height).toBeCloseTo(160, 0)
   await expect(page.getByRole('alert')).toContainText('失败')
   await page.reload()
   await expect(attached.getByRole('img', { name: '表格.png' })).toHaveJSProperty('naturalWidth', 1)

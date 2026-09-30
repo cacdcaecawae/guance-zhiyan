@@ -10,17 +10,16 @@ import { authenticate as defaultAuthenticate, type Authenticate } from './auth.t
 import { sessionChanges, type SessionFrame } from '../src/services/session-stream.ts'
 import type { Session } from '../src/types/index.ts'
 
-// 提问可附带 base64 图片：约 30 MB 原图；其他请求只有少量 JSON
+// 只有提问读取正文，可附带 base64 图片：约 30 MB 原图
 const MAX_MESSAGE_BODY = 40_000_000
-async function body(request: IncomingMessage, limit = 32000) {
+async function body(request: IncomingMessage) {
   if (!request.headers['content-type']?.startsWith('application/json'))
     throw new HttpError(415, '请求必须为 JSON。')
   const chunks: Buffer[] = []
   let size = 0
   for await (const chunk of request) {
     size += chunk.length
-    if (size > limit)
-      throw new HttpError(413, limit > 32000 ? '图片合计不能超过 30 MB。' : '请求过大。')
+    if (size > MAX_MESSAGE_BODY) throw new HttpError(413, '图片合计不能超过 30 MB。')
     chunks.push(chunk)
   }
   try {
@@ -58,6 +57,11 @@ export function createApp(
     response.setHeader('X-Content-Type-Options', 'nosniff')
     response.setHeader('Referrer-Policy', 'no-referrer')
     response.setHeader('X-Frame-Options', 'DENY')
+    // 请求须在 30 秒内收完；只有已登录用户向自己会话提问时放宽到 server.requestTimeout，
+    // 慢速上行也能传完附图，未登录或其他请求不能借此长时间占住连接
+    const deadline = setTimeout(() => {
+      if (!request.complete) request.destroy()
+    }, 30000).unref()
     try {
       const url = new URL(request.url ?? '/', 'http://localhost')
       const path = url.pathname
@@ -190,18 +194,15 @@ export function createApp(
           throw new HttpError(404, '没有找到图片。')
         }
         const { ref, data } = await agents.image(user.id, id, key)
-        response.writeHead(200, {
-          'Content-Type': ref.mediaType,
-          'Content-Length': data.length,
-          // 附件按内容寻址、不可变
-          'Cache-Control': 'private, max-age=31536000, immutable',
-        })
+        // 沿用全站 no-store：同一浏览器换用户后，旧图也要重新经过归属检查
+        response.writeHead(200, { 'Content-Type': ref.mediaType, 'Content-Length': data.length })
         return response.end(data)
       }
       if (!action && !image && request.method === 'GET')
         return json(response, 200, await agents.snapshot(user.id, id))
       if (action === 'messages' && request.method === 'POST') {
-        const input = await body(request, MAX_MESSAGE_BODY)
+        clearTimeout(deadline)
+        const input = await body(request)
         const images = input && typeof input === 'object' && 'images' in input ? input.images : []
         if (
           !Array.isArray(images) ||
@@ -305,7 +306,8 @@ export function createApp(
         })
     }
   })
-  server.requestTimeout = 30000
+  // 提问正文最大 40 MB，约 1 Mbps 上行需 300 秒；其他请求由处理函数开头的 30 秒时限约束
+  server.requestTimeout = 300_000
   server.headersTimeout = 15000
   return server
 }

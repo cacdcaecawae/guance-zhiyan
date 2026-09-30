@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve, sep } from 'node:path'
 import { once } from 'node:events'
 import { createServer } from 'node:http'
+import { connect, type Socket } from 'node:net'
 import { DatabaseSync } from 'node:sqlite'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { DEFAULT_MAX_TOKENS } from '@deepseek-ai/dsh-llm-deepseek'
@@ -741,7 +742,22 @@ test('HTTP: authentication, ownership, request boundaries and file download', as
     const picture = await fetch(`${base}/api/sessions/${id}${imagePath}`, { headers })
     assert.equal(picture.status, 200)
     assert.match(picture.headers.get('content-type')!, /^image\//)
+    assert.equal(picture.headers.get('cache-control'), 'no-store', 'every read is checked again')
     assert.ok((await picture.arrayBuffer()).byteLength > 0)
+    // 附图按人累计计入配额：超额时整条附图提问被拒、不记账，纯文字提问不受影响
+    const alice = store.user('alice', 'Test')
+    assert.ok(store.imageBytes(alice.id) > 0, 'the stored image is counted')
+    store.addImages(alice.id, [{ attachmentId: 'test-filler', bytes: 200 * 2 ** 20 }])
+    const used = store.imageBytes(alice.id)
+    const full = await ask({
+      question: '再看一张',
+      images: [{ mediaType: 'image/png', data: png }],
+    })
+    assert.equal(full.status, 413)
+    assert.match(((await full.json()) as { error: string }).error, /图片空间已达上限/)
+    assert.equal(store.imageBytes(alice.id), used)
+    assert.equal((await ask({ question: '只问文字' })).status, 202)
+    await agents.active.get(id)?.done
     const other = (await (
       await fetch(base + '/api/sessions', { method: 'POST', headers })
     ).json()) as { id: string }
@@ -770,6 +786,60 @@ test('HTTP: authentication, ownership, request boundaries and file download', as
     await agents.close()
     store.close()
     assert.ok(resolve(root).startsWith(resolve(tmpdir()) + sep) && root.includes('gczy-http-test-'))
+    await rm(root, { recursive: true })
+  }
+})
+
+test('HTTP: only a signed-in question may take longer than 30 seconds to upload', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'gczy-http-test-'))
+  const store = new Store(root)
+  const agents = await new Agents(store, {
+    adapter: new TestModel(() => textChunks('hello')),
+  }).init()
+  const server = createApp(store, agents, {
+    authenticate: async (req) =>
+      req.headers['x-test-user'] === 'alice' ? { subject: 'alice', name: 'Test' } : undefined,
+  })
+  const accepted: Socket[] = []
+  server.on('connection', (socket: Socket) => accepted.push(socket))
+  server.listen(0, '127.0.0.1')
+  await once(server, 'listening')
+  const address = server.address()
+  assert.ok(address && typeof address !== 'string')
+  const { port } = address
+  const { id } = store.create(store.user('alice', 'Test').id)
+  // 只发请求头、不发正文，收到第一段回应后再推进时钟
+  const upload = async (headers: string) => {
+    const socket = connect(port, '127.0.0.1')
+    socket.write(
+      `POST /api/sessions/${id}/messages HTTP/1.1\r\nHost: test\r\nContent-Type: application/json\r\nContent-Length: 16\r\n${headers}\r\n`,
+    )
+    const [reply] = await once(socket, 'data')
+    return { socket, reply: String(reply), accepted: accepted.at(-1)! }
+  }
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  try {
+    const stranger = await upload('')
+    assert.match(stranger.reply, /^HTTP\/1\.1 401/)
+    assert.ok(!stranger.accepted.destroyed)
+    t.mock.timers.tick(30000)
+    assert.ok(stranger.accepted.destroyed, 'an unfinished request is closed after 30 seconds')
+    stranger.socket.destroy()
+    // 客户端收到 100 Continue 时，处理函数已在同一轮事件中完成登录与会话归属检查、进入提问路由
+    const alice = await upload('x-test-user: alice\r\nExpect: 100-continue\r\n')
+    assert.match(alice.reply, /^HTTP\/1\.1 100/)
+    t.mock.timers.tick(30000)
+    assert.ok(!alice.accepted.destroyed, 'a signed-in question keeps uploading')
+    alice.socket.write('{"question":" "}')
+    const [reply] = await once(alice.socket, 'data')
+    assert.match(String(reply), /^HTTP\/1\.1 400/)
+    alice.socket.destroy()
+  } finally {
+    t.mock.timers.reset()
+    server.closeAllConnections()
+    await new Promise<void>((resolveClose) => server.close(() => resolveClose()))
+    await agents.close()
+    store.close()
     await rm(root, { recursive: true })
   }
 })
