@@ -282,3 +282,28 @@ test('下载保留含单引号、中文、空格及括号的成果文件名', as
   expect(download.suggestedFilename()).toBe(name)
   expect(await download.failure()).toBeNull()
 })
+
+test('键盘往返脚注保留草稿，多条回答的同名脚注互不串跳', async ({ page }) => {
+  await page.goto('/workspace')
+  const box = page.getByRole('textbox', { name: '研究问题' })
+  for (let i = 1; i <= 2; i++) {
+    await box.fill('脚注测试')
+    await page.getByRole('button', { name: '发送', exact: true }).click()
+    await expect(page.getByRole('link', { name: '脚注 1', exact: true })).toHaveCount(i)
+    await expect(page.getByRole('combobox', { name: '模型' })).toBeEnabled()
+  }
+  await box.fill('还没有发送的下一问')
+  const url = page.url()
+  const references = page.getByRole('link', { name: '脚注 1', exact: true })
+  const firstTarget = await references.nth(0).getAttribute('href')
+  const target = await references.nth(1).getAttribute('href')
+  expect(target).not.toBe(firstTarget)
+  await references.nth(1).focus()
+  await page.keyboard.press('Enter')
+  await expect(page.locator(`li[id="${target!.slice(1)}"]`)).toBeFocused()
+  await page.getByRole('link', { name: '返回脚注 1', exact: true }).nth(1).focus()
+  await page.keyboard.press('Enter')
+  await expect(references.nth(1)).toBeFocused()
+  await expect(box).toHaveValue('还没有发送的下一问')
+  await expect(page).toHaveURL(url)
+})

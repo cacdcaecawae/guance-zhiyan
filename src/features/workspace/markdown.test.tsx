@@ -166,9 +166,11 @@ it.each([
   ],
 ])('%s 不占用原文编号', (_name, text) => {
   render(checked(text))
-  expect(screen.getAllByRole('link').map((link) => link.getAttribute('aria-label'))).toEqual([
-    '原文 1',
-  ])
+  expect(
+    screen
+      .getAllByRole('link', { name: /^原文 \d+$/ })
+      .map((link) => link.getAttribute('aria-label')),
+  ).toEqual(['原文 1'])
   expect(screen.getByRole('link', { name: '原文 1' })).toHaveAttribute('href', footnoteSecond)
   expect(citationOrder([text])).toEqual(['fedcba98-7654-5321-afed-cba987654321'])
 })
@@ -176,7 +178,7 @@ it.each([
 it('源码前置的已引用脚注在文末显示，原文编号按正文再脚注排列', () => {
   const text = `[^note]: [原文](${footnoteFirst})\n\n正文[^note] [原文](${footnoteSecond})`
   render(checked(text))
-  const links = screen.getAllByRole('link')
+  const links = screen.getAllByRole('link', { name: /^原文 \d+$/ })
   expect(links.map((link) => link.getAttribute('href'))).toEqual([footnoteSecond, footnoteFirst])
   expect(links.map((link) => link.getAttribute('aria-label'))).toEqual(['原文 1', '原文 2'])
   expect(citationOrder([text])).toEqual([
@@ -188,7 +190,7 @@ it('源码前置的已引用脚注在文末显示，原文编号按正文再脚�
 it('多条脚注按引用顺序显示，同一片段在正文和脚注复用编号', () => {
   const text = `[^a]: [原文](${footnoteFirst})\n\n[^b]: [原文](${footnoteSecond})\n\n正文先引用[^b]，再引用[^a]，正文还引用[原文](${footnoteSecond})`
   render(checked(text))
-  const links = screen.getAllByRole('link')
+  const links = screen.getAllByRole('link', { name: /^原文 \d+$/ })
   expect(links.map((link) => link.getAttribute('href'))).toEqual([
     footnoteSecond,
     footnoteSecond,
@@ -204,7 +206,7 @@ it('多条脚注按引用顺序显示，同一片段在正文和脚注复用编�
 it('嵌套脚注的原文编号仍按实际显示顺序排列', () => {
   const text = `[^inner]: [原文](${footnoteFirst})\n\n[^outer]: [原文](${footnoteSecond})，另见[^inner]\n\n正文[^outer]`
   render(checked(text))
-  const links = screen.getAllByRole('link')
+  const links = screen.getAllByRole('link', { name: /^原文 \d+$/ })
   expect(links.map((link) => link.getAttribute('href'))).toEqual([footnoteSecond, footnoteFirst])
   expect(links.map((link) => link.getAttribute('aria-label'))).toEqual(['原文 1', '原文 2'])
 })
@@ -213,6 +215,6 @@ it('未使用脚注内的普通引用定义仍可解析正文链接', () => {
   const text = `[^unused]: 注释\n\n    [ref]: ${footnoteFirst}\n\n正文[原文][ref]`
   render(checked(text))
   expect(citationOrder([text])).toEqual(['01234567-89ab-5def-a123-456789abcdef'])
-  expect(screen.getAllByRole('link')).toHaveLength(1)
+  expect(screen.getAllByRole('link', { name: /^原文 \d+$/ })).toHaveLength(1)
   expect(screen.getByRole('link', { name: '原文 1' })).toHaveAttribute('href', footnoteFirst)
 })
