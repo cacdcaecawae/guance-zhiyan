@@ -20,6 +20,7 @@ import SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
 import SessionPersistence from '@deepseek-ai/dsh-session-persistence-jsonl'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import ToolRuntime from '@deepseek-ai/dsh-tools'
+import * as ToolTimeout from '@deepseek-ai/dsh-tool-call-timeout-policy'
 import WebRuntime from '@deepseek-ai/dsh-web'
 import * as WebFetch from '@deepseek-ai/dsh-web-fetch-http'
 import * as WebSearch from '@deepseek-ai/dsh-web-search-deepseek'
@@ -120,6 +121,8 @@ export class Agents {
     await ctx.plugin(SessionProjectionRegistry)
     await ctx.plugin(SystemPrompt, { personaPrefix: PERSONA, includeRuntimeContext: false })
     await ctx.plugin(ToolRuntime)
+    // 仅执行工具自己声明的单次时限；未声明时限的工具和整轮任务不另加上限。
+    await ctx.plugin(ToolTimeout)
     await ctx.plugin(AgentRegistry)
     await ctx.plugin(SessionPersistence, {
       root: join(this.store.root, 'sessions'),
