@@ -18,6 +18,7 @@ export function toolError(code?: string): string {
     ...RAG_ERRORS,
     ABORTED: '工具执行已中断。',
     ABORTED_BEFORE_DISPATCH: '工具执行已中断。',
+    TOOL_TIMEOUT: '工具执行超时，请重试或更换来源。',
     FILE_INVALID_NAME: '文件名称或格式无效。',
     FILE_INVALID_CONTENT: '文件内容为空或超过 200 KB。',
     FILE_INVALID_TABLE:
