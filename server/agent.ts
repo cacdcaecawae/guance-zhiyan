@@ -2,6 +2,7 @@ import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
 import AgentRegistry, { type AgentHandle } from '@deepseek-ai/dsh-agent'
 import AgentLoop from '@deepseek-ai/dsh-agent-loop'
+import * as ImageOffload from '@deepseek-ai/dsh-compaction-image-offload'
 import {
   isImageAdmissionError,
   type EncodedImageAttachment,
@@ -120,6 +121,8 @@ export class Agents {
       compression: 'none',
     })
     await ctx.plugin(AgentLoop, { agents: [] })
+    // 图片请求超出适配器预算时，记录旧图片的省略位置并重试；原始消息和图片仍保留。
+    await ctx.plugin(ImageOffload)
     await ctx.plugin(CountedAttachmentStore, { dshHome: join(this.store.root, 'dsh') })
     for (const provider of modelCatalog().providers)
       ctx.llm.registerAdapter(

@@ -33,6 +33,7 @@
     "@deepseek-ai/dsh-agent-loop": "0.1.7-rc.1",
     "@deepseek-ai/dsh-attachment": "0.1.7-rc.1",
     "@deepseek-ai/dsh-attachment-local": "0.1.7-rc.1",
+    "@deepseek-ai/dsh-compaction-image-offload": "0.1.7-rc.1",
     "@deepseek-ai/dsh-fs": "0.1.7-rc.1",
     "@deepseek-ai/dsh-fs-local": "0.1.7-rc.1",
     "@deepseek-ai/dsh-http-proxy": "0.1.7-rc.1",
