@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtemp, readFile, rm, chmod, stat } from 'node:fs/promises'
+import { mkdtemp, readFile, readdir, rm, chmod, stat } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve, sep } from 'node:path'
 import { once } from 'node:events'
@@ -747,7 +747,7 @@ test('HTTP: authentication, ownership, request boundaries and file download', as
     // 附图按人累计计入配额：超额时整条附图提问被拒、不记账，纯文字提问不受影响
     const alice = store.user('alice', 'Test')
     assert.ok(store.imageBytes(alice.id) > 0, 'the stored image is counted')
-    store.addImages(alice.id, [{ attachmentId: 'test-filler', bytes: 200 * 2 ** 20 }])
+    store.addImages(alice.id, [{ attachmentId: 'test-filler', bytes: 200 * 2 ** 20 }], Infinity)
     const used = store.imageBytes(alice.id)
     const full = await ask({
       question: '再看一张',
@@ -786,6 +786,46 @@ test('HTTP: authentication, ownership, request boundaries and file download', as
     await agents.close()
     store.close()
     assert.ok(resolve(root).startsWith(resolve(tmpdir()) + sep) && root.includes('gczy-http-test-'))
+    await rm(root, { recursive: true })
+  }
+})
+
+test('question images count by their stored size and are never written past the quota', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'gczy-quota-test-'))
+  const store = new Store(root)
+  const agents = await new Agents(store, {
+    adapter: new TestModel(() => textChunks('ok')),
+  }).init()
+  try {
+    const user = store.user('quota-test', 'Test')
+    const session = store.create(user.id)
+    const limit = 200 * 2 ** 20
+    // 1×1 黑色 GIF 上传只有 35 字节，规范化后存成更大的 JPEG
+    const gif = {
+      mediaType: 'image/gif' as const,
+      data: 'R0lGODlhAQABAIAAAAAAAAAAACwAAAAAAQABAAACAkQBADs=',
+    }
+    const saved = () =>
+      readdir(join(root, 'dsh', 'attachments'), { recursive: true }).catch(() => [])
+    store.addImages(user.id, [{ attachmentId: 'filler', bytes: limit - 100 }], limit)
+    const before = await saved()
+    await assert.rejects(agents.start(user.id, session.id, '', undefined, [gif]), { status: 413 })
+    assert.equal(store.imageBytes(user.id), limit - 100, 'a refused image is not counted')
+    assert.deepEqual(await saved(), before, 'a refused image is not written')
+    store.db.prepare("UPDATE images SET bytes=? WHERE id='filler'").run(limit - 10_000)
+    for (const question of ['第一次', '同一张图再发一次']) {
+      await agents.start(user.id, session.id, question, undefined, [gif])
+      await agents.active.get(session.id)?.done
+    }
+    const [image] = (await agents.snapshot(user.id, session.id)).messages.flatMap((message) =>
+      message.role === 'user' ? (message.images ?? []) : [],
+    )
+    const { data } = await agents.image(user.id, session.id, image.id)
+    assert.ok(data.byteLength > 100, 'the stored image is larger than the room left before')
+    assert.equal(store.imageBytes(user.id), limit - 10_000 + data.byteLength, 'counted once')
+  } finally {
+    await agents.close()
+    store.close()
     await rm(root, { recursive: true })
   }
 })

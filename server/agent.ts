@@ -2,8 +2,17 @@ import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
 import AgentRegistry, { type AgentHandle } from '@deepseek-ai/dsh-agent'
 import AgentLoop from '@deepseek-ai/dsh-agent-loop'
-import { isImageAdmissionError, type EncodedImageAttachment } from '@deepseek-ai/dsh-attachment'
-import LocalAttachmentStore from '@deepseek-ai/dsh-attachment-local'
+import {
+  isImageAdmissionError,
+  type EncodedImageAttachment,
+  type ImageAttachmentRef,
+  type SaveImageAttachment,
+} from '@deepseek-ai/dsh-attachment'
+import LocalAttachmentStore, {
+  commitPreparedImageFile,
+  prepareImageFile,
+  type PreparedImageFile,
+} from '@deepseek-ai/dsh-attachment-local'
 import LlmRuntime, { createUserMessage, type LlmAdapter } from '@deepseek-ai/dsh-llm'
 import SessionStore, { SessionId, type SessionEvent } from '@deepseek-ai/dsh-session'
 import SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
@@ -38,6 +47,31 @@ const PERSONA = `你是管策智研的政策研究助手。根据真实资料回
 多步骤任务简要说明进度；失败如实说明，不伪造成功。`
 /** 每人问题附图的累计上限：已存图片不会删除。 */
 const MAX_USER_IMAGE_BYTES = 200 * 2 ** 20
+
+/** DSH 本地附件存储，另加一种入库方式：一批图片全部规范化后先交给 count 按实际大小记账，通过才写入。 */
+class CountedAttachmentStore extends LocalAttachmentStore {
+  // 这条路径不经过父类的压缩并发限制，改为排队，同一时间只规范化一批图片
+  // ponytail: 全进程排队；多人同时大量附图变慢时，改为限定并发的队列
+  private queue: Promise<unknown> = Promise.resolve()
+  saveCounted(
+    inputs: readonly SaveImageAttachment[],
+    count: (refs: readonly ImageAttachmentRef[]) => boolean,
+  ) {
+    const saved = this.queue.then(async () => {
+      this.validateImageBatch(inputs)
+      const prepared: PreparedImageFile[] = []
+      for (const input of inputs)
+        prepared.push(await prepareImageFile(input, this.imageLimits, this.normalizationPolicy))
+      if (!count(prepared.map(({ ref }) => ref)))
+        throw new HttpError(413, '图片空间已达上限，请联系管理员。')
+      const refs: ImageAttachmentRef[] = []
+      for (const image of prepared) refs.push(await commitPreparedImageFile(this.root, image))
+      return refs
+    })
+    this.queue = saved.catch(() => {})
+    return saved
+  }
+}
 
 interface ActiveRun {
   ready: Promise<void>
@@ -86,7 +120,7 @@ export class Agents {
       compression: 'none',
     })
     await ctx.plugin(AgentLoop, { agents: [] })
-    await ctx.plugin(LocalAttachmentStore, { dshHome: join(this.store.root, 'dsh') })
+    await ctx.plugin(CountedAttachmentStore, { dshHome: join(this.store.root, 'dsh') })
     for (const provider of modelCatalog().providers)
       ctx.llm.registerAdapter(
         [provider.id],
@@ -212,38 +246,39 @@ export class Agents {
     const run: ActiveRun = { ready: ready.promise, stopped: false }
     this.active.set(id, run)
     try {
-      // 入库前按上传大小预检配额（重发已存的图也计入，宁可偏严），超额时图片不写入；
-      // 入库后按实际存储大小记账，同一张图每人只计一次。
-      // ponytail: 同一用户的几个会话同时提问时，每个会话最多超出一条消息的图片；需要严格时改为入库前加锁
-      const incoming = images.reduce((sum, image) => sum + (image.data.length * 3) / 4, 0)
-      if (incoming && this.store.imageBytes(userId) + incoming > MAX_USER_IMAGE_BYTES)
-        throw new HttpError(413, '图片空间已达上限，请联系管理员。')
-      // 图片先校验并持久保存，全部成功才写入用户消息；任何一张被拒绝整条消息失败。
-      const content = await this.ctx.attachments
-        .admitPromptContent([
-          // 只取这三个字段：客户端多传的 type / attachment 不能冒充已存附件
-          ...images.map(({ mediaType, data, name }) => ({
-            type: 'image' as const,
-            mediaType,
-            data,
-            ...(name && { name }),
-          })),
-          ...(question ? [{ type: 'text' as const, text: question }] : []),
-        ])
-        .catch((error: unknown) => {
-          // 存储读写失败不是用户能改正的问题，按服务器错误返回
-          if (!isImageAdmissionError(error)) throw error
-          const limits = this.ctx.attachments.imageLimits
-          const messages: Record<string, string> = {
-            TOO_MANY_IMAGES: `一次最多上传 ${limits.maxImagesPerMessage} 张图片。`,
-            UNSUPPORTED_IMAGE_TYPE: '仅支持 PNG、JPEG、WebP 和 GIF 图片。',
-            IMAGE_TOO_LARGE: `单张图片不能超过 ${limits.maxImageBytes / 2 ** 20} MB。`,
-            IMAGE_TOO_MANY_PIXELS: '图片尺寸过大，请缩小后重试。',
-            IMAGE_DIMENSION_TOO_LARGE: '图片尺寸过大，请缩小后重试。',
-          }
-          throw new HttpError(400, messages[error.code] ?? '图片无法读取，请换一张重试。')
-        })
-      this.store.addImages(userId, imagesOf(content))
+      // 图片全部校验并规范化后，按实际存储大小记入配额，通过才写入；任何一张被拒绝或超出配额，
+      // 整条消息失败，也不写入图片。记入配额后写入失败时不退回，宁可偏严。
+      const store = this.ctx.attachments as CountedAttachmentStore
+      const refs = images.length
+        ? await store
+            .saveCounted(
+              images.map(({ mediaType, data, name }) => {
+                // 与 DSH 一致，只接受规范 base64
+                const bytes = Buffer.from(data, 'base64')
+                if (bytes.toString('base64') !== data)
+                  throw new HttpError(400, '图片编码无效，请重新选择。')
+                return { mediaType, data: new Uint8Array(bytes), ...(name && { name }) }
+              }),
+              (counted) => this.store.addImages(userId, counted, MAX_USER_IMAGE_BYTES),
+            )
+            .catch((error: unknown) => {
+              // 存储读写失败不是用户能改正的问题，按服务器错误返回
+              if (!isImageAdmissionError(error)) throw error
+              const limits = store.imageLimits
+              const messages: Record<string, string> = {
+                TOO_MANY_IMAGES: `一次最多上传 ${limits.maxImagesPerMessage} 张图片。`,
+                UNSUPPORTED_IMAGE_TYPE: '仅支持 PNG、JPEG、WebP 和 GIF 图片。',
+                IMAGE_TOO_LARGE: `单张图片不能超过 ${limits.maxImageBytes / 2 ** 20} MB。`,
+                IMAGE_TOO_MANY_PIXELS: '图片尺寸过大，请缩小后重试。',
+                IMAGE_DIMENSION_TOO_LARGE: '图片尺寸过大，请缩小后重试。',
+              }
+              throw new HttpError(400, messages[error.code] ?? '图片无法读取，请换一张重试。')
+            })
+        : []
+      const content = [
+        ...refs.map((attachment) => ({ type: 'image' as const, attachment })),
+        ...(question ? [{ type: 'text' as const, text: question }] : []),
+      ]
       const setup = async (ctx: Context, agent: AgentHandle['agent']) => {
         // Offered only when the library has content; otherwise chat and web search work as usual.
         if (this.options.library?.available()) registerLibrary(ctx, this.options.library)

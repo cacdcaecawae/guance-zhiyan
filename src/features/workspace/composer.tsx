@@ -83,7 +83,8 @@ export function Composer({ onSubmit, busy = false, onStop, children, autoFocus }
     try {
       if ((await onSubmit(draft.trim(), draftImages)) !== false) {
         setValue((current) => (current === draft ? '' : current))
-        setImages((current) => (current === draftImages ? [] : current))
+        // 只移除这次发出的图片，等待期间新加的留给下一条
+        setImages((current) => current.filter((file) => !draftImages.includes(file)))
         setNotice('')
       }
     } finally {

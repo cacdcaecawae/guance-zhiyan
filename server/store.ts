@@ -154,9 +154,26 @@ export class Store {
         .get(userId)!.bytes,
     )
   }
-  addImages(userId: string, images: readonly { attachmentId: string; bytes: number }[]) {
-    const insert = this.db.prepare('INSERT OR IGNORE INTO images VALUES(?, ?, ?)')
-    for (const image of images) insert.run(userId, image.attachmentId, image.bytes)
+  /**
+   * Count a batch against the user's image quota before its files are written; the same image
+   * counts once per user. Records nothing and returns false when the total would exceed `limit`.
+   */
+  addImages(
+    userId: string,
+    images: readonly { attachmentId: string; bytes: number }[],
+    limit: number,
+  ) {
+    this.db.exec('BEGIN IMMEDIATE')
+    try {
+      const insert = this.db.prepare('INSERT OR IGNORE INTO images VALUES(?, ?, ?)')
+      for (const image of images) insert.run(userId, image.attachmentId, image.bytes)
+      const fits = this.imageBytes(userId) <= limit
+      this.db.exec(fits ? 'COMMIT' : 'ROLLBACK')
+      return fits
+    } catch (error) {
+      this.db.exec('ROLLBACK')
+      throw error
+    }
   }
   close() {
     this.db.close()

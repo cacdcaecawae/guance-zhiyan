@@ -92,6 +92,24 @@ describe('Composer', () => {
     expect(screen.queryByRole('img')).not.toBeInTheDocument()
   })
 
+  it('发送成功后只移除已发送的图片，等待期间新加的图片保留', async () => {
+    let finish = (_value: boolean) => {}
+    const response = new Promise<boolean>((resolve) => {
+      finish = resolve
+    })
+    render(<Composer onSubmit={() => response} />)
+    const picker = screen.getByLabelText('选择图片')
+    await userEvent.upload(picker, new File(['a'], '已发送.png', { type: 'image/png' }))
+    await userEvent.click(screen.getByRole('button', { name: '发送' }))
+    await userEvent.upload(picker, new File(['b'], '新加.png', { type: 'image/png' }))
+    await act(async () => {
+      finish(true)
+      await response
+    })
+    expect(screen.queryByRole('img', { name: '已发送.png' })).not.toBeInTheDocument()
+    expect(screen.getByRole('img', { name: '新加.png' })).toBeInTheDocument()
+  })
+
   it('不支持的文件不加入并说明原因', () => {
     render(<Composer onSubmit={vi.fn()} />)
     fireEvent.drop(screen.getByRole('form', { name: '提问' }), {
