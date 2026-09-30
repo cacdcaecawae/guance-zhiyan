@@ -19,6 +19,8 @@ const cancelled = (signal?: AbortSignal) => {
 
 export class Qdrant {
   readonly collection: string
+  /** Canonical endpoint shared by requests and persisted index identity. */
+  readonly url: string
   private readonly config: QdrantConfig
   private readonly collectionURL: string
 
@@ -45,7 +47,9 @@ export class Qdrant {
       throw new Error('Qdrant 集合名称或向量维度配置无效。')
     this.config = { ...config }
     this.collection = config.collection
-    this.collectionURL = `${url.href.replace(/\/+$/, '')}/collections/${encodeURIComponent(config.collection)}`
+    url.pathname = url.pathname.replace(/\/+$/, '') || '/'
+    this.url = url.href
+    this.collectionURL = `${this.url.replace(/\/$/, '')}/collections/${encodeURIComponent(config.collection)}`
   }
 
   async ensureCollection(signal?: AbortSignal, onMissing?: () => void): Promise<boolean> {
