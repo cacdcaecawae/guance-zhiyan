@@ -105,14 +105,14 @@ export function MessageList({
                         title="在新标签页查看原图"
                         className="block rounded-xl outline-none focus-visible:ring-2 focus-visible:ring-ring"
                       >
-                        {/* 宽高属性先占位，图片加载后列表高度不跳 */}
+                        {/* 宽高属性先占位，图片加载后列表高度不跳；过窄的长图（如手机长截图）至少 96px 宽，裁切显示顶部 */}
                         <img
                           src={imageUrl(sessionId, image)}
                           alt={image.name || '图片'}
                           width={image.width}
                           height={image.height}
                           loading="lazy"
-                          className="h-40 w-auto max-w-full rounded-xl border border-card-border bg-card object-contain"
+                          className="h-40 w-auto max-w-full min-w-24 rounded-xl border border-card-border bg-card object-cover object-top"
                         />
                       </a>
                     </li>

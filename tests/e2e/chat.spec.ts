@@ -234,9 +234,15 @@ test('上传图片随问题发送，气泡上方显示原图，刷新保留，�
     'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
     'base64',
   )
-  await page
-    .getByLabel('选择图片')
-    .setInputFiles({ name: '表格.png', mimeType: 'image/png', buffer: png })
+  // 1×20 的长图，模拟手机长截图
+  const tall = Buffer.from(
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAAUCAAAAABpZQh9AAAADUlEQVR42mNoYCAKAgDIKAoBW2+cOQAAAABJRU5ErkJggg==',
+    'base64',
+  )
+  await page.getByLabel('选择图片').setInputFiles([
+    { name: '表格.png', mimeType: 'image/png', buffer: png },
+    { name: '长图.png', mimeType: 'image/png', buffer: tall },
+  ])
   const form = page.getByRole('form', { name: '提问' })
   await expect(form.getByRole('img', { name: '表格.png' })).toBeVisible()
   const box = page.getByRole('textbox', { name: '研究问题' })
@@ -246,9 +252,12 @@ test('上传图片随问题发送，气泡上方显示原图，刷新保留，�
   await expect(form.getByRole('img')).toHaveCount(0)
   const attached = page.getByRole('list', { name: '问题附图' })
   await expect(attached.getByRole('img', { name: '表格.png' })).toHaveJSProperty('naturalWidth', 1)
-  // 1×1 的图也按固定高度显示，不会只剩一个像素
+  // 1×1 的图也按固定高度显示，不会只剩一个像素；长图保留最小宽度，不会缩成一条细线
   const shown = await attached.getByRole('img', { name: '表格.png' }).boundingBox()
   expect(shown!.height).toBeCloseTo(160, 0)
+  const long = await attached.getByRole('img', { name: '长图.png' }).boundingBox()
+  expect(long!.height).toBeCloseTo(160, 0)
+  expect(long!.width).toBeCloseTo(96, 0)
   await expect(page.getByRole('alert')).toContainText('失败')
   await page.reload()
   await expect(attached.getByRole('img', { name: '表格.png' })).toHaveJSProperty('naturalWidth', 1)

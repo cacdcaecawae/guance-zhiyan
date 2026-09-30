@@ -871,6 +871,9 @@ test('question images count by their stored size and are never written past the 
   } finally {
     await agents.close()
     store.close()
+    assert.ok(
+      resolve(root).startsWith(resolve(tmpdir()) + sep) && root.includes('gczy-quota-test-'),
+    )
     await rm(root, { recursive: true })
   }
 })
@@ -925,6 +928,7 @@ test('HTTP: only a signed-in question may take longer than 30 seconds to upload'
     await new Promise<void>((resolveClose) => server.close(() => resolveClose()))
     await agents.close()
     store.close()
+    assert.ok(resolve(root).startsWith(resolve(tmpdir()) + sep) && root.includes('gczy-http-test-'))
     await rm(root, { recursive: true })
   }
 })
