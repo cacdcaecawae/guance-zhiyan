@@ -57,12 +57,17 @@ class CountedAttachmentStore extends LocalAttachmentStore {
   saveCounted(
     inputs: readonly SaveImageAttachment[],
     count: (refs: readonly ImageAttachmentRef[]) => boolean,
+    stopped: () => boolean,
   ) {
     const saved = this.queue.then(async () => {
+      if (stopped()) return
       this.validateImageBatch(inputs)
       const prepared: PreparedImageFile[] = []
-      for (const input of inputs)
+      for (const input of inputs) {
         prepared.push(await prepareImageFile(input, this.imageLimits, this.normalizationPolicy))
+        if (stopped()) return
+      }
+      // 记账是接收边界：之后即使停止也完成写入，由调用方保存可用的提问引用，不启动模型。
       if (!count(prepared.map(({ ref }) => ref)))
         throw new HttpError(413, '图片空间已达上限，请联系管理员。')
       const refs: ImageAttachmentRef[] = []
@@ -277,6 +282,7 @@ export class Agents {
                 return { mediaType, data: new Uint8Array(bytes), ...(name && { name }) }
               }),
               (counted) => this.store.addImages(userId, counted, MAX_USER_IMAGE_BYTES),
+              () => run.stopped,
             )
             .catch((error: unknown) => {
               // 存储读写失败不是用户能改正的问题，按服务器错误返回
@@ -290,6 +296,11 @@ export class Agents {
               throw new HttpError(400, messages[error.code] ?? '图片无法读取，请换一张重试。')
             })
         : []
+      if (!saved) {
+        this.active.delete(id)
+        this.notify(id)
+        return
+      }
       const refs = reused.map((ref) => ref ?? saved.shift()!)
       const content = [
         ...refs.map((attachment) => ({ type: 'image' as const, attachment })),
@@ -347,8 +358,19 @@ export class Agents {
             ...(this.options.sandboxes ? { meta: { cwd: '/workspace' } } : {}),
           })
       if (run.stopped) {
+        if (uploads.length) {
+          // 已接收的图片不可遗失引用；只保存提问，不放入会唤醒模型的 inbox。
+          this.store.selectModel(userId, id, selection)
+          this.store.title(userId, id, question || '图片提问')
+          run.handle.agent.session.append(
+            'user/message',
+            createUserMessage({ content, source: { kind: 'user' } }),
+            { surfaceOp: 'append' },
+          )
+        }
         await run.handle.dispose()
         this.active.delete(id)
+        this.notify(id)
         return
       }
       this.store.selectModel(userId, id, selection)
