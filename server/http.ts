@@ -172,9 +172,14 @@ export function createApp(
       if (file && request.method === 'GET') {
         const artifact = store.artifact(user.id, file[1])
         const data = await readFile(agents.files.path(artifact.id))
+        // RFC 8187 filename* excludes these characters left unescaped by encodeURIComponent.
+        const filename = encodeURIComponent(artifact.name).replace(
+          /['()*]/g,
+          (char) => '%' + char.charCodeAt(0).toString(16).toUpperCase(),
+        )
         response.writeHead(200, {
           'Content-Type': MIME[artifact.format] ?? 'application/octet-stream',
-          'Content-Disposition': `attachment; filename="download.${artifact.format}"; filename*=UTF-8''${encodeURIComponent(artifact.name)}`,
+          'Content-Disposition': `attachment; filename="download.${artifact.format}"; filename*=UTF-8''${filename}`,
           'Content-Length': data.length,
         })
         return response.end(data)

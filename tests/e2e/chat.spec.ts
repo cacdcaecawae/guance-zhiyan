@@ -268,3 +268,17 @@ test('上传图片随问题发送，气泡上方显示原图，刷新保留，�
     1,
   )
 })
+
+test('下载保留含单引号、中文、空格及括号的成果文件名', async ({ page }) => {
+  await page.goto('/workspace')
+  await page.getByRole('textbox', { name: '研究问题' }).fill('生成报告，文件名带单引号')
+  await page.getByRole('button', { name: '发送' }).click()
+  const name = "O'Reilly 研究(2026).docx"
+  const link = page.getByRole('link', { name: `下载 ${name}`, exact: true })
+  await expect(link).toBeVisible()
+  const downloadPromise = page.waitForEvent('download')
+  await link.click()
+  const download = await downloadPromise
+  expect(download.suggestedFilename()).toBe(name)
+  expect(await download.failure()).toBeNull()
+})

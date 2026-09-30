@@ -53,7 +53,7 @@ export class TestModel extends LlmAdapter {
           return [
             ...textChunks('先生成报告。').filter((chunk) => chunk.type !== 'finish'),
             ...toolChunks('create_file', {
-              name: '研究报告',
+              name: question.includes('带单引号') ? "O'Reilly 研究(2026)" : '研究报告',
               format: 'docx',
               content: '# 研究报告\n自动化测试文档。',
             }).map((chunk) => ('index' in chunk ? { ...chunk, index: 2 } : chunk)),

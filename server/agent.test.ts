@@ -803,6 +803,18 @@ test('HTTP: authentication, ownership, request boundaries and file download', as
     const download = await fetch(`${base}/api/files/${file.id}`, { headers })
     assert.equal(await download.text(), '# 内容')
     assert.match(download.headers.get('content-disposition')!, /attachment/)
+    for (const name of ["O'Reilly 研究.md", '研究(2026).md', '研究*.md', '研究%20.md']) {
+      const named = await agents.files.save(alice.id, id, name, Buffer.from('合成文件正文'))
+      const response = await fetch(`${base}/api/files/${named.id}`, { headers })
+      const value = /filename\*=UTF-8''([^;]*)$/.exec(
+        response.headers.get('content-disposition')!,
+      )?.[1]
+      assert.ok(value)
+      // RFC 8187 value-chars: attr-char or a percent-encoded byte.
+      assert.match(value, /^(?:[A-Za-z0-9!#$&+.^_`|~-]|%[0-9A-Fa-f]{2})+$/)
+      assert.equal(decodeURIComponent(value), name)
+      assert.equal(await response.text(), '合成文件正文')
+    }
     assert.equal(
       (await fetch(`${base}/api/files/${file.id}`, { headers: { 'x-test-user': 'bob' } })).status,
       404,
