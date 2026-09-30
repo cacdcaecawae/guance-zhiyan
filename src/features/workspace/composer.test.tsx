@@ -110,6 +110,32 @@ describe('Composer', () => {
     expect(screen.getByRole('img', { name: '新加.png' })).toBeInTheDocument()
   })
 
+  it.each([
+    { label: '唯一项', count: 1, index: 0, key: '{Enter}', busy: false },
+    { label: '首项', count: 3, index: 0, key: ' ', busy: false },
+    { label: '中间项', count: 3, index: 1, key: '{Enter}', busy: false },
+    { label: '生成期间的末项', count: 3, index: 2, key: ' ', busy: true },
+  ])('键盘移除 $label 图片后可直接继续输入', async ({ count, index, key, busy }) => {
+    const user = userEvent.setup()
+    const onSubmit = vi.fn()
+    render(<Composer onSubmit={onSubmit} busy={busy} />)
+    const files = Array.from(
+      { length: count },
+      (_, i) => new File(['png'], `${i}.png`, { type: 'image/png' }),
+    )
+    await user.upload(screen.getByLabelText('选择图片'), files)
+    const remove = screen.getByRole('button', { name: `移除图片 ${index}.png` })
+    act(() => remove.focus())
+    await user.keyboard(key)
+    expect(screen.queryByRole('img', { name: `${index}.png` })).not.toBeInTheDocument()
+    expect(screen.queryAllByRole('img')).toHaveLength(count - 1)
+    const box = screen.getByRole('textbox', { name: '研究问题' })
+    expect(box).toHaveFocus()
+    await user.keyboard('继续提问')
+    expect(box).toHaveValue('继续提问')
+    expect(onSubmit).not.toHaveBeenCalled()
+  })
+
   it('不支持的文件不加入并说明原因', () => {
     render(<Composer onSubmit={vi.fn()} />)
     fireEvent.drop(screen.getByRole('form', { name: '提问' }), {
