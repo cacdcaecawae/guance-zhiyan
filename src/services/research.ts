@@ -1,5 +1,13 @@
 import { useSyncExternalStore } from 'react'
-import type { Artifact, ModelCatalog, ModelSelection, Session, SessionSummary, User } from '@/types'
+import type {
+  Artifact,
+  ImageAttachment,
+  ModelCatalog,
+  ModelSelection,
+  Session,
+  SessionSummary,
+  User,
+} from '@/types'
 import { applySessionFrame, type SessionFrame } from './session-stream'
 
 interface State {
@@ -136,11 +144,39 @@ export function watchSession(id?: string) {
   }
 }
 
+export const imageUrl = (sessionId: string, image: Pick<ImageAttachment, 'id'>) =>
+  `/api/sessions/${sessionId}/images/${encodeURIComponent(image.id)}`
+
+/** 新图片以 base64 随问题提交；重新提问时只传本会话已存图片的 id，由后端核对归属后复用，不重新上传。 */
+async function encodeImage(image: Blob | ImageAttachment) {
+  if (!(image instanceof Blob)) return { id: image.id }
+  const data = await new Promise<string>((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(String(reader.result).replace(/^[^,]*,/, ''))
+    reader.onerror = () => reject(new Error('图片读取失败，请重新选择。'))
+    reader.readAsDataURL(image)
+  })
+  return {
+    mediaType: image.type,
+    data,
+    ...(image instanceof File && image.name && { name: image.name }),
+  }
+}
+
 // POST acknowledgements never overwrite a newer stream snapshot.
-export const askQuestion = (id: string, question: string, selection?: ModelSelection) =>
+export const askQuestion = async (
+  id: string,
+  question: string,
+  selection?: ModelSelection,
+  images: (Blob | ImageAttachment)[] = [],
+) =>
   request(`/sessions/${id}/messages`, {
     method: 'POST',
-    body: JSON.stringify({ question, selection }),
+    body: JSON.stringify({
+      question,
+      selection,
+      images: await Promise.all(images.map(encodeImage)),
+    }),
   })
 export const stopAnswer = (id: string) => request(`/sessions/${id}/stop`, { method: 'POST' })
 export const artifactUrl = (file: Pick<Artifact, 'id'>) =>

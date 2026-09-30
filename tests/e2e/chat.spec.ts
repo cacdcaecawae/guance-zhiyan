@@ -227,3 +227,44 @@ for (const width of [390, 1440]) {
     })
   }
 }
+
+test('上传图片随问题发送，气泡上方显示原图，刷新保留，重新提问带上原图', async ({ page }) => {
+  await page.goto('/workspace')
+  const png = Buffer.from(
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
+    'base64',
+  )
+  // 1×20 的长图，模拟手机长截图
+  const tall = Buffer.from(
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAAUCAAAAABpZQh9AAAADUlEQVR42mNoYCAKAgDIKAoBW2+cOQAAAABJRU5ErkJggg==',
+    'base64',
+  )
+  await page.getByLabel('选择图片').setInputFiles([
+    { name: '表格.png', mimeType: 'image/png', buffer: png },
+    { name: '长图.png', mimeType: 'image/png', buffer: tall },
+  ])
+  const form = page.getByRole('form', { name: '提问' })
+  await expect(form.getByRole('img', { name: '表格.png' })).toBeVisible()
+  const box = page.getByRole('textbox', { name: '研究问题' })
+  await box.fill('模拟失败')
+  await box.press('Enter')
+  await expect(page).toHaveURL(/\/workspace\/[0-9a-f-]{36}$/)
+  await expect(form.getByRole('img')).toHaveCount(0)
+  const attached = page.getByRole('list', { name: '问题附图' })
+  await expect(attached.getByRole('img', { name: '表格.png' })).toHaveJSProperty('naturalWidth', 1)
+  // 1×1 的图也按固定高度显示，不会只剩一个像素；长图保留最小宽度，不会缩成一条细线
+  const shown = await attached.getByRole('img', { name: '表格.png' }).boundingBox()
+  expect(shown!.height).toBeCloseTo(160, 0)
+  const long = await attached.getByRole('img', { name: '长图.png' }).boundingBox()
+  expect(long!.height).toBeCloseTo(160, 0)
+  expect(long!.width).toBeCloseTo(96, 0)
+  await expect(page.getByRole('alert')).toContainText('失败')
+  await page.reload()
+  await expect(attached.getByRole('img', { name: '表格.png' })).toHaveJSProperty('naturalWidth', 1)
+  await page.getByRole('button', { name: '重新提问' }).click()
+  await expect(attached).toHaveCount(2)
+  await expect(attached.last().getByRole('img', { name: '表格.png' })).toHaveJSProperty(
+    'naturalWidth',
+    1,
+  )
+})

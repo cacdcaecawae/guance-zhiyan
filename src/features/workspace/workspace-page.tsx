@@ -19,7 +19,7 @@ import { MessageList } from './message-list'
 import { ModelPicker } from './model-picker'
 import { Welcome } from './welcome'
 import { Trajectory } from './trajectory'
-import type { ModelSelection } from '@/types'
+import type { ImageAttachment, ModelSelection } from '@/types'
 
 export function WorkspacePage({ sessionId }: { sessionId?: string }) {
   const { current, catalog, loading, error, connectionError } = useResearch()
@@ -54,14 +54,14 @@ export function WorkspacePage({ sessionId }: { sessionId?: string }) {
     chosen ??
     (session ? { provider: session.provider, model: session.model } : catalog?.defaultSelection)
   const empty = !loading && !error && !session?.messages.length
-  const submit = async (question: string) => {
+  const submit = async (question: string, images: (File | ImageAttachment)[] = []) => {
     setPosting(true)
     setOperationError(null)
     try {
       const id = sessionId ?? createdSession.current ?? (await createSession()).id
       createdSession.current = id
       // Admit the request before navigation, preserving the draft on failure.
-      await askQuestion(id, question, selection)
+      await askQuestion(id, question, selection, images)
       if (!sessionId && mounted.current) navigate(`/workspace/${id}`)
       return true
     } catch (failure) {
@@ -191,10 +191,11 @@ export function WorkspacePage({ sessionId }: { sessionId?: string }) {
                 </div>
               ) : session?.messages.length ? (
                 <MessageList
+                  sessionId={session.id}
                   messages={session.messages}
                   busy={busy}
                   onRetry={(message) => {
-                    void submit(message.question)
+                    void submit(message.question, message.questionImages)
                   }}
                 >
                   {!!session?.artifacts.length && (

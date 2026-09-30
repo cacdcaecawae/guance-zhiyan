@@ -1,20 +1,23 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtemp, readFile, rm, chmod, stat } from 'node:fs/promises'
+import { mkdtemp, readFile, readdir, rm, chmod, stat } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve, sep } from 'node:path'
 import { once } from 'node:events'
 import { createServer } from 'node:http'
+import { connect, type Socket } from 'node:net'
 import { DatabaseSync } from 'node:sqlite'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { DEFAULT_MAX_TOKENS } from '@deepseek-ai/dsh-llm-deepseek'
 import { SessionId, type SessionEvent } from '@deepseek-ai/dsh-session'
+import type { Session } from '../src/types/index.ts'
 import { traceFromEvents } from './trace.ts'
 import { messagesFromEvents, toolInput, toolError } from './view.ts'
 import { TestModel, textChunks, toolChunks } from '../tests/support/model.ts'
 import { Store } from './store.ts'
 import { Agents } from './agent.ts'
 import { createApp } from './http.ts'
+import { modelAdapter } from './models.ts'
 
 test('existing SQLite sessions migrate without losing ownership and keep model selection on reopen', async () => {
   const root = await mkdtemp(join(tmpdir(), 'gczy-migration-test-'))
@@ -594,12 +597,24 @@ test('native Messages streaming and search protocol with cited sources and expli
   }
 })
 
+test('all catalog models accept images; official Flash keeps in-history system updates', async () => {
+  for (const [provider, model] of [
+    ['deepseek-official', 'deepseek-flash'],
+    ['deepseek-official', 'deepseek-v4-pro'],
+    ['qianwen', 'deepseek-v4.1-flash'],
+    ['qianwen', 'deepseek-v4-pro-0813'],
+  ]) {
+    const info = await modelAdapter(provider, () => undefined).resolveModel(provider, model)
+    assert.deepEqual(info.inputModalities, ['text', 'image'])
+    assert.equal(info.systemPromptUpdate, model === 'deepseek-flash' ? 'in-history' : undefined)
+  }
+})
+
 test('HTTP: authentication, ownership, request boundaries and file download', async () => {
   const root = await mkdtemp(join(tmpdir(), 'gczy-http-test-'))
   const store = new Store(root)
-  const agents = await new Agents(store, {
-    adapter: new TestModel(() => textChunks('hello')),
-  }).init()
+  const model = new TestModel(() => textChunks('hello'))
+  const agents = await new Agents(store, { adapter: model }).init()
   const server = createApp(store, agents, {
     origin: 'http://trusted.test',
     dist: root,
@@ -686,6 +701,105 @@ test('HTTP: authentication, ownership, request boundaries and file download', as
       'md',
       '# 内容',
     )
+    const ask = (body: object) =>
+      fetch(`${base}/api/sessions/${id}/messages`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(body),
+      })
+    const png =
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='
+    assert.equal((await ask({ question: '', images: [] })).status, 400)
+    // 伪造已存附件引用会被结构校验拒绝
+    const forged = await ask({
+      question: '看图',
+      images: [{ type: 'file', attachment: { attachmentId: 'sha256:0', name: 'x', bytes: 1 } }],
+    })
+    assert.equal(forged.status, 400)
+    const broken = await ask({
+      question: '',
+      images: [{ mediaType: 'image/png', data: '不是图片' }],
+    })
+    assert.equal(broken.status, 400)
+    assert.match(((await broken.json()) as { error: string }).error, /图片/)
+    const sent = await ask({
+      question: '',
+      images: [{ mediaType: 'image/png', data: png, name: '截图.png' }],
+    })
+    assert.equal(sent.status, 202)
+    await agents.active.get(id)?.done
+    const asked = model.requests.at(-1)!.messages.findLast((message) => message.role === 'user')!
+    assert.ok(asked.content.some((block) => block.type === 'image'))
+    const view = (await (await fetch(`${base}/api/sessions/${id}`, { headers })).json()) as Session
+    const question = view.messages.findLast((message) => message.role === 'user')!
+    assert.ok(question.role === 'user' && question.images?.length === 1)
+    assert.equal(question.text, '')
+    assert.deepEqual(
+      { ...question.images[0], id: '' },
+      { id: '', name: '截图.png', width: 1, height: 1 },
+    )
+    const imagePath = `/images/${encodeURIComponent(question.images[0].id)}`
+    const picture = await fetch(`${base}/api/sessions/${id}${imagePath}`, { headers })
+    assert.equal(picture.status, 200)
+    assert.match(picture.headers.get('content-type')!, /^image\//)
+    assert.equal(picture.headers.get('cache-control'), 'no-store', 'every read is checked again')
+    assert.ok((await picture.arrayBuffer()).byteLength > 0)
+    // 附图按人累计计入配额：超额时整条附图提问被拒、不记账，纯文字提问不受影响
+    const alice = store.user('alice', 'Test')
+    assert.ok(store.imageBytes(alice.id) > 0, 'the stored image is counted')
+    store.addImages(alice.id, [{ attachmentId: 'test-filler', bytes: 200 * 2 ** 20 }], Infinity)
+    const used = store.imageBytes(alice.id)
+    const full = await ask({
+      question: '再看一张',
+      images: [{ mediaType: 'image/png', data: png }],
+    })
+    assert.equal(full.status, 413)
+    assert.match(((await full.json()) as { error: string }).error, /图片空间已达上限/)
+    assert.equal(store.imageBytes(alice.id), used)
+    assert.equal((await ask({ question: '只问文字' })).status, 202)
+    await agents.active.get(id)?.done
+    const other = (await (
+      await fetch(base + '/api/sessions', { method: 'POST', headers })
+    ).json()) as { id: string }
+    for (const [user, session] of [
+      ['bob', id],
+      ['alice', other.id],
+    ])
+      assert.equal(
+        (
+          await fetch(`${base}/api/sessions/${session}${imagePath}`, {
+            headers: { 'x-test-user': user },
+          })
+        ).status,
+        404,
+      )
+    // 重新提问只引用本会话已有的图片：满额时也能发送，不重新入库、不重复计入配额；
+    // 没在本会话提问中出现过的 id（包括其他会话的图片）一律视为不存在
+    const again = await ask({ question: '', images: [{ id: question.images[0].id }] })
+    assert.equal(again.status, 202)
+    await agents.active.get(id)?.done
+    assert.equal(store.imageBytes(alice.id), used)
+    const reasked = model.requests.at(-1)!.messages.findLast((message) => message.role === 'user')!
+    assert.deepEqual(
+      reasked.content.flatMap((block) =>
+        block.type === 'image' ? [block.attachment.attachmentId] : [],
+      ),
+      [question.images[0].id],
+    )
+    for (const [session, image] of [
+      [id, `sha256:${'0'.repeat(64)}`],
+      [other.id, question.images[0].id],
+    ])
+      assert.equal(
+        (
+          await fetch(`${base}/api/sessions/${session}/messages`, {
+            method: 'POST',
+            headers,
+            body: JSON.stringify({ question: '', images: [{ id: image }] }),
+          })
+        ).status,
+        404,
+      )
     const download = await fetch(`${base}/api/files/${file.id}`, { headers })
     assert.equal(await download.text(), '# 内容')
     assert.match(download.headers.get('content-disposition')!, /attachment/)
@@ -694,6 +808,122 @@ test('HTTP: authentication, ownership, request boundaries and file download', as
       404,
     )
   } finally {
+    server.closeAllConnections()
+    await new Promise<void>((resolveClose) => server.close(() => resolveClose()))
+    await agents.close()
+    store.close()
+    assert.ok(resolve(root).startsWith(resolve(tmpdir()) + sep) && root.includes('gczy-http-test-'))
+    await rm(root, { recursive: true })
+  }
+})
+
+test('question images count by their stored size and are never written past the quota', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'gczy-quota-test-'))
+  const store = new Store(root)
+  const agents = await new Agents(store, {
+    adapter: new TestModel(() => textChunks('ok')),
+  }).init()
+  try {
+    const user = store.user('quota-test', 'Test')
+    const session = store.create(user.id)
+    const limit = 200 * 2 ** 20
+    // 1×1 黑色 GIF 上传只有 35 字节，规范化后存成更大的 JPEG
+    const gif = {
+      mediaType: 'image/gif' as const,
+      data: 'R0lGODlhAQABAIAAAAAAAAAAACwAAAAAAQABAAACAkQBADs=',
+    }
+    const saved = () =>
+      readdir(join(root, 'dsh', 'attachments'), { recursive: true }).catch(() => [])
+    store.addImages(user.id, [{ attachmentId: 'filler', bytes: limit - 100 }], limit)
+    const before = await saved()
+    await assert.rejects(agents.start(user.id, session.id, '', undefined, [gif]), { status: 413 })
+    assert.equal(store.imageBytes(user.id), limit - 100, 'a refused image is not counted')
+    assert.deepEqual(await saved(), before, 'a refused image is not written')
+    store.db.prepare("UPDATE images SET bytes=? WHERE id='filler'").run(limit - 10_000)
+    // 两张图保存后都比上传时大；同样的图再发一次不重复计入
+    const dot = {
+      mediaType: 'image/gif' as const,
+      data: 'R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7',
+    }
+    for (const question of ['第一次', '同样的图再发一次']) {
+      await agents.start(user.id, session.id, question, undefined, [gif, dot])
+      await agents.active.get(session.id)?.done
+    }
+    const images = (await agents.snapshot(user.id, session.id)).messages
+      .flatMap((message) => (message.role === 'user' ? (message.images ?? []) : []))
+      .slice(0, 2)
+    const sizes = await Promise.all(
+      images.map(async ({ id }) => (await agents.image(user.id, session.id, id)).data.byteLength),
+    )
+    assert.ok(sizes[0] > 100, 'the stored image is larger than the room left before')
+    const counted = limit - 10_000 + sizes[0] + sizes[1]
+    assert.equal(store.imageBytes(user.id), counted, 'counted once, by stored size')
+    // 重新提问引用已存的图片，不再上传转换后更大的图，也不重复计入
+    await agents.start(
+      user.id,
+      session.id,
+      '',
+      undefined,
+      images.map(({ id }) => ({ id })),
+    )
+    await agents.active.get(session.id)?.done
+    assert.equal(store.imageBytes(user.id), counted)
+  } finally {
+    await agents.close()
+    store.close()
+    assert.ok(
+      resolve(root).startsWith(resolve(tmpdir()) + sep) && root.includes('gczy-quota-test-'),
+    )
+    await rm(root, { recursive: true })
+  }
+})
+
+test('HTTP: only a signed-in question may take longer than 30 seconds to upload', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'gczy-http-test-'))
+  const store = new Store(root)
+  const agents = await new Agents(store, {
+    adapter: new TestModel(() => textChunks('hello')),
+  }).init()
+  const server = createApp(store, agents, {
+    authenticate: async (req) =>
+      req.headers['x-test-user'] === 'alice' ? { subject: 'alice', name: 'Test' } : undefined,
+  })
+  const accepted: Socket[] = []
+  server.on('connection', (socket: Socket) => accepted.push(socket))
+  server.listen(0, '127.0.0.1')
+  await once(server, 'listening')
+  const address = server.address()
+  assert.ok(address && typeof address !== 'string')
+  const { port } = address
+  const { id } = store.create(store.user('alice', 'Test').id)
+  // 只发请求头、不发正文，收到第一段回应后再推进时钟
+  const upload = async (headers: string) => {
+    const socket = connect(port, '127.0.0.1')
+    socket.write(
+      `POST /api/sessions/${id}/messages HTTP/1.1\r\nHost: test\r\nContent-Type: application/json\r\nContent-Length: 16\r\n${headers}\r\n`,
+    )
+    const [reply] = await once(socket, 'data')
+    return { socket, reply: String(reply), accepted: accepted.at(-1)! }
+  }
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  try {
+    const stranger = await upload('')
+    assert.match(stranger.reply, /^HTTP\/1\.1 401/)
+    assert.ok(!stranger.accepted.destroyed)
+    t.mock.timers.tick(30000)
+    assert.ok(stranger.accepted.destroyed, 'an unfinished request is closed after 30 seconds')
+    stranger.socket.destroy()
+    // 客户端收到 100 Continue 时，处理函数已在同一轮事件中完成登录与会话归属检查、进入提问路由
+    const alice = await upload('x-test-user: alice\r\nExpect: 100-continue\r\n')
+    assert.match(alice.reply, /^HTTP\/1\.1 100/)
+    t.mock.timers.tick(30000)
+    assert.ok(!alice.accepted.destroyed, 'a signed-in question keeps uploading')
+    alice.socket.write('{"question":" "}')
+    const [reply] = await once(alice.socket, 'data')
+    assert.match(String(reply), /^HTTP\/1\.1 400/)
+    alice.socket.destroy()
+  } finally {
+    t.mock.timers.reset()
     server.closeAllConnections()
     await new Promise<void>((resolveClose) => server.close(() => resolveClose()))
     await agents.close()

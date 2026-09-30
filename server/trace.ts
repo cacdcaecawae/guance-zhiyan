@@ -6,7 +6,13 @@ import { toolError, toolInput, toolText } from './view.ts'
 
 const contentText = (content: readonly ContentBlock[]) =>
   content
-    .flatMap((block) => (block.type === 'text' || block.type === 'reasoning' ? [block.text] : []))
+    .flatMap((block) =>
+      block.type === 'text' || block.type === 'reasoning'
+        ? [block.text]
+        : block.type === 'image'
+          ? [`[图片${block.attachment.name ? '：' + block.attachment.name : ''}]`]
+          : [],
+    )
     .join('\n\n')
 /** Project visible event content only: never expose request headers, signatures or tool metadata. */
 export function traceFromEvents(

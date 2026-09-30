@@ -47,6 +47,7 @@ export class Store {
       CREATE INDEX IF NOT EXISTS sessions_owner ON sessions(user_id, created);
       CREATE TABLE IF NOT EXISTS artifacts(id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES sessions(id), name TEXT NOT NULL, format TEXT NOT NULL, size INTEGER NOT NULL);
       CREATE INDEX IF NOT EXISTS artifacts_session ON artifacts(session_id);
+      CREATE TABLE IF NOT EXISTS images(user_id TEXT NOT NULL REFERENCES users(id), id TEXT NOT NULL, bytes INTEGER NOT NULL, PRIMARY KEY(user_id, id));
     `)
     const columns = this.db.prepare('PRAGMA table_info(sessions)').all()
     if (!columns.some((column) => column.name === 'provider')) {
@@ -144,6 +145,35 @@ export class Store {
         artifact.size,
         generated ? 1 : 0,
       )
+  }
+  /** Stored question images are never deleted; a user's total counts against the image quota. */
+  imageBytes(userId: string) {
+    return Number(
+      this.db
+        .prepare('SELECT COALESCE(SUM(bytes), 0) AS bytes FROM images WHERE user_id=?')
+        .get(userId)!.bytes,
+    )
+  }
+  /**
+   * Count a batch against the user's image quota before its files are written; the same image
+   * counts once per user. Records nothing and returns false when the total would exceed `limit`.
+   */
+  addImages(
+    userId: string,
+    images: readonly { attachmentId: string; bytes: number }[],
+    limit: number,
+  ) {
+    this.db.exec('BEGIN IMMEDIATE')
+    try {
+      const insert = this.db.prepare('INSERT OR IGNORE INTO images VALUES(?, ?, ?)')
+      for (const image of images) insert.run(userId, image.attachmentId, image.bytes)
+      const fits = this.imageBytes(userId) <= limit
+      this.db.exec(fits ? 'COMMIT' : 'ROLLBACK')
+      return fits
+    } catch (error) {
+      this.db.exec('ROLLBACK')
+      throw error
+    }
   }
   close() {
     this.db.close()

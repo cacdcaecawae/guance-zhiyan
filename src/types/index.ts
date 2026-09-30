@@ -20,15 +20,24 @@ export type AnswerPart =
       output: string
       status: 'running' | 'done' | 'error' | 'stopped'
     }
+export interface ImageAttachment {
+  id: string
+  name?: string
+  width: number
+  height: number
+}
 export interface AssistantMessage {
   id: string
   role: 'assistant'
   question: string
+  /** 所答问题附带的图片，重新提问时一并重发 */
+  questionImages?: ImageAttachment[]
   status: 'loading' | 'done' | 'error' | 'stopped'
   parts: AnswerPart[]
   error?: string
 }
-export type Message = { id: string; role: 'user'; text: string } | AssistantMessage
+export type Message =
+  { id: string; role: 'user'; text: string; images?: ImageAttachment[] } | AssistantMessage
 export interface SessionSummary {
   id: string
   title: string

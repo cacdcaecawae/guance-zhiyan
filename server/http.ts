@@ -10,6 +10,8 @@ import { authenticate as defaultAuthenticate, type Authenticate } from './auth.t
 import { sessionChanges, type SessionFrame } from '../src/services/session-stream.ts'
 import type { Session } from '../src/types/index.ts'
 
+// 只有提问读取正文，可附带 base64 图片：约 30 MB 原图
+const MAX_MESSAGE_BODY = 40_000_000
 async function body(request: IncomingMessage) {
   if (!request.headers['content-type']?.startsWith('application/json'))
     throw new HttpError(415, '请求必须为 JSON。')
@@ -17,7 +19,7 @@ async function body(request: IncomingMessage) {
   let size = 0
   for await (const chunk of request) {
     size += chunk.length
-    if (size > 32000) throw new HttpError(413, '请求过大。')
+    if (size > MAX_MESSAGE_BODY) throw new HttpError(413, '图片合计不能超过 30 MB。')
     chunks.push(chunk)
   }
   try {
@@ -55,6 +57,11 @@ export function createApp(
     response.setHeader('X-Content-Type-Options', 'nosniff')
     response.setHeader('Referrer-Policy', 'no-referrer')
     response.setHeader('X-Frame-Options', 'DENY')
+    // 请求须在 30 秒内收完；只有已登录用户向自己会话提问时放宽到 server.requestTimeout，
+    // 慢速上行也能传完附图，未登录或其他请求不能借此长时间占住连接
+    const deadline = setTimeout(() => {
+      if (!request.complete) request.destroy()
+    }, 30000).unref()
     try {
       const url = new URL(request.url ?? '/', 'http://localhost')
       const path = url.pathname
@@ -172,25 +179,57 @@ export function createApp(
         })
         return response.end(data)
       }
-      const match = /^\/api\/sessions\/([0-9a-f-]{36})(?:\/(messages|stop|events))?$/.exec(path)
+      const match =
+        /^\/api\/sessions\/([0-9a-f-]{36})(?:\/(messages|stop|events)|\/images\/([^/]+))?$/.exec(
+          path,
+        )
       if (!match) throw new HttpError(404, '接口不存在。')
-      const [, id, action] = match
+      const [, id, action, image] = match
       store.session(user.id, id)
-      if (!action && request.method === 'GET')
+      if (image && request.method === 'GET') {
+        let key: string
+        try {
+          key = decodeURIComponent(image)
+        } catch {
+          throw new HttpError(404, '没有找到图片。')
+        }
+        const { ref, data } = await agents.image(user.id, id, key)
+        // 沿用全站 no-store：同一浏览器换用户后，旧图也要重新经过归属检查
+        response.writeHead(200, { 'Content-Type': ref.mediaType, 'Content-Length': data.length })
+        return response.end(data)
+      }
+      if (!action && !image && request.method === 'GET')
         return json(response, 200, await agents.snapshot(user.id, id))
       if (action === 'messages' && request.method === 'POST') {
+        clearTimeout(deadline)
         const input = await body(request)
+        const images = input && typeof input === 'object' && 'images' in input ? input.images : []
+        if (
+          !Array.isArray(images) ||
+          !images.every(
+            (item) =>
+              item &&
+              typeof item === 'object' &&
+              // 新图片带编码后的内容；重新提问只带本会话已有图片的 id
+              (typeof item.id === 'string' ||
+                (typeof item.mediaType === 'string' &&
+                  typeof item.data === 'string' &&
+                  (item.name === undefined ||
+                    (typeof item.name === 'string' && item.name.length <= 255)))),
+          )
+        )
+          throw new HttpError(400, '图片格式错误。')
         if (
           !input ||
           typeof input !== 'object' ||
           !('question' in input) ||
           typeof input.question !== 'string' ||
-          !input.question.trim() ||
+          (!input.question.trim() && !images.length) ||
           input.question.length > 8000
         )
           throw new HttpError(400, '问题须为 1–8000 个字符。')
         const selection = 'selection' in input ? validateSelection(input.selection) : undefined
-        await agents.start(user.id, id, input.question.trim(), selection)
+        await agents.start(user.id, id, input.question.trim(), selection, images)
         return json(response, 202, await agents.snapshot(user.id, id))
       }
       if (action === 'stop' && request.method === 'POST') {
@@ -269,7 +308,8 @@ export function createApp(
         })
     }
   })
-  server.requestTimeout = 30000
+  // 提问正文最大 40 MB，约 1 Mbps 上行需 300 秒；其他请求由处理函数开头的 30 秒时限约束
+  server.requestTimeout = 300_000
   server.headersTimeout = 15000
   return server
 }
