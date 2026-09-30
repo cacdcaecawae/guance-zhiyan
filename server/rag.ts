@@ -6,7 +6,7 @@ import { LibraryStore, documentInput, type DocumentInput, type Passage } from '.
 export const RAG_ERRORS = {
   RAG_NOT_CONFIGURED: '后端尚未配置文献库向量服务，请联系管理员。',
   RAG_EMPTY: '共享文献库尚未导入资料，请联系管理员。',
-  RAG_NOT_INDEXED: '当前向量模型的文献索引尚未完成，请联系管理员重建索引。',
+  RAG_NOT_INDEXED: '文献索引尚未完成或在检索期间发生重建，请重试或联系管理员。',
   RAG_RETRIEVAL_FAILED: '文献库检索失败，请稍后重试或联系管理员。',
   RAG_INVALID_QUERY: '检索词须为 1–1000 个有效字符。',
   RAG_PASSAGE_NOT_FOUND: '没有找到该原文片段。',
@@ -60,6 +60,9 @@ export class KnowledgeLibrary {
       fingerprint TEXT NOT NULL, version_id TEXT NOT NULL REFERENCES rag_versions(id),
       PRIMARY KEY(fingerprint, version_id)
     );
+    CREATE TABLE IF NOT EXISTS rag_index_generations(
+      fingerprint TEXT PRIMARY KEY, generation INTEGER NOT NULL
+    );
     CREATE TABLE IF NOT EXISTS rag_library(one INTEGER PRIMARY KEY CHECK(one=1), id TEXT NOT NULL);`)
     if (config) {
       // A random id per DATA_DIR keeps libraries that share a Qdrant server and embedding model
@@ -68,12 +71,18 @@ export class KnowledgeLibrary {
       const library = db.prepare('SELECT id FROM rag_library').get()!.id
       this.embeddings = new Embeddings(config.embedding)
       const collection = `rag_v1_${digest([library, this.embeddings.fingerprint])}`
-      this.indexFingerprint = digest([new URL(config.qdrant.url).href, collection])
       this.vectors = new Qdrant({
         ...config.qdrant,
         collection,
         dimensions: config.embedding.dimensions,
       })
+      // Preserve the usual root endpoint's existing markers. Path-prefix markers used to have
+      // independent trailing-slash aliases, any of which may now be stale: never inherit them.
+      this.indexFingerprint = digest([
+        this.vectors.url,
+        collection,
+        ...(new URL(this.vectors.url).pathname === '/' ? [] : ['canonical-path-v1']),
+      ])
     }
   }
 
@@ -88,9 +97,22 @@ export class KnowledgeLibrary {
 
   /** Until every current document is indexed again, retrieval reports RAG_NOT_INDEXED. */
   invalidate() {
-    this.documents.store.db
-      .prepare('DELETE FROM rag_indexed_versions WHERE fingerprint=?')
-      .run(this.indexFingerprint!)
+    this.configured()
+    const db = this.documents.store.db
+    db.exec('BEGIN IMMEDIATE')
+    try {
+      // A completed rebuild can restore every marker while a query is awaiting a provider.
+      // Persist a new generation in the same transaction, visible to all server/CLI processes.
+      db.prepare(
+        `INSERT INTO rag_index_generations VALUES(?, 1)
+        ON CONFLICT(fingerprint) DO UPDATE SET generation=generation+1`,
+      ).run(this.indexFingerprint!)
+      db.prepare('DELETE FROM rag_indexed_versions WHERE fingerprint=?').run(this.indexFingerprint!)
+      db.exec('COMMIT')
+    } catch (error) {
+      db.exec('ROLLBACK')
+      throw error
+    }
   }
 
   private indexed(versionId: string) {
@@ -158,24 +180,38 @@ export class KnowledgeLibrary {
     if (!this.documents.count()) throw new RagError('RAG_EMPTY')
     // ponytail: anti-join over all current documents (~29 ms at 53k documents), run before and
     // after the search; record completion per fingerprint if library size makes this matter.
-    const assertIndexed = () => {
-      const missing = this.documents.store.db
+    const assertIndexed = (expected?: number) => {
+      // One SQLite snapshot for generation and readiness, including when a separate CLI writes.
+      const state = this.documents.store.db
         .prepare(
-          `SELECT 1 FROM rag_documents d WHERE NOT EXISTS(
+          `SELECT COALESCE((SELECT generation FROM rag_index_generations WHERE fingerprint=?), 0)
+          AS generation, EXISTS(SELECT 1 FROM rag_documents d WHERE NOT EXISTS(
         SELECT 1 FROM rag_indexed_versions i WHERE i.version_id=d.version_id AND i.fingerprint=?
-      ) LIMIT 1`,
+      )) AS missing`,
         )
-        .get(this.indexFingerprint!)
-      if (missing) throw new RagError('RAG_NOT_INDEXED')
+        .get(this.indexFingerprint!, this.indexFingerprint!)!
+      const generation = Number(state.generation)
+      if (state.missing || (expected !== undefined && expected !== generation))
+        throw new RagError('RAG_NOT_INDEXED')
+      return generation
     }
-    assertIndexed()
+    const generation = assertIndexed()
+    const assertGeneration = () => {
+      const current =
+        this.documents.store.db
+          .prepare('SELECT generation FROM rag_index_generations WHERE fingerprint=?')
+          .get(this.indexFingerprint!)?.generation ?? 0
+      if (current !== generation) throw new RagError('RAG_NOT_INDEXED')
+    }
     try {
       const [encoded] = await embeddings.embed([query], signal, 1)
+      assertGeneration()
       let dense: string[] = []
       // Every query starts from the top: offset paging could skip current points while an
       // import's cleanup deletes stale points ranked ahead of them.
       for (const limit of [80, 1000]) {
         const hits = await vectors.search(encoded, limit, signal)
+        assertGeneration()
         const active = new Set<string>()
         for (let offset = 0; offset < hits.length; offset += 256)
           for (const passage of this.documents.activePassages(
@@ -198,7 +234,7 @@ export class KnowledgeLibrary {
       const results = passages
         .sort((a, b) => scores.get(b.id)! - scores.get(a.id)! || a.id.localeCompare(b.id))
         .slice(0, 8)
-      assertIndexed()
+      assertIndexed(generation)
       return results
     } catch (error) {
       signal?.throwIfAborted()

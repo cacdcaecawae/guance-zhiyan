@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { execFile } from 'node:child_process'
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { once } from 'node:events'
 import { createServer } from 'node:http'
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
@@ -10,7 +10,7 @@ import { test, type TestContext } from 'node:test'
 import { fileURLToPath } from 'node:url'
 import { readDocuments } from './rag-import.ts'
 import { LibraryStore, type DocumentInput } from './rag-store.ts'
-import { KnowledgeLibrary, ragConfig } from './rag.ts'
+import { KnowledgeLibrary, ragConfig, type RagConfig } from './rag.ts'
 import { Store } from './store.ts'
 
 type Operation = 'embed' | 'ensure' | 'create' | 'upsert' | 'delete' | 'query'
@@ -32,13 +32,15 @@ async function backend(t: TestContext) {
   const root = await mkdtemp(join(tmpdir(), 'gczy-rag-integration-'))
   const store = new Store(root)
   const documents = new LibraryStore(store)
-  const calls: { operation: Operation; body: Record<string, unknown> }[] = []
+  const calls: { operation: Operation; body: Record<string, unknown>; path: string }[] = []
   const control = {
     collections: new Map<string, Map<string, Point>>(),
     dense: undefined as string[] | undefined,
     fail: undefined as Operation | undefined,
     failAfter: 0,
     gate: undefined as ReturnType<typeof gate> | undefined,
+    embed: undefined as ((input: string, index: number) => number[]) | undefined,
+    rankVectors: false,
   }
   const server = createServer(async (request, response) => {
     const path = new URL(request.url!, 'http://localhost').pathname
@@ -58,7 +60,15 @@ async function backend(t: TestContext) {
               : request.method === 'GET'
                 ? 'ensure'
                 : 'create'
-    calls.push({ operation, body })
+    calls.push({ operation, body, path })
+    // Snapshot before a gate so a held response can contain the previous model's vector.
+    const encoded =
+      operation === 'embed'
+        ? (body.input as string[]).map((input, index) => ({
+            index,
+            embedding: control.embed?.(input, index) ?? [1, index + 1],
+          }))
+        : undefined
     const waiting = control.gate
     if (waiting?.operation === operation && waiting.after-- === 0) {
       waiting.entered.resolve()
@@ -73,7 +83,7 @@ async function backend(t: TestContext) {
     if (operation === 'embed') {
       response.end(
         JSON.stringify({
-          data: (body.input as string[]).map((_, index) => ({ index, embedding: [1, index + 1] })),
+          data: encoded,
         }),
       )
       return
@@ -102,7 +112,20 @@ async function backend(t: TestContext) {
       reply({ status: 'completed' })
     } else
       reply({
-        points: (control.dense ?? [...points.keys()])
+        points: (
+          control.dense ??
+          (control.rankVectors
+            ? [...points.values()]
+                .sort((a, b) => {
+                  const similarity = (vector: number[]) =>
+                    vector.reduce((sum, value, index) => sum + value * body.query[index], 0) /
+                    Math.hypot(...vector) /
+                    Math.hypot(...body.query)
+                  return similarity(b.vector) - similarity(a.vector)
+                })
+                .map((point) => point.id)
+            : [...points.keys()])
+        )
           .slice(0, body.limit)
           .map((id, index) => ({ id, score: 1 / (index + 1) })),
       })
@@ -135,6 +158,38 @@ async function backend(t: TestContext) {
       [...control.collections.values()].flatMap((points) => [...points.keys()]).sort(),
   }
 }
+
+function runNode(root: string, config: RagConfig, args: string[]) {
+  const env: NodeJS.ProcessEnv = {
+    ...Object.fromEntries(
+      Object.entries(process.env).filter(([name]) =>
+        /^(path|systemroot|windir|temp|tmp|tmpdir|home|userprofile|localappdata|appdata)$/i.test(
+          name,
+        ),
+      ),
+    ),
+    DATA_DIR: root,
+    EMBEDDING_URL: config.embedding.url,
+    EMBEDDING_MODEL: config.embedding.model,
+    EMBEDDING_DIMENSIONS: String(config.embedding.dimensions),
+    QDRANT_URL: config.qdrant.url,
+  }
+  return new Promise<{ code: number; stdout: string; stderr: string }>((done, reject) => {
+    execFile(
+      process.execPath,
+      args,
+      { cwd: root, env, timeout: 15_000, windowsHide: true },
+      (error, stdout, stderr) => {
+        const code = error ? error.code : 0
+        if (typeof code !== 'number') reject(error)
+        else done({ code, stdout, stderr })
+      },
+    )
+  })
+}
+
+const runCli = (root: string, config: RagConfig, args: string[]) =>
+  runNode(root, config, [fileURLToPath(new URL('./rag-import.ts', import.meta.url)), ...args])
 
 test('imports publish only completed batches; failed updates keep old sources and retry with stable IDs', async (t) => {
   const { library, documents, store, control, calls, pointIds } = await backend(t)
@@ -413,6 +468,176 @@ test('retrieval fails as not indexed when reindex starts during an external requ
   await assert.rejects(retrieving, { code: 'RAG_NOT_INDEXED' })
 })
 
+test('a complete CLI force rebuild rejects in-flight embeddings, vector results and lexical results across processes', async (t) => {
+  const { documents, store, config, control, calls } = await backend(t)
+  const prefixed = { ...config, qdrant: { url: config.qdrant.url + '/proxy/' } }
+  const library = new KnowledgeLibrary(documents, prefixed)
+  let revision = 0
+  control.embed = (input) =>
+    input.includes('needle') || input.includes('relevant')
+      ? [revision % 2 === 0 ? 1 : -1, 0]
+      : [0, 1]
+  control.rankVectors = true
+  for (let index = 0; index < 9; index++)
+    await library.import({
+      id: String(index),
+      title: index === 8 ? 'relevant' : 'other',
+      text: `Synthetic document content ${index}`,
+    })
+  const sources = documents.list()
+  const oldPassage = documents.chunks(documents.current('8')!)[0]
+  const lexical = documents.lexical.bind(documents)
+  for (const phase of ['embed', 'query', 'query-fallback', 'lexical'] as const) {
+    assert.equal((await library.retrieve('needle'))[0].documentId, '8')
+    const waiting = gate(phase === 'embed' ? 'embed' : 'query', phase === 'query-fallback' ? 1 : 0)
+    if (phase === 'query-fallback')
+      control.dense = [...Array.from({ length: 80 }, () => randomUUID()), oldPassage.id]
+    if (phase === 'lexical')
+      documents.lexical = async (...args) => {
+        const results = await lexical(...args)
+        waiting.entered.resolve()
+        await waiting.release.promise
+        return results
+      }
+    else control.gate = waiting
+    const rejected = assert.rejects(library.retrieve('needle'), { code: 'RAG_NOT_INDEXED' })
+    try {
+      await waiting.entered.promise
+      const before = calls.filter((call) => call.operation === 'query').length
+      revision++ // Same configured model name, incompatible replacement weights.
+      const forced = await runCli(
+        store.root,
+        { ...prefixed, qdrant: { url: config.qdrant.url + '/proxy///' } },
+        ['reindex', '--force'],
+      )
+      assert.equal(forced.code, 0, forced.stderr)
+      assert.match(forced.stdout, /共处理 9 篇文献，其中 0 篇已索引而跳过/)
+      waiting.release.resolve()
+      await rejected
+      assert.equal(
+        calls.filter((call) => call.operation === 'query').length,
+        before,
+        'an old embedding or response must not start another vector request',
+      )
+    } finally {
+      waiting.release.resolve()
+      control.gate = undefined
+      documents.lexical = lexical
+      control.dense = undefined
+    }
+    assert.equal((await library.retrieve('needle'))[0].documentId, '8')
+    assert.deepEqual(documents.list(), sources)
+    assert.deepEqual(documents.passage(oldPassage.id), oldPassage)
+  }
+
+  // Start a fresh reader process with an equivalent URL: readiness and generation survive reopen.
+  const reopened = await runNode(store.root, prefixed, [
+    '--input-type=module',
+    '--eval',
+    `
+    import { Store } from ${JSON.stringify(new URL('./store.ts', import.meta.url).href)};
+    import { LibraryStore } from ${JSON.stringify(new URL('./rag-store.ts', import.meta.url).href)};
+    import { KnowledgeLibrary, ragConfig } from ${JSON.stringify(new URL('./rag.ts', import.meta.url).href)};
+    const store = new Store(process.env.DATA_DIR);
+    try {
+      const library = new KnowledgeLibrary(new LibraryStore(store), ragConfig());
+      console.log(JSON.stringify((await library.retrieve('needle')).map(p => p.documentId)));
+    } finally { store.close(); }
+  `,
+  ])
+  assert.equal(reopened.code, 0, reopened.stderr)
+  assert.equal(JSON.parse(reopened.stdout)[0], '8')
+})
+
+test('canonical root and prefix aliases share readiness and invalidation without trusting legacy prefix markers', async (t) => {
+  const { documents, store, config, calls } = await backend(t)
+  const input = { id: 'canonical', title: '地址规范化测试', text: '第一条 共享标记测试。' }
+  const digest = (url: string, collection: string) =>
+    createHash('sha256')
+      .update(JSON.stringify([new URL(url).href, collection]))
+      .digest('hex')
+  const independent = new KnowledgeLibrary(documents, {
+    ...config,
+    qdrant: { url: config.qdrant.url + '/different' },
+  })
+  await independent.import(input)
+  for (const prefix of ['', '/proxy']) {
+    const aliases = ['', '/', '///'].map(
+      (suffix) =>
+        new KnowledgeLibrary(documents, {
+          ...config,
+          qdrant: { url: config.qdrant.url + prefix + suffix },
+        }),
+    )
+    const first = aliases[0]
+    const versionId = documents.current(input.id)!
+    await first.import(input)
+    store.db
+      .prepare('DELETE FROM rag_indexed_versions WHERE fingerprint=?')
+      .run(first.indexFingerprint!)
+    for (const suffix of ['', '/', '///']) {
+      const legacy = digest(config.qdrant.url + prefix + suffix, first.vectors!.collection)
+      store.db
+        .prepare('INSERT OR IGNORE INTO rag_indexed_versions VALUES(?, ?)')
+        .run(legacy, versionId)
+      if (prefix) assert.notEqual(first.indexFingerprint, legacy)
+      else if (suffix !== '///')
+        assert.equal(
+          first.indexFingerprint,
+          legacy,
+          'the default root URL must retain its old fingerprint',
+        )
+    }
+    // Simulate upgrading a database that predates the generation table.
+    store.db.exec('DROP TABLE rag_index_generations')
+    new KnowledgeLibrary(documents, config)
+    if (prefix) await assert.rejects(first.retrieve('测试'), { code: 'RAG_NOT_INDEXED' })
+    const before = calls.length
+    const imported = await first.import(input)
+    assert.equal(imported.skipped, !prefix, 'only compatible root markers may be inherited')
+    for (const alias of aliases) {
+      assert.equal(alias.indexFingerprint, first.indexFingerprint)
+      assert.equal(alias.vectors!.collection, first.vectors!.collection)
+      assert.equal((await alias.retrieve('测试')).length, 1)
+    }
+    assert.ok(
+      calls
+        .slice(before)
+        .filter((call) => call.operation !== 'embed')
+        .every((call) => call.path.startsWith(prefix + '/collections/')),
+    )
+    aliases[2].invalidate()
+    for (const alias of aliases)
+      await assert.rejects(alias.retrieve('测试'), { code: 'RAG_NOT_INDEXED' })
+    assert.equal(
+      (await independent.retrieve('测试')).length,
+      1,
+      'a genuinely different endpoint keeps its own readiness',
+    )
+    await first.import(input)
+    assert.equal((await aliases[1].retrieve('测试')).length, 1)
+  }
+})
+
+test('invalidation rolls back the generation when marker deletion fails', async (t) => {
+  const { library, store } = await backend(t)
+  await library.import({ id: 'atomic', title: '原子失效测试', text: '第一条 原文。' })
+  const generation = () =>
+    store.db
+      .prepare('SELECT generation FROM rag_index_generations WHERE fingerprint=?')
+      .get(library.indexFingerprint!)!.generation
+  const before = generation()
+  store.db.exec(`CREATE TEMP TRIGGER fail_invalidation BEFORE DELETE ON rag_indexed_versions
+    BEGIN SELECT RAISE(ABORT, 'test-only invalidation failure'); END;`)
+  assert.throws(() => library.invalidate(), /test-only invalidation failure/)
+  assert.equal(generation(), before)
+  assert.equal((await library.retrieve('测试')).length, 1)
+  store.db.exec('DROP TRIGGER fail_invalidation')
+  library.invalidate()
+  assert.equal(generation(), Number(before) + 1)
+  await assert.rejects(library.retrieve('测试'), { code: 'RAG_NOT_INDEXED' })
+})
+
 test('the actual import and reindex CLI persists sources, resumes indexing, skips invalid lines on request and preserves an existing lock', async (t) => {
   const { documents, store, config, library, control, calls, pointIds } = await backend(t)
   const path = join(store.root, 'input.jsonl')
@@ -428,33 +653,7 @@ test('the actual import and reindex CLI persists sources, resumes indexing, skip
     { id: 'a-test', title: 'CLI 测试乙', text: '第一条 重建命令测试。' },
   ]
   await writeFile(path, inputs.map((input) => JSON.stringify(input)).join('\n'))
-  const env: NodeJS.ProcessEnv = {
-    ...Object.fromEntries(
-      Object.entries(process.env).filter(([name]) =>
-        /^(path|systemroot|windir|temp|tmp|tmpdir|home|userprofile|localappdata|appdata)$/i.test(
-          name,
-        ),
-      ),
-    ),
-    DATA_DIR: store.root,
-    EMBEDDING_URL: config.embedding.url,
-    EMBEDDING_MODEL: config.embedding.model,
-    EMBEDDING_DIMENSIONS: String(config.embedding.dimensions),
-    QDRANT_URL: config.qdrant.url,
-  }
-  const run = (args: string[]) =>
-    new Promise<{ code: number; stdout: string; stderr: string }>((done, reject) => {
-      execFile(
-        process.execPath,
-        [fileURLToPath(new URL('./rag-import.ts', import.meta.url)), ...args],
-        { cwd: store.root, env, timeout: 15_000, windowsHide: true },
-        (error, stdout, stderr) => {
-          const code = error ? error.code : 0
-          if (typeof code !== 'number') reject(error)
-          else done({ code, stdout, stderr })
-        },
-      )
-    })
+  const run = (args: string[]) => runCli(store.root, config, args)
   const markers = () =>
     Number(
       store.db
