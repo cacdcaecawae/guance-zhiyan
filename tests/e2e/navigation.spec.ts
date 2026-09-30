@@ -12,9 +12,12 @@ const png = {
 // Keep the real server and services; release the HTTP request at the relevant UI transition.
 async function holdPost(page: Page, path: string) {
   const started = Promise.withResolvers<Route>()
+  let captured = false
   const handler = async (route: Route) => {
-    if (route.request().method() !== 'POST') return route.continue()
-    await page.unroute(path, handler)
+    if (route.request().method() !== 'POST' || captured) return route.fallback()
+    captured = true
+    // Removing the last route handler releases an intercepted request in Chromium.
+    // Keep this one registered; later requests fall through while this route is held.
     started.resolve(route)
   }
   await page.route(path, handler)
