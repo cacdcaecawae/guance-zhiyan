@@ -169,3 +169,45 @@ test('手机关闭导航抽屉取消待完成新建的跳转，重新打开仍�
   await expect(page.getByRole('textbox', { name: '研究问题' })).toHaveValue('')
   await expect(page.getByRole('textbox', { name: '研究问题' })).toBeFocused()
 })
+
+test('同一会话断线后重连读取失败，恢复时保留草稿和附图并可继续发送', async ({ page }) => {
+  const response = await page.request.post('/api/sessions')
+  expect(response.ok()).toBe(true)
+  const session = await response.json()
+  const path = `/api/sessions/${session.id}`
+  // Exercise the real EventSource failure handler with a controlled SSE response.
+  await page.route(
+    `**${path}/events`,
+    (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: 'text/event-stream',
+        body: 'event: failure\ndata: {}\n\n',
+      }),
+    { times: 1 },
+  )
+  await page.goto(`/workspace/${session.id}`)
+  await expect(page.getByRole('alert')).toContainText('执行状态读取失败')
+  const box = page.getByRole('textbox', { name: '研究问题' })
+  const form = page.getByRole('form', { name: '提问' })
+  await box.fill('重连前的未发送草稿')
+  await page.getByLabel('选择图片').setInputFiles(png)
+  await page.route(
+    `**${path}`,
+    (route) => route.fulfill({ status: 503, json: { error: '重连读取失败' } }),
+    { times: 1 },
+  )
+  await page.getByRole('button', { name: '重新连接' }).click()
+  await expect(page.getByRole('alert')).toContainText('重连读取失败')
+  await expect(form).toBeHidden()
+  await page.getByRole('button', { name: '重试加载' }).click()
+  await expect(box).toHaveValue('重连前的未发送草稿')
+  await expect(form.getByRole('img', { name: '待发送.png' })).toBeVisible()
+  await expect(page.getByRole('alert')).toHaveCount(0)
+  await expect(page).toHaveURL(new RegExp(`/workspace/${session.id}$`))
+  await box.press('Enter')
+  await expect(page.getByRole('heading', { name: '测试回答' })).toBeVisible()
+  await expect(box).toHaveValue('')
+  await expect(form.getByRole('img')).toHaveCount(0)
+  await expect(page.getByRole('list', { name: '问题附图' }).getByRole('img')).toBeVisible()
+})

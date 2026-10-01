@@ -255,24 +255,23 @@ export function WorkspacePage({ sessionId }: { sessionId?: string }) {
               )}
             </div>
             <div className="shrink-0 px-4 pt-2 pb-5">
-              <div className="mx-auto max-w-[52rem]">
-                {!error && (
-                  <Composer
-                    autoFocus={focusComposer}
-                    onSubmit={submit}
-                    busy={busy || loading}
-                    onStop={session?.running ? stop : undefined}
-                  >
-                    {catalog && selection && (
-                      <ModelPicker
-                        catalog={catalog}
-                        selection={selection}
-                        disabled={busy || loading}
-                        onChange={setChosen}
-                      />
-                    )}
-                  </Composer>
-                )}
+              {/* 读取失败时只隐藏输入区，重连恢复后仍保留同一份未发送草稿。 */}
+              <div className="mx-auto max-w-[52rem]" hidden={!!error}>
+                <Composer
+                  autoFocus={focusComposer}
+                  onSubmit={submit}
+                  busy={busy || loading || !!error}
+                  onStop={session?.running ? stop : undefined}
+                >
+                  {catalog && selection && (
+                    <ModelPicker
+                      catalog={catalog}
+                      selection={selection}
+                      disabled={busy || loading || !!error}
+                      onChange={setChosen}
+                    />
+                  )}
+                </Composer>
               </div>
             </div>
           </div>

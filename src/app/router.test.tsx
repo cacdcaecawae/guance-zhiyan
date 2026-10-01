@@ -30,10 +30,12 @@ const attach = (name: string) =>
   fireEvent.change(screen.getByLabelText('选择图片'), { target: { files: [image(name)] } })
 const deferred = () => {
   let resolve!: (response: Response) => void
-  const promise = new Promise<Response>((done) => {
+  let reject!: (error: Error) => void
+  const promise = new Promise<Response>((done, fail) => {
     resolve = done
+    reject = fail
   })
-  return { promise, resolve }
+  return { promise, resolve, reject }
 }
 let AppRouter: typeof import('./router').AppRouter
 let creates: Promise<Response>[]
@@ -41,6 +43,8 @@ let posts: Promise<Response>[]
 let createCount: number
 let postCount: number
 let narrow: boolean
+let sessionReads: Promise<Response>[]
+let events: { onerror?: () => void }[]
 
 beforeEach(async () => {
   // The real service owns module-level state; each router gets a fresh store and subscriptions.
@@ -50,6 +54,8 @@ beforeEach(async () => {
   createCount = 0
   postCount = 0
   narrow = false
+  sessionReads = []
+  events = []
   window.history.replaceState({}, '', '/workspace')
   localStorage.clear()
   vi.stubGlobal('matchMedia', (query: string) => ({
@@ -60,6 +66,11 @@ beforeEach(async () => {
   vi.stubGlobal(
     'EventSource',
     class extends EventTarget {
+      onerror?: () => void
+      constructor() {
+        super()
+        events.push(this)
+      }
       close() {}
     },
   )
@@ -77,7 +88,8 @@ beforeEach(async () => {
         postCount++
         return posts.shift() ?? Response.json({})
       }
-      if (path.startsWith('/api/sessions/')) return Response.json(session(path.split('/').at(-1)!))
+      if (path.startsWith('/api/sessions/'))
+        return sessionReads.shift() ?? Response.json(session(path.split('/').at(-1)!))
       throw new Error(`Unexpected request: ${path}`)
     }),
   )
@@ -291,3 +303,38 @@ it('窄屏关闭导航抽屉后，延迟新建完成不会跳转或重新打开�
   expect(screen.getByRole('button', { name: '新建研究' })).toHaveAttribute('aria-disabled', 'false')
   expect(screen.getByRole('link', { name: '研究 stale' })).toBeInTheDocument()
 })
+
+for (const failure of ['http', 'network']) {
+  it(`重连读取${failure === 'http' ? '服务错误' : '网络失败'}后重试保留未发送文字和图片`, async () => {
+    await open('/workspace/old')
+    const original = box()
+    fireEvent.change(original, { target: { value: '重连前的未发送草稿' } })
+    attach('重连前.png')
+    act(() => events.at(-1)!.onerror?.())
+    const pending = deferred()
+    sessionReads.push(pending.promise)
+    fireEvent.click(screen.getByRole('button', { name: '重新连接' }))
+    await screen.findByText('正在加载会话…')
+    expect(screen.getByRole('button', { name: '发送' })).toHaveAttribute('aria-disabled', 'true')
+    await act(async () => {
+      if (failure === 'http')
+        pending.resolve(Response.json({ error: '重连读取失败' }, { status: 503 }))
+      else pending.reject(new TypeError('Failed to fetch'))
+    })
+    await screen.findByRole('button', { name: '重试加载' })
+    expect(original).toBeInTheDocument()
+    expect(original).not.toBeVisible()
+    expect(original).toHaveValue('重连前的未发送草稿')
+    // Even a dispatched submit cannot send while the current session could not be read.
+    fireEvent.submit(screen.getByRole('form', { name: '提问', hidden: true }))
+    expect(postCount).toBe(0)
+    fireEvent.click(screen.getByRole('button', { name: '重试加载' }))
+    await waitFor(() => expect(screen.queryByText('正在加载会话…')).not.toBeInTheDocument())
+    expect(box()).toHaveValue('重连前的未发送草稿')
+    expect(box()).toBe(original)
+    expect(screen.getByRole('img', { name: '重连前.png' })).toBeInTheDocument()
+    expect(postCount).toBe(0)
+    expect(window.location.pathname).toBe('/workspace/old')
+    expect(localStorage.length).toBe(0)
+  })
+}
