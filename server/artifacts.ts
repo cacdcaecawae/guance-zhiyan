@@ -19,6 +19,13 @@ export const MIME: Record<string, string> = {
 }
 const MAX_CONTENT = 200_000
 const MAX_USER_BYTES = 50 * 1024 * 1024
+// XML 1.0 cannot represent these characters, even as character references, so Office files can't.
+const xmlInvalid = (text: string) =>
+  !text.isWellFormed() ||
+  Array.from(text).some((char) => {
+    const code = char.codePointAt(0)!
+    return (code < 32 && !'\t\n\r'.includes(char)) || code === 0xfffe || code === 0xffff
+  })
 type GeneratedFormat = 'md' | 'docx' | 'xlsx' | 'csv'
 type Workspace = {
   readOffice(data: Uint8Array, format: 'docx' | 'xlsx', signal?: AbortSignal): Promise<string>
@@ -58,6 +65,11 @@ export class Artifacts {
       throw new HarnessError('文件内容为空或超过 200 KB。', 'FILE_INVALID_CONTENT')
     let bytes: Buffer
     if (format === 'docx') {
+      if (xmlInvalid(content))
+        throw new HarnessError(
+          'Word 正文含有不支持的字符，请移除无效字符或改用 Markdown。',
+          'FILE_INVALID_DOCX_CONTENT',
+        )
       const children = content.split(/\r?\n/).map((line) => {
         const heading = /^(#{1,3})\s+(.+)$/.exec(line)
         return new Paragraph(
@@ -92,9 +104,25 @@ export class Artifacts {
           'FILE_INVALID_TABLE',
         )
       if (format === 'xlsx') {
+        if (
+          rows.some((row) =>
+            row.some((cell: unknown) => typeof cell === 'string' && xmlInvalid(cell)),
+          )
+        )
+          throw new HarnessError(
+            '表格含有 Excel 不支持的字符，请移除无效字符或改用 CSV。',
+            'FILE_INVALID_XLSX_CONTENT',
+          )
         const book = new ExcelJS.Workbook()
         const sheet = book.addWorksheet('研究资料')
-        sheet.addRows(rows)
+        // ExcelJS decodes OOXML escapes when reading but does not escape literal text on write.
+        sheet.addRows(
+          rows.map((row) =>
+            row.map((cell: string | number) =>
+              typeof cell === 'string' ? cell.replace(/_(?=x[0-9a-fA-F]{4}_)/g, '_x005F_') : cell,
+            ),
+          ),
+        )
         sheet.getRow(1).font = { bold: true }
         sheet.columns.forEach((col) => {
           col.width = 24
@@ -200,9 +228,11 @@ export class Artifacts {
     } else if (file.format === 'docx') {
       const zip = await JSZip.loadAsync(data)
       const xml = await zip.file('word/document.xml')!.async('string')
-      const parsed: unknown = new XMLParser({ preserveOrder: true, parseTagValue: false }).parse(
-        xml,
-      )
+      const parsed: unknown = new XMLParser({
+        preserveOrder: true,
+        parseTagValue: false,
+        trimValues: false,
+      }).parse(xml)
       const collect = (node: unknown): string => {
         if (Array.isArray(node)) return node.map(collect).join('')
         if (!node || typeof node !== 'object') return ''
