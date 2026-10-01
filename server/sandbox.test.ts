@@ -62,7 +62,16 @@ async function protocolFixture() {
   const uploads = new Map<string, string>()
   const commandStarted = new Set<() => void>()
   const errors: unknown[] = []
-  const state: { failDeletes: number; officeWritten?: () => void; ready?: () => void } = {
+  const renewals: string[] = []
+  const deletions: string[] = []
+  const failedRenewals = new Set<string>()
+  const failedDeletions = new Set<string>()
+  const state: {
+    failDeletes: number
+    officeWritten?: () => void
+    ready?: () => void
+    beforeMaintenance?: () => Promise<void>
+  } = {
     failDeletes: 0,
   }
   let origin = ''
@@ -102,6 +111,9 @@ async function protocolFixture() {
         if (!tail && request.method === 'GET')
           return json({ id, createdAt: new Date().toISOString(), status: { state: 'Running' } })
         if (!tail && request.method === 'DELETE') {
+          deletions.push(id)
+          await state.beforeMaintenance?.()
+          if (failedDeletions.has(id)) return json({ code: 'TEMPORARY', message: 'retry' }, 500)
           if (state.failDeletes > 0) {
             state.failDeletes--
             return json({ code: 'TEMPORARY', message: 'retry' }, 500)
@@ -113,8 +125,12 @@ async function protocolFixture() {
         }
         if (tail.startsWith('/endpoints/'))
           return json({ endpoint: origin.replace('http://', '') + `/exec/${id}` })
-        if (tail === '/renew-expiration')
+        if (tail === '/renew-expiration') {
+          renewals.push(id)
+          await state.beforeMaintenance?.()
+          if (failedRenewals.has(id)) return json({ code: 'TEMPORARY', message: 'retry' }, 500)
           return json({ expiresAt: new Date(Date.now() + 600000).toISOString() })
+        }
       }
       const endpoint = /^\/exec\/([^/]+)(.*)$/.exec(url.pathname)
       if (endpoint) {
@@ -208,8 +224,100 @@ async function protocolFixture() {
   server.listen(0, '127.0.0.1')
   await once(server, 'listening')
   origin = `http://127.0.0.1:${(server.address() as { port: number }).port}`
-  return { server, origin, live, creations, volumes, errors, commandStarted, state }
+  return {
+    server,
+    origin,
+    live,
+    creations,
+    volumes,
+    errors,
+    commandStarted,
+    state,
+    renewals,
+    deletions,
+    failedRenewals,
+    failedDeletions,
+  }
 }
+
+for (const failure of ['renew', 'delete'] as const)
+  test(`sandbox maintenance isolates a persistent ${failure} failure from other sessions`, async (t) => {
+    const fixture = await protocolFixture()
+    const root = await mkdtemp(join(tmpdir(), 'gczy-sweep-isolation-'))
+    const store = new Store(root)
+    const manager = await new Sandboxes(store, {
+      endpoint: fixture.origin,
+      apiKey: 'fixture-only',
+      image: 'fixture-image',
+      capacity: 3,
+      cpu: '1',
+      memory: '1Gi',
+      idleSeconds: 300,
+    }).init()
+    // Drive maintenance explicitly, without waiting for the background interval.
+    clearInterval(manager.timer)
+    const warning = t.mock.method(console, 'warn', () => {})
+    const started = Promise.withResolvers<void>(),
+      release = Promise.withResolvers<void>()
+    let running: Promise<void> | undefined
+    try {
+      const user = store.user('sweep:user', 'Test')
+      const failing = store.create(user.id),
+        healthy = store.create(user.id),
+        idle = store.create(user.id)
+      for (const session of [failing, healthy, idle])
+        await manager.use(user.id, session.id, undefined, async () => {})
+      const first = manager.entries.get(failing.id)!
+      const firstId = (await first.remote).id
+      const healthyId = (await manager.entries.get(healthy.id)!.remote).id
+      running = manager.use(user.id, healthy.id, undefined, async () => {
+        started.resolve()
+        await release.promise
+      })
+      await started.promise
+      const idleEntry = manager.entries.get(idle.id)!
+      const idleId = (await idleEntry.remote).id
+      idleEntry.used = Date.now() - 301_000
+      if (failure === 'renew') fixture.failedRenewals.add(firstId)
+      else {
+        first.fenced = true
+        fixture.failedDeletions.add(firstId)
+      }
+      fixture.state.beforeMaintenance = async () => {
+        fixture.state.beforeMaintenance = undefined
+        assert.equal(manager.sweeping, true)
+        await manager.sweep()
+      }
+      for (let pass = 1; pass <= 2; pass++) {
+        await manager.sweep()
+        assert.equal(fixture.renewals.filter((id) => id === healthyId).length, pass)
+        assert.equal(manager.entries.has(idle.id), false, 'other idle sessions are reclaimed')
+        assert.equal(fixture.live.has(idleId), false)
+        assert.equal(fixture.deletions.filter((id) => id === idleId).length, 1)
+        assert.equal(manager.entries.get(failing.id), first, 'failed work remains retryable')
+        assert.equal(first.fenced, failure === 'delete' ? true : undefined)
+        assert.equal(manager.sweeping, false)
+        assert.equal(warning.mock.callCount(), pass, 'each failed pass remains observable')
+      }
+      fixture.failedRenewals.clear()
+      fixture.failedDeletions.clear()
+      await manager.sweep()
+      assert.equal(fixture.renewals.filter((id) => id === healthyId).length, 3)
+      assert.equal(warning.mock.callCount(), 2)
+      assert.equal(manager.entries.has(failing.id), failure === 'renew')
+      assert.deepEqual(fixture.errors, [])
+    } finally {
+      release.resolve()
+      await running
+      fixture.failedRenewals.clear()
+      fixture.failedDeletions.clear()
+      await manager.close()
+      store.close()
+      fixture.server.closeAllConnections()
+      await new Promise<void>((done) => fixture.server.close(() => done()))
+      await rm(root, { recursive: true })
+    }
+  })
 
 test('DSH tools use isolated OpenSandbox SDK sessions, persist exports and kill remote execution on stop', async () => {
   const fixture = await protocolFixture()
