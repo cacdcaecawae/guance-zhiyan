@@ -216,3 +216,18 @@ it('未使用脚注内的普通引用定义仍可解析正文链接', () => {
   expect(screen.getAllByRole('link')).toHaveLength(1)
   expect(screen.getByRole('link', { name: '原文 1' })).toHaveAttribute('href', footnoteFirst)
 })
+
+it('脚注不做页内跳转：正文标记显示为“注n”，不显示返回箭头，读屏标题为中文', () => {
+  const text = `正文[^a]，另见[原文](${footnoteFirst})，再提[^a]\n\n[^a]: 注释内容`
+  const { container } = render(checked(text))
+  // U+2060 keeps the marker whole and on the line of the word it follows.
+  expect([...container.querySelectorAll('sup')].map((sup) => sup.textContent)).toEqual([
+    '\u2060注\u20601',
+    '\u2060注\u20601',
+  ])
+  expect(screen.getByRole('heading', { name: '脚注' })).toBeInTheDocument()
+  expect(screen.getByRole('listitem')).toHaveTextContent(/^注释内容$/)
+  expect(screen.getAllByRole('link').map((link) => link.getAttribute('aria-label'))).toEqual([
+    '原文 1',
+  ])
+})

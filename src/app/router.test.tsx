@@ -338,3 +338,33 @@ for (const failure of ['http', 'network']) {
     expect(localStorage.length).toBe(0)
   })
 }
+
+for (const moveFocus of [false, true]) {
+  it(`新建研究读取失败后重试${moveFocus ? '尊重等待期间主动转移的焦点' : '恢复输入框焦点'}`, async () => {
+    await open()
+    const fetch = vi.mocked(globalThis.fetch)
+    const request = fetch.getMockImplementation()!
+    // StrictMode may repeat the initial read; keep it failing until the user retries.
+    fetch.mockImplementation((path, options) =>
+      path === '/api/sessions/created-1'
+        ? Promise.resolve(Response.json({ error: '首次读取失败' }, { status: 503 }))
+        : request(path, options),
+    )
+    fireEvent.click(screen.getByRole('button', { name: '新建研究' }))
+    await waitFor(() => expect(window.location.pathname).toBe('/workspace/created-1'))
+    const retry = await screen.findByRole('button', { name: '重试加载' })
+    fetch.mockImplementation(request)
+    const recovery = deferred()
+    sessionReads.push(recovery.promise)
+    // Keyboard activation: the retry button disappears while this read is pending.
+    act(() => retry.focus())
+    fireEvent.click(retry)
+    await screen.findByText('正在加载会话…')
+    expect(document.activeElement).toBe(document.body)
+    const elsewhere = screen.getByRole('tab', { name: '对话' })
+    if (moveFocus) act(() => elsewhere.focus())
+    await act(async () => recovery.resolve(Response.json(session('created-1'))))
+    await waitFor(() => expect(screen.queryByText('正在加载会话…')).not.toBeInTheDocument())
+    expect(moveFocus ? elsewhere : box()).toHaveFocus()
+  })
+}

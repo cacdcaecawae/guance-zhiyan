@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { createServer, type RequestListener } from 'node:http'
+import { createServer, type RequestListener, type ServerResponse } from 'node:http'
 import { once } from 'node:events'
 import { test, type TestContext } from 'node:test'
 import { Embeddings } from './rag-embedding.ts'
@@ -73,7 +73,9 @@ test('embeddings send authenticated batches, restore response order and fingerpr
 test('embeddings reject malformed responses and never expose response bodies or credentials', async (t) => {
   let status = 200
   let body = ''
+  let calls = 0
   const url = await endpoint(t, (_request, response) => {
+    calls++
     response.writeHead(status, { 'Content-Type': 'application/json' })
     response.end(body)
   })
@@ -111,8 +113,80 @@ test('embeddings reject malformed responses and never expose response bodies or 
     })
   }
   status = 200
-  body = ' '.repeat(16 * 1024 * 1024 + 1)
+  body = '{"data":['
+  let before = calls
   await assert.rejects(embeddings.embed(['text']), /无效响应/)
+  assert.equal(calls, before + 1, 'complete but malformed JSON is not a transport failure')
+  body = ' '.repeat(16 * 1024 * 1024 + 1)
+  before = calls
+  await assert.rejects(embeddings.embed(['text']), /无效响应/)
+  assert.equal(calls, before + 1, 'oversized bodies are not retried')
+})
+
+test('embeddings retry a dropped response body without repeating completed batches', async (t) => {
+  const calls: string[][] = []
+  const received = Promise.withResolvers<void>()
+  let broken: ServerResponse | undefined
+  const url = await endpoint(t, async (request, response) => {
+    const chunks: Buffer[] = []
+    for await (const chunk of request) chunks.push(chunk)
+    const { input } = JSON.parse(Buffer.concat(chunks).toString())
+    calls.push(input)
+    response.writeHead(200, { 'Content-Type': 'application/json' })
+    if (calls.length === 2) {
+      broken = response
+      response.write('{"data":[')
+    } else response.end(JSON.stringify({ data: [{ index: 0, embedding: [Number(input[0]), 1] }] }))
+  })
+  const nativeFetch = globalThis.fetch
+  // Observe actual response headers before severing the real HTTP connection; do not fake its body.
+  t.mock.method(globalThis, 'fetch', async (...args: Parameters<typeof fetch>) => {
+    const response = await nativeFetch(...args)
+    if (calls.length === 2) received.resolve()
+    return response
+  })
+  const embeddings = new Embeddings({ url, model: 'test', dimensions: 2, batchSize: 1 })
+  const pending = embeddings.embed(['1', '2', '3'])
+  const outcome = pending.then(
+    (vectors) => ({ vectors }),
+    (error: unknown) => ({ error }),
+  )
+  await received.promise
+  broken!.destroy()
+  assert.deepEqual(await outcome, {
+    vectors: [
+      [1, 1],
+      [2, 1],
+      [3, 1],
+    ],
+  })
+  assert.deepEqual(calls, [['1'], ['2'], ['2'], ['3']])
+})
+
+test('embeddings cap repeated response-body disconnects and sanitize the failure', async (t) => {
+  let calls = 0
+  let broken: ServerResponse | undefined
+  const url = await endpoint(t, (_request, response) => {
+    calls++
+    broken = response
+    response.writeHead(200, { 'Content-Type': 'application/json' })
+    response.write('{"private-source-content":')
+  })
+  const nativeFetch = globalThis.fetch
+  t.mock.method(globalThis, 'fetch', async (...args: Parameters<typeof fetch>) => {
+    const response = await nativeFetch(...args)
+    broken!.destroy()
+    return response
+  })
+  const embeddings = new Embeddings({ url, model: 'test', dimensions: 2, apiKey: 'test-only-key' })
+  await assert.rejects(embeddings.embed(['text'], undefined, 1), (error: unknown) => {
+    assert.ok(error instanceof Error)
+    assert.match(error.message, /向量服务请求失败/)
+    assert.doesNotMatch(error.message, /private-source-content|test-only-key|127\.0\.0\.1/)
+    assert.equal(error.cause, undefined)
+    return true
+  })
+  assert.equal(calls, 2, 'one initial attempt plus one retry, never an unbounded loop')
 })
 
 test('embeddings propagate cancellation before a request and while receiving its body', async (t) => {

@@ -211,3 +211,41 @@ test('同一会话断线后重连读取失败，恢复时保留草稿和附图�
   await expect(form.getByRole('img')).toHaveCount(0)
   await expect(page.getByRole('list', { name: '问题附图' }).getByRole('img')).toBeVisible()
 })
+
+for (const moveFocus of [false, true]) {
+  test(`新建研究首次读取失败，重试后${moveFocus ? '尊重用户转移的焦点' : '恢复输入焦点'}`, async ({
+    page,
+  }) => {
+    await page.goto('/workspace')
+    const sessionRead = /\/api\/sessions\/[^/]+$/
+    await page.route(sessionRead, (route) =>
+      route.fulfill({ status: 503, json: { error: '首次读取失败' } }),
+    )
+    await page.getByRole('button', { name: '新建研究' }).click()
+    await expect(page.getByRole('alert')).toContainText('首次读取失败')
+    await page.unroute(sessionRead)
+    const started = Promise.withResolvers<Route>()
+    let captured = false
+    // Keep this route registered until the held read is explicitly released.
+    await page.route(sessionRead, (route) => {
+      if (captured) return route.fallback()
+      captured = true
+      started.resolve(route)
+    })
+    await page.getByRole('button', { name: '重试加载' }).press('Enter')
+    const pending = await started.promise
+    await expect(page.getByText('正在加载会话…')).toBeVisible()
+    await expect(page.locator('body')).toBeFocused()
+    const elsewhere = page.getByRole('tab', { name: '对话' })
+    if (moveFocus) await elsewhere.focus()
+    await pending.continue()
+    await expect(page.getByText('正在加载会话…')).toBeHidden()
+    const box = page.getByRole('textbox', { name: '研究问题' })
+    await expect(moveFocus ? elsewhere : box).toBeFocused()
+    if (!moveFocus) {
+      // A locator fill/press would focus the textbox and could conceal a regression.
+      await page.keyboard.type('重试后继续输入')
+      await expect(box).toHaveValue('重试后继续输入')
+    }
+  })
+}

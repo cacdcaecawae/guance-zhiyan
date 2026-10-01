@@ -34,6 +34,7 @@ export function WorkspacePage({ sessionId }: { sessionId?: string }) {
   const location = useLocation()
   // 从“新建研究”进入时直接聚焦输入框
   const focusComposer = !!(location.state as { focusComposer?: boolean } | null)?.focusComposer
+  const composer = useRef<HTMLDivElement>(null)
   // 关闭宽屏预览后把焦点还给对应的文件卡
   const closePreview = () => {
     document.getElementById(`artifact-${previewId}`)?.focus()
@@ -48,6 +49,17 @@ export function WorkspacePage({ sessionId }: { sessionId?: string }) {
     }
   }, [])
   useEffect(() => watchSession(sessionId), [sessionId, reconnect])
+  useEffect(() => {
+    // 重试成功后补回因隐藏而丢失的焦点，不打断已转到其他控件的用户。
+    if (
+      focusComposer &&
+      !loading &&
+      !error &&
+      view === 'conversation' &&
+      document.activeElement === document.body
+    )
+      composer.current?.querySelector('textarea')?.focus()
+  }, [focusComposer, loading, error, view])
   const session = current?.id === sessionId ? current : null
   const preview = session?.artifacts.find((file) => file.id === previewId)
   const busy = posting || !!session?.running
@@ -256,7 +268,7 @@ export function WorkspacePage({ sessionId }: { sessionId?: string }) {
             </div>
             <div className="shrink-0 px-4 pt-2 pb-5">
               {/* 读取失败时只隐藏输入区，重连恢复后仍保留同一份未发送草稿。 */}
-              <div className="mx-auto max-w-[52rem]" hidden={!!error}>
+              <div ref={composer} className="mx-auto max-w-[52rem]" hidden={!!error}>
                 <Composer
                   autoFocus={focusComposer}
                   onSubmit={submit}

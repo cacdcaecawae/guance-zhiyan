@@ -291,15 +291,18 @@ export class Sandboxes {
     try {
       for (const [id, entry] of this.entries) {
         if (entry.retiring) continue
-        if (
-          entry.fenced ||
-          (!entry.users && Date.now() - entry.used >= this.config.idleSeconds * 1000)
-        )
-          await this.retire(id, entry)
-        else await (await entry.remote).renew(Math.max(600, this.config.idleSeconds * 2))
+        try {
+          if (
+            entry.fenced ||
+            (!entry.users && Date.now() - entry.used >= this.config.idleSeconds * 1000)
+          )
+            await this.retire(id, entry)
+          else await (await entry.remote).renew(Math.max(600, this.config.idleSeconds * 2))
+        } catch {
+          // One unavailable instance must not prevent other sessions from being maintained.
+          console.warn('沙箱续期或回收失败，请检查 OpenSandbox 服务。')
+        }
       }
-    } catch {
-      console.warn('沙箱续期或回收失败，请检查 OpenSandbox 服务。')
     } finally {
       this.sweeping = false
     }

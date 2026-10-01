@@ -22,6 +22,8 @@ export function toolError(code?: string): string {
     TOOL_TIMEOUT: '工具执行超时，请重试或更换来源。',
     FILE_INVALID_NAME: '文件名称或格式无效。',
     FILE_INVALID_CONTENT: '文件内容为空或超过 200 KB。',
+    FILE_INVALID_DOCX_CONTENT: 'Word 正文含有不支持的字符，请移除无效字符或改用 Markdown。',
+    FILE_INVALID_XLSX_CONTENT: '表格含有 Excel 不支持的字符，请移除无效字符或改用 CSV。',
     FILE_INVALID_TABLE:
       '表格内容必须为二维 JSON 数组，最多 2000 行、50 列，单元格仅支持文本或数字。',
     FILE_TOO_LARGE: '文件名称无效或文件超过 50 MiB。',
