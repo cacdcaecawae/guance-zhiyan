@@ -2,11 +2,14 @@ import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { passagePath } from './citations'
 
-// U+2060 keeps a citation badge on the line of the word it follows; an inline-block can wrap alone.
+// U+2060 keeps a citation badge or footnote marker on the line of the word it follows; an
+// inline-block can wrap alone, and CJK text may break inside “注1”.
 const WORD_JOINER = String.fromCodePoint(0x2060)
 
 /**
- * Raw HTML is ignored; only HTTP(S) links and exact library citation paths are navigable.
+ * Raw HTML is ignored; only HTTP(S) links and exact library citation paths are navigable, so
+ * footnotes don't jump: markers read “注n” so they aren't taken for citation badges, and the
+ * back arrows, which could do nothing, are dropped.
  * Library citations render as superscript numbers from citations, the answer-wide order of
  * server-checked passages (citationOrder); without it, as in file previews, they stay text.
  */
@@ -15,10 +18,20 @@ export function Markdown({ text, citations }: { text: string; citations?: readon
     <div className="answer-markdown min-w-0">
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
+        // Heading of the footnote list; visually hidden, read by screen readers.
+        remarkRehypeOptions={{ footnoteLabel: '脚注' }}
         skipHtml
         urlTransform={(url) => (/^https?:\/\//i.test(url) || passagePath.test(url) ? url : '')}
         components={{
-          a: ({ href, children }) => {
+          a: ({ href, children, node }) => {
+            if (node?.properties.dataFootnoteBackref !== undefined) return null
+            if (node?.properties.dataFootnoteRef)
+              return (
+                <>
+                  {WORD_JOINER}注{WORD_JOINER}
+                  {children}
+                </>
+              )
             if (!href) return <span>{children}</span>
             const passage = passagePath.exec(href)
             if (passage) {
