@@ -121,3 +121,34 @@ test('Word rejects characters that cannot form valid XML before publishing an ar
     await rm(root, { recursive: true })
   }
 })
+
+test('Excel rejects characters that cannot form valid XML; CSV keeps them', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'gczy-xlsx-invalid-text-test-'))
+  const store = new Store(root)
+  try {
+    const files = new Artifacts(store)
+    const user = store.user('test:office-text', 'Test')
+    const session = store.create(user.id)
+    for (const char of ['\0', '\v', '\ufffe', '\uffff', '\ud800']) {
+      await assert.rejects(
+        files.create(
+          user.id,
+          session.id,
+          '表格',
+          'xlsx',
+          JSON.stringify([['指标'], [`前${char}后`]]),
+        ),
+        { code: 'FILE_INVALID_XLSX_CONTENT' },
+        `code unit ${char.charCodeAt(0).toString(16)}`,
+      )
+    }
+    assert.equal(store.artifacts(user.id, session.id).length, 0)
+    assert.match(toolError('FILE_INVALID_XLSX_CONTENT'), /Excel.*字符/)
+    const csv = await files.create(user.id, session.id, '表格', 'csv', '[["前\uffff后"]]')
+    assert.match(await files.read(user.id, session.id, csv.id), /前\uffff后/)
+    assert.deepEqual(await readdir(join(root, 'artifacts')), [csv.id])
+  } finally {
+    store.close()
+    await rm(root, { recursive: true })
+  }
+})
