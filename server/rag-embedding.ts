@@ -103,7 +103,10 @@ export class Embeddings {
       const chunks: Uint8Array[] = []
       let bytes = 0
       for (;;) {
-        const { value, done } = await reader.read()
+        // The transport can fail after successful headers; this is still a retryable request.
+        const { value, done } = await reader.read().catch((error: unknown) => {
+          throw requestError(error)
+        })
         if (done) break
         bytes += value.byteLength
         if (bytes > MAX_RESPONSE_BYTES) {
@@ -113,8 +116,9 @@ export class Embeddings {
         chunks.push(value)
       }
       payload = JSON.parse(Buffer.concat(chunks).toString('utf8'))
-    } catch {
+    } catch (error) {
       if (requestSignal.aborted) throw requestError()
+      if (error instanceof TransientError) throw error
       throw new Error('向量服务返回无效响应。')
     }
     const data = payload && typeof payload === 'object' && 'data' in payload ? payload.data : null
