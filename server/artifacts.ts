@@ -58,6 +58,18 @@ export class Artifacts {
       throw new HarnessError('文件内容为空或超过 200 KB。', 'FILE_INVALID_CONTENT')
     let bytes: Buffer
     if (format === 'docx') {
+      // XML 1.0 cannot represent these characters, even as character references.
+      if (
+        !content.isWellFormed() ||
+        Array.from(content).some((char) => {
+          const code = char.codePointAt(0)!
+          return (code < 32 && !'\t\n\r'.includes(char)) || code === 0xfffe || code === 0xffff
+        })
+      )
+        throw new HarnessError(
+          'Word 正文含有不支持的字符，请移除无效字符或改用 Markdown。',
+          'FILE_INVALID_DOCX_CONTENT',
+        )
       const children = content.split(/\r?\n/).map((line) => {
         const heading = /^(#{1,3})\s+(.+)$/.exec(line)
         return new Paragraph(
@@ -94,7 +106,14 @@ export class Artifacts {
       if (format === 'xlsx') {
         const book = new ExcelJS.Workbook()
         const sheet = book.addWorksheet('研究资料')
-        sheet.addRows(rows)
+        // ExcelJS decodes OOXML escapes when reading but does not escape literal text on write.
+        sheet.addRows(
+          rows.map((row) =>
+            row.map((cell: string | number) =>
+              typeof cell === 'string' ? cell.replace(/_(?=x[0-9a-fA-F]{4}_)/g, '_x005F_') : cell,
+            ),
+          ),
+        )
         sheet.getRow(1).font = { bold: true }
         sheet.columns.forEach((col) => {
           col.width = 24
@@ -200,9 +219,11 @@ export class Artifacts {
     } else if (file.format === 'docx') {
       const zip = await JSZip.loadAsync(data)
       const xml = await zip.file('word/document.xml')!.async('string')
-      const parsed: unknown = new XMLParser({ preserveOrder: true, parseTagValue: false }).parse(
-        xml,
-      )
+      const parsed: unknown = new XMLParser({
+        preserveOrder: true,
+        parseTagValue: false,
+        trimValues: false,
+      }).parse(xml)
       const collect = (node: unknown): string => {
         if (Array.isArray(node)) return node.map(collect).join('')
         if (!node || typeof node !== 'object') return ''
