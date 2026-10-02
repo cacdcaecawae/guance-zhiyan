@@ -407,6 +407,7 @@ export class Agents {
     } catch (error) {
       this.active.delete(id)
       await run.handle?.dispose().catch(() => {})
+      this.notify(id)
       throw error
     } finally {
       ready.resolve()
