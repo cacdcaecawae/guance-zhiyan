@@ -1,4 +1,3 @@
-import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
 import {
   FileIcon,
   ImagePlusIcon,
@@ -16,6 +15,12 @@ import {
   type ReactNode,
 } from 'react'
 import { Button } from '@/components/ui/button'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
 import { ResizeHandle } from '@/components/ui/resize-handle'
 import { Textarea } from '@/components/ui/textarea'
 import { readPref, writePref } from '@/lib/storage'
@@ -151,8 +156,8 @@ export function Composer({ onSubmit, busy = false, onStop, children, autoFocus }
         )}
         <div className="flex items-end gap-2">
           {/* 参照 Claude 的“+”入口；文件附件尚未上线，菜单里明确写“敬请期待” */}
-          <DropdownMenu.Root>
-            <DropdownMenu.Trigger asChild>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
               <Button
                 type="button"
                 variant="ghost"
@@ -163,31 +168,18 @@ export function Composer({ onSubmit, busy = false, onStop, children, autoFocus }
               >
                 <PlusIcon />
               </Button>
-            </DropdownMenu.Trigger>
-            <DropdownMenu.Portal>
-              <DropdownMenu.Content
-                side="top"
-                align="start"
-                sideOffset={4}
-                className="z-50 min-w-44 rounded-lg border border-popover-border bg-popover p-1 text-foreground shadow-md"
-              >
-                <DropdownMenu.Item
-                  onSelect={() => picker.current?.click()}
-                  className="flex cursor-default items-center gap-2 rounded-md px-2 py-1.5 text-ui-caption outline-none select-none data-highlighted:bg-selected"
-                >
-                  <ImagePlusIcon className="size-4 text-foreground-subtle" />
-                  添加图片
-                </DropdownMenu.Item>
-                <DropdownMenu.Item
-                  disabled
-                  className="flex cursor-default items-center gap-2 rounded-md px-2 py-1.5 text-ui-caption outline-none select-none data-disabled:pointer-events-none data-disabled:opacity-50"
-                >
-                  <FileIcon className="size-4 text-foreground-subtle" />
-                  添加文件（敬请期待）
-                </DropdownMenu.Item>
-              </DropdownMenu.Content>
-            </DropdownMenu.Portal>
-          </DropdownMenu.Root>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent side="top" align="start" className="min-w-44">
+              <DropdownMenuItem onSelect={() => picker.current?.click()}>
+                <ImagePlusIcon />
+                添加图片
+              </DropdownMenuItem>
+              <DropdownMenuItem disabled>
+                <FileIcon />
+                添加文件（敬请期待）
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
           <input
             ref={picker}
             type="file"
