@@ -91,7 +91,7 @@
 
 - `Button`：`default` 主按钮（每个面板最多一个）、`outline`、`ghost`；尺寸 `default` / `sm` / `icon` / `icon-sm`
 - `Textarea`：`bg-input` + `border-input-border`，悬停与聚焦只改边框色，不发光
-- `Sheet`：窄屏抽屉，带 `sr-only` 标题与“关闭”按钮；焦点在输入框时 Esc 先交给输入框，再按一次才关闭抽屉
+- `Sheet`：窄屏抽屉，带 `sr-only` 标题与“关闭”按钮；焦点在标了 `data-own-escape` 的控件（如重命名输入框）时 Esc 先交给该控件，再按一次才关闭抽屉
 - `Badge`：通用弱徽标
 - `Select`：基于 Radix Select 的下拉，弹层 `bg-popover rounded-lg shadow-md`，选项 `rounded-md`，选中项用尾部对勾，不填色
 - `DropdownMenu`：基于 Radix DropdownMenu 的操作菜单，弹层与 `Select` 相同；菜单项 `rounded-md`、`text-ui-caption`，前置 `size-4` 次要色图标，高亮用 `bg-selected`

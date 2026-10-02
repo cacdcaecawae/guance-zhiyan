@@ -294,8 +294,10 @@ export function createApp(
                   response.once('close', finish)
                 })
             }
-          } catch {
-            if (!closed) response.end('event: failure\ndata: {}\n\n')
+          } catch (error) {
+            // 会话已删除时单独告知，不提示重新连接
+            const gone = error instanceof HttpError && error.status === 404
+            if (!closed) response.end(`event: ${gone ? 'deleted' : 'failure'}\ndata: {}\n\n`)
           } finally {
             writing = false
             if (dirty && !closed) schedule()

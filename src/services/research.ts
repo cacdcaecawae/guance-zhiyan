@@ -70,6 +70,7 @@ export async function initialize() {
     const sessions = await request<SessionSummary[]>('/sessions')
     const catalog = await request<ModelCatalog>('/models')
     if (version !== initialization) return
+    listVersion++
     update({ user, catalog, sessions, current: null, loading: false })
   } catch (error) {
     if (version === initialization)
@@ -84,36 +85,79 @@ export async function initialize() {
   }
 }
 
+// 本地每次改动会话列表都使进行中的列表读取过时：过时结果丢弃并重读，不覆盖较新的改动
+let listVersion = 0
+function setSessions(sessions: SessionSummary[]) {
+  listVersion++
+  update({ sessions })
+}
+async function reloadSessions() {
+  for (;;) {
+    const version = listVersion
+    const sessions = await request<SessionSummary[]>('/sessions')
+    if (version === listVersion) return update({ sessions })
+  }
+}
+
+// 同一会话的修改按提交顺序依次发送，后提交的结果不会被先提交的迟到响应覆盖
+const queues = new Map<string, Promise<void>>()
+function inOrder<T>(id: string, task: () => Promise<T>) {
+  const result = (queues.get(id) ?? Promise.resolve()).then(task)
+  const settled = result.then(
+    () => {},
+    () => {},
+  )
+  queues.set(id, settled)
+  void settled.then(() => {
+    if (queues.get(id) === settled) queues.delete(id)
+  })
+  return result
+}
+
 export async function createSession() {
   const session = await request<SessionSummary>('/sessions', { method: 'POST' })
-  update({ sessions: [session, ...state.sessions] })
+  setSessions([session, ...state.sessions])
   return session
 }
 
-const reloadSessions = async () => update({ sessions: await request('/sessions') })
-
-export async function updateSession(id: string, patch: { title?: string; pinned?: boolean }) {
-  const session = await request<SessionSummary>(`/sessions/${id}`, {
-    method: 'PATCH',
-    body: JSON.stringify(patch),
+export const updateSession = (id: string, patch: { title?: string; pinned?: boolean }) =>
+  inOrder(id, async () => {
+    const session = await request<SessionSummary>(`/sessions/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(patch),
+    })
+    update({ current: state.current?.id === id ? { ...state.current, ...session } : state.current })
+    // 置顶改变排序，以服务端列表为准
+    if (patch.pinned === undefined)
+      setSessions(state.sessions.map((s) => (s.id === id ? session : s)))
+    else {
+      listVersion++
+      await reloadSessions()
+    }
   })
-  update({ current: state.current?.id === id ? { ...state.current, ...session } : state.current })
-  // 置顶改变排序，以服务端列表为准
-  if (patch.pinned === undefined)
-    update({ sessions: state.sessions.map((s) => (s.id === id ? session : s)) })
-  else await reloadSessions()
-}
 
-export async function deleteSession(id: string) {
-  try {
-    await request(`/sessions/${id}`, { method: 'DELETE' })
-  } catch (error) {
-    // 清理失败时会话记录可能已删除，以服务端列表为准
-    await reloadSessions().catch(() => {})
-    throw error
-  }
-  update({ sessions: state.sessions.filter((s) => s.id !== id) })
-}
+/**
+ * 删除成功时返回 undefined；会话已删除但服务端未能完全清理时返回其提示；会话仍在时抛出错误。
+ */
+export const deleteSession = (id: string) =>
+  inOrder(id, async () => {
+    try {
+      await request(`/sessions/${id}`, { method: 'DELETE' })
+    } catch (error) {
+      // 清理失败时会话可能已删除：以服务端能否读到该会话为准
+      const gone = await send(`/api/sessions/${id}`, { credentials: 'same-origin' }).then(
+        (response) => response.status === 404,
+        () => false,
+      )
+      if (!gone) {
+        await reloadSessions().catch(() => {})
+        throw error
+      }
+      setSessions(state.sessions.filter((s) => s.id !== id))
+      return error instanceof Error ? error.message : '会话已删除，但未能完全清理。'
+    }
+    setSessions(state.sessions.filter((s) => s.id !== id))
+  })
 
 /** A single subscription owns the visible session. Route changes invalidate old reads. */
 export function watchSession(id?: string) {
@@ -123,12 +167,17 @@ export function watchSession(id?: string) {
   update({ current: null, loading: !!id, error: null, connectionError: null })
   const apply = (session: Session) => {
     if (version !== generation) return
+    // 标题变化也算列表改动，使进行中的列表读取过时
+    const renamed = state.sessions.some((s) => s.id === id && s.title !== session.title)
+    if (renamed) listVersion++
     update({
       current: session,
       loading: false,
       error: null,
       connectionError: null,
-      sessions: state.sessions.map((s) => (s.id === id ? { ...s, title: session.title } : s)),
+      ...(renamed && {
+        sessions: state.sessions.map((s) => (s.id === id ? { ...s, title: session.title } : s)),
+      }),
     })
   }
   if (id)
@@ -150,6 +199,10 @@ export function watchSession(id?: string) {
           if (version === generation)
             update({ connectionError: '连接已中断，正在重新连接；生成状态尚未确认。' })
         }
+        source.addEventListener('deleted', () => {
+          if (version === generation) update({ error: '该研究记录已删除。', connectionError: null })
+          source?.close()
+        })
         source.addEventListener('failure', () => {
           if (version === generation) update({ connectionError: '执行状态读取失败，请重新连接。' })
           source?.close()

@@ -120,17 +120,19 @@ export class Store {
       this.db.prepare('UPDATE sessions SET pinned=? WHERE id=?').run(pinned ? Date.now() : 0, id)
     return summary(this.db.prepare('SELECT id, title, pinned FROM sessions WHERE id=?').get(id)!)
   }
-  /** 删除会话及其文件索引与沙箱记录，返回待从磁盘清理的会话文件 id。 */
+  /** 删除会话及其文件索引，返回待从磁盘清理的会话文件 id；沙箱记录须先随容器回收删除。 */
   remove(userId: string, id: string) {
     this.session(userId, id)
     this.db.exec('BEGIN IMMEDIATE')
     try {
+      // 未回收的实例记录是重启后回收容器的唯一线索，不随会话抹掉
+      if (this.db.prepare('SELECT 1 FROM sandboxes WHERE session_id=?').get(id))
+        throw new HttpError(503, '会话仍有未回收的沙箱容器，请联系管理员。')
       const files = this.db
         .prepare('SELECT id FROM artifacts WHERE session_id=?')
         .all(id)
         .map((row) => String(row.id))
       this.db.prepare('DELETE FROM artifacts WHERE session_id=?').run(id)
-      this.db.prepare('DELETE FROM sandboxes WHERE session_id=?').run(id)
       this.db.prepare('DELETE FROM sessions WHERE id=?').run(id)
       this.db.exec('COMMIT')
       return files

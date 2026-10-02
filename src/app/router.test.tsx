@@ -1,5 +1,6 @@
 import { StrictMode } from 'react'
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import type { ModelCatalog, Session } from '@/types'
 
@@ -156,6 +157,32 @@ it('首次发送失败保留文字和图片，重试沿用已创建会话', asyn
   expect(postCount).toBe(2)
   await waitFor(() => expect(box()).toHaveValue(''))
   expect(screen.queryByText('发送测试失败')).not.toBeInTheDocument()
+})
+
+it('首次发送失败后在侧栏删掉刚建的空记录，重试时重新新建会话并保留草稿', async () => {
+  posts.push(Promise.resolve(Response.json({ error: '发送测试失败' }, { status: 503 })))
+  const user = userEvent.setup()
+  await open()
+  fireEvent.change(box(), { target: { value: '保留问题' } })
+  send()
+  expect(await screen.findByRole('alert')).toHaveTextContent('发送测试失败')
+  const row = screen.getByRole('link', { name: '研究 created-1' }).closest('li')!
+  await user.click(within(row).getByRole('button', { name: '更多操作' }))
+  await user.click(await screen.findByRole('menuitem', { name: '删除' }))
+  const dialog = await screen.findByRole('alertdialog')
+  await user.click(within(dialog).getByRole('button', { name: '删除' }))
+  await waitFor(() =>
+    expect(screen.queryByRole('link', { name: '研究 created-1' })).not.toBeInTheDocument(),
+  )
+  expect(box()).toHaveValue('保留问题')
+  send()
+  await waitFor(() => expect(window.location.pathname).toBe('/workspace/created-2'))
+  expect(createCount).toBe(2)
+  const asked = vi.mocked(fetch).mock.calls.map(([path]) => String(path))
+  expect(asked.filter((path) => path.endsWith('/messages'))).toEqual([
+    '/api/sessions/created-1/messages',
+    '/api/sessions/created-2/messages',
+  ])
 })
 
 it('已有会话发送时也保留等待期间的新草稿', async () => {

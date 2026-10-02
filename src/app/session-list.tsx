@@ -63,10 +63,12 @@ export function SessionList({ onNavigate }: { onNavigate?: () => void }) {
     setDeleting(true)
     setDeleteError(null)
     try {
-      await deleteSession(target.session.id)
+      // 已删除但未能完全清理时同样离开该会话，提示改放到侧栏
+      const warning = await deleteSession(target.session.id)
       deleted.current = true
       if (current === target.session.id) navigate('/workspace')
       setOpen(false)
+      if (warning) setError(warning)
     } catch (failure) {
       setDeleteError(reason(failure, '删除失败，请重试。'))
     } finally {
@@ -285,6 +287,7 @@ function RenameInput({
       defaultValue={title}
       maxLength={80}
       aria-label="重命名研究记录"
+      data-own-escape
       onFocus={(e) => e.currentTarget.select()}
       onKeyDown={(e) => {
         if (e.key === 'Enter' && !e.nativeEvent.isComposing) {

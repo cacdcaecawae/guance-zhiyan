@@ -40,8 +40,9 @@ function SheetContent({
         }}
         onEscapeKeyDown={(e) => {
           onEscapeKeyDown?.(e)
-          // 输入框里的 Esc 先交给输入框（如取消重命名），再按一次才关闭抽屉
-          if (e.target instanceof HTMLInputElement) e.preventDefault()
+          // 标了 data-own-escape 的控件（如重命名输入框）自己处理 Esc，再按一次才关闭抽屉
+          if (e.target instanceof Element && e.target.closest('[data-own-escape]'))
+            e.preventDefault()
         }}
         aria-describedby={undefined}
         className={cn(

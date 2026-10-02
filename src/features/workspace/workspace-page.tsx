@@ -22,7 +22,7 @@ import { Trajectory } from './trajectory'
 import type { ImageAttachment, ModelSelection } from '@/types'
 
 export function WorkspacePage({ sessionId }: { sessionId?: string }) {
-  const { current, catalog, loading, error, connectionError } = useResearch()
+  const { current, catalog, sessions, loading, error, connectionError } = useResearch()
   const [view, setView] = useState<'conversation' | 'trace'>('conversation')
   const [chosen, setChosen] = useState<ModelSelection | null>(null)
   const [operationError, setOperationError] = useState<string | null>(null)
@@ -59,6 +59,8 @@ export function WorkspacePage({ sessionId }: { sessionId?: string }) {
     setPosting(true)
     setOperationError(null)
     try {
+      // 首次发送失败后，刚建的空会话可能已在侧栏删除；此时重新新建，保留草稿
+      if (!sessions.some((s) => s.id === createdSession.current)) createdSession.current = undefined
       const id = sessionId ?? createdSession.current ?? (await createSession()).id
       createdSession.current = id
       // Admit the request before navigation, preserving the draft on failure.
