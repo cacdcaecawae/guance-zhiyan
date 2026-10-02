@@ -1,6 +1,5 @@
 import { ArrowDownIcon, CheckIcon, CircleAlertIcon, CopyIcon, RotateCcwIcon } from 'lucide-react'
 import { useEffect, useRef, useState, type ReactNode } from 'react'
-import { SlipsMark } from '@/app/logo'
 import { Button } from '@/components/ui/button'
 import { imageUrl } from '@/services/research'
 import type { AssistantMessage, Message } from '@/types'
@@ -169,13 +168,6 @@ function AnswerArticle({
   return (
     <article aria-label="回答" className="flex min-w-0 flex-col gap-2">
       <AnswerContent message={message} />
-      {message.status === 'loading' && (
-        <div role="status" className="flex items-center gap-2 text-ui-caption text-brand">
-          {/* 思考与回答阶段都显示：竹简依次抽出 */}
-          <SlipsMark size={20} loading />
-          正在生成…
-        </div>
-      )}
       {message.status === 'stopped' && (
         <p role="status" className="text-ui-caption text-foreground-subtle">
           {message.error ?? '已停止'}
@@ -210,8 +202,27 @@ function AnswerArticle({
               重新提问
             </Button>
           )}
+          {message.endedAt !== undefined && (
+            <time
+              dateTime={new Date(message.endedAt).toISOString()}
+              className="ml-1.5 text-ui-sm tabular-nums"
+            >
+              {clock(message.endedAt)}
+            </time>
+          )}
         </div>
       )}
     </article>
   )
+}
+
+/** 回答的结束时刻，同 DSH message-chrome：当天只写时分，今年加月日，往年加年月日。 */
+function clock(time: number) {
+  const date = new Date(time)
+  const now = new Date()
+  const pad = (n: number) => String(n).padStart(2, '0')
+  const hm = `${pad(date.getHours())}:${pad(date.getMinutes())}`
+  if (date.toDateString() === now.toDateString()) return hm
+  const md = `${date.getMonth() + 1}月${date.getDate()}日`
+  return `${date.getFullYear() === now.getFullYear() ? md : `${date.getFullYear()}年${md}`} ${hm}`
 }

@@ -42,7 +42,9 @@ export function Reasoning({
     >
       <summary className="flex w-fit max-w-full min-w-0 cursor-pointer list-none items-center gap-2 rounded-md py-1.5 text-ui-caption outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring [&::-webkit-details-marker]:hidden">
         <AtomIcon className="size-3.5 shrink-0" aria-hidden />
-        <span className="shrink-0">思考过程{running ? ' · 生成中' : ''}</span>
+        {/* 同 DSH ReasoningRow：标题“思考”，生成中只对读屏说明 */}
+        <span className="shrink-0">思考</span>
+        {running && <span className="sr-only">生成中</span>}
         {!open && summary && (
           <span className="min-w-0 truncate text-foreground-subtlest">{summary}</span>
         )}

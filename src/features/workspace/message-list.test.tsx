@@ -78,21 +78,42 @@ it('执行过程标题写用时，完成后折起；最后一步的思考也收�
   render(<MessageList sessionId="s" messages={[message]} busy={false} onRetry={() => {}} />)
   const process = screen.getByText('已完成，用时 1分05秒').closest('details')!
   expect(process).not.toHaveAttribute('open')
-  expect(within(process).getAllByText('思考过程')).toHaveLength(2)
+  // 两步的思考与工具在同一个过程组里，组头是活动摘要
+  const group = within(process).getByText('已生成文件').closest('details')!
+  expect(within(group).getAllByText('思考')).toHaveLength(2)
   expect(process).not.toContainElement(screen.getByText('文件已生成'))
   expect(screen.queryByText(/次|失败/)).not.toBeInTheDocument()
 })
 
-it('没有过程内容的回答也写用时，只是不能展开', () => {
+it('完成时键盘焦点在过程里则保持展开，不把焦点藏起来', () => {
+  const running: AssistantMessage = { ...answer, status: 'loading', startedAt: 0 }
+  const { rerender } = render(
+    <MessageList sessionId="s" messages={[running]} busy onRetry={() => {}} />,
+  )
+  fireEvent.focusIn(screen.getByText('已生成文件').closest('summary')!)
+  rerender(
+    <MessageList
+      sessionId="s"
+      messages={[{ ...running, status: 'done', endedAt: 2_000 }]}
+      busy={false}
+      onRetry={() => {}}
+    />,
+  )
+  expect(screen.getByText('已完成，用时 2秒').closest('details')).toHaveAttribute('open')
+})
+
+it('没有过程内容的回答也写用时，只是不能展开；操作行末尾写结束时刻', () => {
+  const now = Date.now()
   const plain: AssistantMessage = {
     ...answer,
-    startedAt: 0,
-    endedAt: 3_400,
+    startedAt: now - 3_400,
+    endedAt: now,
     parts: [answer.parts[2]],
   }
   render(<MessageList sessionId="s" messages={[plain]} busy={false} onRetry={() => {}} />)
   const label = screen.getByText('已完成，用时 3秒')
   expect(label.closest('details')).toBeNull()
+  expect(screen.getByText(/^\d\d:\d\d$/).tagName).toBe('TIME')
 })
 
 it('进行中每秒更新用时并保持展开；停止与失败写明状态与用时', () => {
@@ -103,6 +124,9 @@ it('进行中每秒更新用时并保持展开；停止与失败写明状态与�
   )
   const label = screen.getByText('进行中，用时 12秒')
   expect(label.closest('details')).toHaveAttribute('open')
+  // 整轮控件是唯一的运行指示，回答下方不再另有“正在生成…”
+  expect(screen.getByRole('status')).toHaveTextContent('正在生成')
+  expect(screen.queryByText('正在生成…')).not.toBeInTheDocument()
   act(() => vi.advanceTimersByTime(1000))
   expect(label).toHaveTextContent('进行中，用时 13秒')
   vi.useRealTimers()
