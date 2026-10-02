@@ -16,7 +16,11 @@ algorithm from [ReasoningRow.tsx](https://github.com/deepseek-ai/deepseek-harnes
 The disclosure markup and styling use this project's components and tokens.
 `execution-process.tsx` adapts the process/final-answer boundary and disclosure
 layout from `packages/client/ui-chat/src/client/conversation-nodes/turn-process.ts`
-and `chat/TurnProcessNodeView.tsx`. `trajectory.tsx` adapts the timeline lanes,
+and `chat/TurnProcessNodeView.tsx`; it and `tool-display.ts` adapt the process
+grouping, activity titles, tool-name categories and group disclosure from
+`conversation-nodes/process-groups.ts`, `conversation-nodes/process-activity.ts`,
+`chat/step-process.ts` and `chat/ChatGroupSeat.tsx`, following the rules in
+`conversation-nodes/README.zh.md`. `trajectory.tsx` adapts the timeline lanes,
 turn grouping and event disclosure layout from `packages/client/ui-trajectory`.
 These views use this project's React data service and semantic tokens instead
 of the upstream client plugin runtime. `server/network.ts` directly reuses

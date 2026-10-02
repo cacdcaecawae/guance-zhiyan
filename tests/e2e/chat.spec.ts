@@ -19,7 +19,10 @@ test('多轮回答、思考、格式文本和刷新恢复；不执行模型 HTML
   const answer = page.getByRole('article', { name: '回答' })
   await expect(answer.getByRole('heading', { name: '测试回答' })).toBeVisible()
   await expect(answer.locator('strong')).toHaveText('自动化测试')
-  await answer.locator('summary').click()
+  // 完成后过程折起，逐层展开：整轮 → 过程组 → 思考
+  await answer.locator('summary', { hasText: /^已完成，用时 \d+秒$/ }).click()
+  await answer.locator('summary', { hasText: '已完成分析' }).click()
+  await answer.locator('summary', { hasText: '思考' }).click()
   await expect(answer).toContainText('检查请求内容')
   await expect(answer.locator('script')).toHaveCount(0)
   await expect(answer.locator('[href^="javascript:"]')).toHaveCount(0)
@@ -82,21 +85,30 @@ test('真实文件工具、执行追踪和 Word 下载；其他用户不能访�
   await page.goto('/workspace')
   await page.getByRole('textbox', { name: '研究问题' }).fill('生成报告')
   await page.getByRole('button', { name: '发送' }).click()
-  await expect(page.locator('summary', { hasText: /生成文件.*已完成/ })).toBeVisible()
   const answer = page.getByRole('article', { name: '回答' })
-  const reasoning = answer.locator('summary', { hasText: '思考过程' })
+  const process = answer.locator('summary', { hasText: /已完成，用时/ })
+  await expect(process).toBeVisible()
+  const reasoning = answer.locator('summary', { hasText: '思考' })
   await expect(reasoning).toHaveCount(2)
-  await expect(answer.locator('summary')).toHaveText([
-    /生成文件 1 次/,
-    /思考过程/,
-    /生成文件.*已完成/,
-    /思考过程/,
-  ])
-  await answer.locator('summary', { hasText: '生成文件 1 次' }).click()
+  // 完成后过程折起，只留最终回答；阶段回复也随过程收起
   await expect(answer.getByText('文件已生成，请从下方文件卡片下载。')).toBeVisible()
+  await expect(answer.getByText('先生成报告。')).not.toBeVisible()
+  await process.click()
+  // 展开后是过程组头与阶段回复：阶段回复把思考与工具切成两组，组内明细仍收起
+  await expect(answer.locator('summary')).toHaveText([
+    /已完成，用时/,
+    /已完成分析/,
+    /思考/,
+    /已生成文件/,
+    /生成文件.*已完成/,
+    /思考/,
+  ])
+  await expect(answer.getByText('先生成报告。')).toBeVisible()
   await expect(reasoning.first()).not.toBeVisible()
-  await answer.locator('summary', { hasText: '生成文件 1 次' }).click()
   await page.reload()
+  await process.click()
+  for (const name of ['已完成分析', '已生成文件'])
+    await answer.locator('summary', { hasText: name }).click()
   await expect(reasoning).toHaveCount(2)
   for (const item of await reasoning.all()) await item.click()
   await expect(answer.getByText('测试适配器：检查请求内容。', { exact: true })).toHaveCount(2)
@@ -216,7 +228,11 @@ for (const width of [390, 1440]) {
       await box.fill('生成报告')
       await expect(page.getByRole('button', { name: '发送', exact: true })).toBeEnabled()
       await box.press('Enter')
-      await expect(page.locator('summary', { hasText: /生成文件.*已完成/ })).toBeVisible()
+      // 第二个回答完成后过程折起，展开再截图
+      const report = page.getByRole('article', { name: '回答' }).nth(1)
+      await report.locator('summary', { hasText: /已完成，用时/ }).click()
+      await report.locator('summary', { hasText: '已生成文件' }).click()
+      await expect(report.locator('summary', { hasText: /生成文件.*已完成/ })).toBeVisible()
       await page.screenshot({ path: `test-results/process-${width}-${theme}.png` })
       await page.getByRole('tab', { name: '轨迹', exact: true }).click()
       await expect(page.getByLabel('执行时间分布')).toBeVisible()

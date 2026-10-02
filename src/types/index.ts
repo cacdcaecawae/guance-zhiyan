@@ -35,6 +35,9 @@ export interface AssistantMessage {
   status: 'loading' | 'done' | 'error' | 'stopped'
   parts: AnswerPart[]
   error?: string
+  /** 本轮开始与结束的时间戳（毫秒），用于执行过程的用时 */
+  startedAt?: number
+  endedAt?: number
 }
 export type Message =
   { id: string; role: 'user'; text: string; images?: ImageAttachment[] } | AssistantMessage
