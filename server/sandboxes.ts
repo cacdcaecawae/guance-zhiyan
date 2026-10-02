@@ -91,9 +91,6 @@ export class Sandboxes {
       useServerProxy: true,
       disableMetrics: true,
     })
-    store.db.exec(
-      'CREATE TABLE IF NOT EXISTS sandboxes(session_id TEXT PRIMARY KEY REFERENCES sessions(id), remote_id TEXT NOT NULL)',
-    )
   }
   async init() {
     // A restarted application must stop previous executions before mounting their volumes again.
@@ -282,6 +279,10 @@ export class Sandboxes {
   }
   async stop(userId: string, id: string) {
     this.store.session(userId, id)
+    await this.discard(id)
+  }
+  /** 回收会话的容器；会话删除后也走这里。工作区卷由管理服务保留。 */
+  async discard(id: string) {
     const entry = this.entries.get(id)
     if (entry) await this.retire(id, entry)
   }

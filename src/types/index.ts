@@ -41,6 +41,8 @@ export type Message =
 export interface SessionSummary {
   id: string
   title: string
+  /** 只在会话列表中提供 */
+  pinned?: boolean
 }
 export interface ModelSelection {
   provider: string

@@ -1,3 +1,4 @@
+import { readdir, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
 import AgentRegistry, { type AgentHandle } from '@deepseek-ai/dsh-agent'
@@ -109,6 +110,7 @@ export class Agents {
   options: AgentOptions
   closing = false
   failed = new Set<string>()
+  removing = new Set<string>()
   constructor(store: Store, options: AgentOptions = {}) {
     this.store = store
     this.files = new Artifacts(store)
@@ -264,6 +266,7 @@ export class Agents {
     if (this.closing) throw new HttpError(503, '服务正在关闭，请稍后重试。')
     if (this.failed.has(id)) throw new HttpError(500, '会话保存失败，暂时无法继续生成。')
     if (this.active.has(id)) throw new HttpError(409, '当前会话仍在生成，请先停止。')
+    if (this.removing.has(id)) throw new HttpError(409, '会话正在删除。')
     if (!this.options.adapter && !config.apiKey)
       throw new HttpError(503, `后端尚未配置${config.name}密钥（${config.key}）。`)
     const ready = Promise.withResolvers<void>()
@@ -407,6 +410,7 @@ export class Agents {
     } catch (error) {
       this.active.delete(id)
       await run.handle?.dispose().catch(() => {})
+      this.notify(id)
       throw error
     } finally {
       ready.resolve()
@@ -421,6 +425,53 @@ export class Agents {
       await this.options.sandboxes?.stop(userId, id)
       await run.ready
       await run.done
+    }
+  }
+  /**
+   * 先回收沙箱容器：失败时返回可重试的 503，会话和实例记录都保留，重启后仍能回收。
+   * 再删数据库记录，此后提问与读取一律 404；最后清理消息历史和会话文件。
+   * 附图按内容存储、可能被其他会话共用，保留且不退配额；沙箱工作区卷由管理服务保留。
+   */
+  async remove(userId: string, id: string) {
+    this.store.session(userId, id)
+    if (this.active.has(id)) throw new HttpError(409, '当前会话仍在生成，请先停止。')
+    if (this.removing.has(id)) throw new HttpError(409, '会话正在删除，请稍候。')
+    this.removing.add(id)
+    let files: string[]
+    try {
+      try {
+        await this.options.sandboxes?.discard(id)
+      } catch {
+        console.warn(`会话 ${id} 的沙箱容器未能回收，会话未删除。`)
+        throw new HttpError(503, '沙箱容器暂时无法回收，会话未删除，请稍后重试。')
+      }
+      files = this.store.remove(userId, id)
+    } finally {
+      this.removing.delete(id)
+    }
+    this.failed.delete(id)
+    this.notify(id)
+    const history = join(this.store.root, 'sessions')
+    const results = await Promise.allSettled([
+      // DSH 不提供删除接口：历史按 sessions/<工作目录>/<会话 id>/ 存放
+      readdir(history, { withFileTypes: true }).then(
+        (projects) =>
+          Promise.all(
+            projects
+              .filter((project) => project.isDirectory())
+              .map((project) =>
+                rm(join(history, project.name, id), { recursive: true, force: true }),
+              ),
+          ),
+        (error: NodeJS.ErrnoException) => {
+          if (error.code !== 'ENOENT') throw error
+        },
+      ),
+      ...files.map((file) => rm(this.files.path(file), { force: true })),
+    ])
+    if (results.some((result) => result.status === 'rejected')) {
+      console.warn(`会话 ${id} 已删除，但历史或文件未能完全清理。`)
+      throw new HttpError(500, '会话已删除，但未能完全清理，请联系管理员。')
     }
   }
   async close() {

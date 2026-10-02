@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { mkdirSync, chmodSync, openSync, closeSync, fchmodSync } from 'node:fs'
 import { join } from 'node:path'
-import { DatabaseSync } from 'node:sqlite'
+import { DatabaseSync, type SQLOutputValue } from 'node:sqlite'
 import type { Artifact, ModelSelection, SessionSummary, User } from '../src/types/index.ts'
 
 export class HttpError extends Error {
@@ -11,6 +11,12 @@ export class HttpError extends Error {
     this.status = status
   }
 }
+
+const summary = (row: Record<string, SQLOutputValue>): SessionSummary => ({
+  id: String(row.id),
+  title: String(row.title),
+  pinned: row.pinned !== 0,
+})
 
 /** SQLite owns identity and indexes; DSH alone owns message history. */
 export class Store {
@@ -48,6 +54,7 @@ export class Store {
       CREATE TABLE IF NOT EXISTS artifacts(id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES sessions(id), name TEXT NOT NULL, format TEXT NOT NULL, size INTEGER NOT NULL);
       CREATE INDEX IF NOT EXISTS artifacts_session ON artifacts(session_id);
       CREATE TABLE IF NOT EXISTS images(user_id TEXT NOT NULL REFERENCES users(id), id TEXT NOT NULL, bytes INTEGER NOT NULL, PRIMARY KEY(user_id, id));
+      CREATE TABLE IF NOT EXISTS sandboxes(session_id TEXT PRIMARY KEY REFERENCES sessions(id), remote_id TEXT NOT NULL);
     `)
     const columns = this.db.prepare('PRAGMA table_info(sessions)').all()
     if (!columns.some((column) => column.name === 'provider')) {
@@ -56,6 +63,9 @@ export class Store {
         ALTER TABLE sessions ADD COLUMN model TEXT NOT NULL DEFAULT 'deepseek-flash';
         COMMIT;`)
     }
+    // 置顶时间，0 为未置顶
+    if (!columns.some((column) => column.name === 'pinned'))
+      this.db.exec('ALTER TABLE sessions ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0;')
     if (
       !this.db
         .prepare('PRAGMA table_info(artifacts)')
@@ -79,10 +89,14 @@ export class Store {
       .prepare('SELECT id, name FROM users WHERE subject=?')
       .get(subject) as unknown as User
   }
+  /** 置顶的在前，越晚置顶越靠前；其余按创建时间倒序。 */
   list(userId: string): SessionSummary[] {
     return this.db
-      .prepare('SELECT id, title FROM sessions WHERE user_id=? ORDER BY created DESC LIMIT 100')
-      .all(userId) as unknown as SessionSummary[]
+      .prepare(
+        'SELECT id, title, pinned FROM sessions WHERE user_id=? ORDER BY pinned DESC, created DESC LIMIT 100',
+      )
+      .all(userId)
+      .map(summary)
   }
   session(userId: string, id: string): SessionSummary & ModelSelection {
     const row = this.db
@@ -97,6 +111,35 @@ export class Store {
       .prepare('INSERT INTO sessions(id, user_id, title, created) VALUES(?, ?, ?, ?)')
       .run(session.id, userId, session.title, Date.now())
     return session
+  }
+  update(userId: string, id: string, { title, pinned }: { title?: string; pinned?: boolean }) {
+    this.session(userId, id)
+    if (title !== undefined)
+      this.db.prepare('UPDATE sessions SET title=? WHERE id=?').run(title, id)
+    if (pinned !== undefined)
+      this.db.prepare('UPDATE sessions SET pinned=? WHERE id=?').run(pinned ? Date.now() : 0, id)
+    return summary(this.db.prepare('SELECT id, title, pinned FROM sessions WHERE id=?').get(id)!)
+  }
+  /** 删除会话及其文件索引，返回待从磁盘清理的会话文件 id；沙箱记录须先随容器回收删除。 */
+  remove(userId: string, id: string) {
+    this.session(userId, id)
+    this.db.exec('BEGIN IMMEDIATE')
+    try {
+      // 未回收的实例记录是重启后回收容器的唯一线索，不随会话抹掉
+      if (this.db.prepare('SELECT 1 FROM sandboxes WHERE session_id=?').get(id))
+        throw new HttpError(503, '会话仍有未回收的沙箱容器，请联系管理员。')
+      const files = this.db
+        .prepare('SELECT id FROM artifacts WHERE session_id=?')
+        .all(id)
+        .map((row) => String(row.id))
+      this.db.prepare('DELETE FROM artifacts WHERE session_id=?').run(id)
+      this.db.prepare('DELETE FROM sessions WHERE id=?').run(id)
+      this.db.exec('COMMIT')
+      return files
+    } catch (error) {
+      this.db.exec('ROLLBACK')
+      throw error
+    }
   }
   selectModel(userId: string, id: string, selection: ModelSelection) {
     this.session(userId, id)

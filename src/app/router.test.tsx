@@ -1,5 +1,6 @@
 import { StrictMode } from 'react'
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import type { ModelCatalog, Session } from '@/types'
 
@@ -38,7 +39,6 @@ const deferred = () => {
   return { promise, resolve, reject }
 }
 let AppRouter: typeof import('./router').AppRouter
-let creates: Promise<Response>[]
 let posts: Promise<Response>[]
 let createCount: number
 let postCount: number
@@ -49,7 +49,6 @@ let events: { onerror?: () => void }[]
 beforeEach(async () => {
   // The real service owns module-level state; each router gets a fresh store and subscriptions.
   vi.resetModules()
-  creates = []
   posts = []
   createCount = 0
   postCount = 0
@@ -81,7 +80,7 @@ beforeEach(async () => {
       if (path === '/api/models') return Response.json(catalog)
       if (path === '/api/sessions' && options?.method === 'POST') {
         createCount++
-        return creates.shift() ?? Response.json(session(`created-${createCount}`))
+        return Response.json(session(`created-${createCount}`))
       }
       if (path === '/api/sessions') return Response.json([session('old'), session('other')])
       if (path.endsWith('/messages')) {
@@ -160,6 +159,32 @@ it('首次发送失败保留文字和图片，重试沿用已创建会话', asyn
   expect(screen.queryByText('发送测试失败')).not.toBeInTheDocument()
 })
 
+it('首次发送失败后在侧栏删掉刚建的空记录，重试时重新新建会话并保留草稿', async () => {
+  posts.push(Promise.resolve(Response.json({ error: '发送测试失败' }, { status: 503 })))
+  const user = userEvent.setup()
+  await open()
+  fireEvent.change(box(), { target: { value: '保留问题' } })
+  send()
+  expect(await screen.findByRole('alert')).toHaveTextContent('发送测试失败')
+  const row = screen.getByRole('link', { name: '研究 created-1' }).closest('li')!
+  await user.click(within(row).getByRole('button', { name: '更多操作' }))
+  await user.click(await screen.findByRole('menuitem', { name: '删除' }))
+  const dialog = await screen.findByRole('alertdialog')
+  await user.click(within(dialog).getByRole('button', { name: '删除' }))
+  await waitFor(() =>
+    expect(screen.queryByRole('link', { name: '研究 created-1' })).not.toBeInTheDocument(),
+  )
+  expect(box()).toHaveValue('保留问题')
+  send()
+  await waitFor(() => expect(window.location.pathname).toBe('/workspace/created-2'))
+  expect(createCount).toBe(2)
+  const asked = vi.mocked(fetch).mock.calls.map(([path]) => String(path))
+  expect(asked.filter((path) => path.endsWith('/messages'))).toEqual([
+    '/api/sessions/created-1/messages',
+    '/api/sessions/created-2/messages',
+  ])
+})
+
 it('已有会话发送时也保留等待期间的新草稿', async () => {
   const pending = deferred()
   posts.push(pending.promise)
@@ -173,7 +198,7 @@ it('已有会话发送时也保留等待期间的新草稿', async () => {
   expect(window.location.pathname).toBe('/workspace/old')
 })
 
-it('真正切换会话及新建研究重置文字、图片和错误，新建后聚焦输入框', async () => {
+it('真正切换会话及新建研究重置文字、图片和错误；新建研究打开空白页并聚焦输入框，不预先建会话', async () => {
   posts.push(Promise.resolve(Response.json({ error: '旧会话错误' }, { status: 503 })))
   await open('/workspace/old')
   fireEvent.change(box(), { target: { value: '旧草稿' } })
@@ -186,10 +211,15 @@ it('真正切换会话及新建研究重置文字、图片和错误，新建后�
   expect(screen.queryByRole('img', { name: '旧草稿.png' })).not.toBeInTheDocument()
   expect(screen.queryByText('旧会话错误')).not.toBeInTheDocument()
   fireEvent.change(box(), { target: { value: '另一个草稿' } })
-  fireEvent.click(screen.getByRole('button', { name: '新建研究' }))
-  await waitFor(() => expect(window.location.pathname).toBe('/workspace/created-1'))
+  fireEvent.click(screen.getByRole('link', { name: '新建研究' }))
+  await waitFor(() => expect(window.location.pathname).toBe('/workspace'))
   await waitFor(() => expect(box()).toHaveValue(''))
   await waitFor(() => expect(box()).toHaveFocus())
+  // 在空白页再点一次也重置草稿
+  fireEvent.change(box(), { target: { value: '空白页草稿' } })
+  fireEvent.click(screen.getByRole('link', { name: '新建研究' }))
+  await waitFor(() => expect(box()).toHaveValue(''))
+  expect(createCount).toBe(0)
 })
 
 it('首次自动跳转后，后退和前进均重置草稿，不重放延续标记', async () => {
@@ -217,91 +247,22 @@ it('发送未完成时离开再返回，旧发送不会导航或改写新草稿'
   send()
   await waitFor(() => expect(postCount).toBe(1))
   fireEvent.click(screen.getByRole('link', { name: '文献库' }))
-  fireEvent.click(screen.getByRole('link', { name: '研究工作台' }))
+  fireEvent.click(screen.getByRole('link', { name: '新建研究' }))
   fireEvent.change(box(), { target: { value: '返回后的草稿' } })
   await act(async () => pending.resolve(Response.json({})))
   expect(window.location.pathname).toBe('/workspace')
   expect(box()).toHaveValue('返回后的草稿')
 })
 
-for (const target of ['文献库', '研究 other']) {
-  it(`新建研究的延迟成功不覆盖后来的导航：${target}`, async () => {
-    const pending = deferred()
-    creates.push(pending.promise)
-    await open()
-    fireEvent.click(screen.getByRole('button', { name: '新建研究' }))
-    await waitFor(() => expect(createCount).toBe(1))
-    fireEvent.click(screen.getByRole('link', { name: target }))
-    const path = window.location.pathname
-    await act(async () => pending.resolve(Response.json(session('delayed'))))
-    expect(window.location.pathname).toBe(path)
-    expect(screen.getByRole('link', { name: '研究 delayed' })).toBeInTheDocument()
-  })
-}
-
-it('离开再返回同一地址后，旧新建请求失败不显示错误或解锁较新的请求', async () => {
-  const stale = deferred()
-  const latest = deferred()
-  creates.push(stale.promise, latest.promise)
-  await open()
-  fireEvent.click(screen.getByRole('button', { name: '新建研究' }))
-  fireEvent.click(screen.getByRole('link', { name: '文献库' }))
-  fireEvent.click(screen.getByRole('link', { name: '研究工作台' }))
-  const button = screen.getByRole('button', { name: '新建研究' })
-  expect(button).toHaveAttribute('aria-disabled', 'false')
-  fireEvent.click(button)
-  await waitFor(() => expect(createCount).toBe(2))
-  await act(async () => stale.resolve(Response.json({ error: '过期错误' }, { status: 503 })))
-  expect(window.location.pathname).toBe('/workspace')
-  expect(screen.queryByText('过期错误')).not.toBeInTheDocument()
-  expect(button).toHaveAttribute('aria-disabled', 'true')
-  fireEvent.click(button)
-  expect(createCount).toBe(2)
-  await act(async () => latest.resolve(Response.json(session('latest'))))
-  expect(window.location.pathname).toBe('/workspace/latest')
-  await waitFor(() => expect(box()).toHaveFocus())
-})
-
-it('后退至同一地址也使旧新建请求失效', async () => {
-  const pending = deferred()
-  creates.push(pending.promise)
-  await open()
-  fireEvent.click(screen.getByRole('button', { name: '新建研究' }))
-  fireEvent.click(screen.getByRole('link', { name: '文献库' }))
-  await act(async () => window.history.back())
-  await waitFor(() => expect(window.location.pathname).toBe('/workspace'))
-  await act(async () => pending.resolve(Response.json(session('stale'))))
-  expect(window.location.pathname).toBe('/workspace')
-})
-
-it('新建失败允许重试，正常成功后聚焦输入框', async () => {
-  creates.push(Promise.resolve(Response.json({ error: '新建测试失败' }, { status: 503 })))
-  await open()
-  const button = screen.getByRole('button', { name: '新建研究' })
-  fireEvent.click(button)
-  await screen.findByText('新建测试失败')
-  expect(button).toHaveAttribute('aria-disabled', 'false')
-  fireEvent.click(button)
-  await waitFor(() => expect(window.location.pathname).toBe('/workspace/created-2'))
-  expect(screen.queryByText('新建测试失败')).not.toBeInTheDocument()
-  await waitFor(() => expect(box()).toHaveFocus())
-})
-
-it('窄屏关闭导航抽屉后，延迟新建完成不会跳转或重新打开抽屉', async () => {
+it('窄屏在抽屉里点新建研究：关闭抽屉并聚焦输入框，不预先建会话', async () => {
   narrow = true
-  const pending = deferred()
-  creates.push(pending.promise)
-  await open()
+  await open('/workspace/old')
   fireEvent.click(screen.getByRole('button', { name: '切换侧栏' }))
-  fireEvent.click(screen.getByRole('button', { name: '新建研究' }))
-  await waitFor(() => expect(createCount).toBe(1))
-  fireEvent.click(screen.getByRole('button', { name: '关闭' }))
-  await act(async () => pending.resolve(Response.json(session('stale'))))
-  expect(window.location.pathname).toBe('/workspace')
-  expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
-  fireEvent.click(screen.getByRole('button', { name: '切换侧栏' }))
-  expect(screen.getByRole('button', { name: '新建研究' })).toHaveAttribute('aria-disabled', 'false')
-  expect(screen.getByRole('link', { name: '研究 stale' })).toBeInTheDocument()
+  fireEvent.click(screen.getByRole('link', { name: '新建研究' }))
+  await waitFor(() => expect(window.location.pathname).toBe('/workspace'))
+  await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+  await waitFor(() => expect(box()).toHaveFocus())
+  expect(createCount).toBe(0)
 })
 
 for (const failure of ['http', 'network']) {
@@ -336,35 +297,5 @@ for (const failure of ['http', 'network']) {
     expect(postCount).toBe(0)
     expect(window.location.pathname).toBe('/workspace/old')
     expect(localStorage.length).toBe(0)
-  })
-}
-
-for (const moveFocus of [false, true]) {
-  it(`新建研究读取失败后重试${moveFocus ? '尊重等待期间主动转移的焦点' : '恢复输入框焦点'}`, async () => {
-    await open()
-    const fetch = vi.mocked(globalThis.fetch)
-    const request = fetch.getMockImplementation()!
-    // StrictMode may repeat the initial read; keep it failing until the user retries.
-    fetch.mockImplementation((path, options) =>
-      path === '/api/sessions/created-1'
-        ? Promise.resolve(Response.json({ error: '首次读取失败' }, { status: 503 }))
-        : request(path, options),
-    )
-    fireEvent.click(screen.getByRole('button', { name: '新建研究' }))
-    await waitFor(() => expect(window.location.pathname).toBe('/workspace/created-1'))
-    const retry = await screen.findByRole('button', { name: '重试加载' })
-    fetch.mockImplementation(request)
-    const recovery = deferred()
-    sessionReads.push(recovery.promise)
-    // Keyboard activation: the retry button disappears while this read is pending.
-    act(() => retry.focus())
-    fireEvent.click(retry)
-    await screen.findByText('正在加载会话…')
-    expect(document.activeElement).toBe(document.body)
-    const elsewhere = screen.getByRole('tab', { name: '对话' })
-    if (moveFocus) act(() => elsewhere.focus())
-    await act(async () => recovery.resolve(Response.json(session('created-1'))))
-    await waitFor(() => expect(screen.queryByText('正在加载会话…')).not.toBeInTheDocument())
-    expect(moveFocus ? elsewhere : box()).toHaveFocus()
   })
 }

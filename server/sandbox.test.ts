@@ -438,6 +438,17 @@ test('DSH tools use isolated OpenSandbox SDK sessions, persist exports and kill 
     assert.ok(stopped.role === 'assistant' && stopped.status === 'stopped')
     assert.equal(fixture.live.size, 1, 'stopping Alice preserves Bob')
     assert.equal(await readFile(agents.files.path(exported.id), 'utf8'), 'sandbox report')
+    // 删除会话时先回收它仍在运行的容器；回收失败时会话与实例记录都保留，可重试
+    fixture.state.failDeletes = 1
+    await assert.rejects(agents.remove(bob.id, b.id), /会话未删除/)
+    assert.equal(store.session(bob.id, b.id).id, b.id)
+    assert.equal(
+      store.db.prepare('SELECT COUNT(*) AS n FROM sandboxes WHERE session_id=?').get(b.id)!.n,
+      1,
+    )
+    await agents.remove(bob.id, b.id)
+    assert.equal(fixture.live.size, 0)
+    assert.equal(manager.entries.has(b.id), false)
     assert.deepEqual(fixture.errors, [])
   } finally {
     await agents.close()

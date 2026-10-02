@@ -10,16 +10,16 @@ import { authenticate as defaultAuthenticate, type Authenticate } from './auth.t
 import { sessionChanges, type SessionFrame } from '../src/services/session-stream.ts'
 import type { Session } from '../src/types/index.ts'
 
-// 只有提问读取正文，可附带 base64 图片：约 30 MB 原图
+// 提问可附带 base64 图片：约 30 MB 原图
 const MAX_MESSAGE_BODY = 40_000_000
-async function body(request: IncomingMessage) {
+async function body(request: IncomingMessage, limit: number, tooLarge: string) {
   if (!request.headers['content-type']?.startsWith('application/json'))
     throw new HttpError(415, '请求必须为 JSON。')
   const chunks: Buffer[] = []
   let size = 0
   for await (const chunk of request) {
     size += chunk.length
-    if (size > MAX_MESSAGE_BODY) throw new HttpError(413, '图片合计不能超过 30 MB。')
+    if (size > limit) throw new HttpError(413, tooLarge)
     chunks.push(chunk)
   }
   try {
@@ -205,9 +205,28 @@ export function createApp(
       }
       if (!action && !image && request.method === 'GET')
         return json(response, 200, await agents.snapshot(user.id, id))
+      if (!action && !image && request.method === 'PATCH') {
+        const input = await body(request, 4096, '请求内容过长。')
+        const { title, pinned } = (input && typeof input === 'object' ? input : {}) as {
+          title?: unknown
+          pinned?: unknown
+        }
+        const name = typeof title === 'string' ? title.trim() : undefined
+        if (title !== undefined && (!name || name.length > 80 || /\p{Cc}/u.test(name)))
+          throw new HttpError(400, '标题须为 1–80 个字符，不能换行。')
+        if (pinned !== undefined && typeof pinned !== 'boolean')
+          throw new HttpError(400, '置顶状态无效。')
+        if (name === undefined && pinned === undefined)
+          throw new HttpError(400, '没有要修改的内容。')
+        return json(response, 200, store.update(user.id, id, { title: name, pinned }))
+      }
+      if (!action && !image && request.method === 'DELETE') {
+        await agents.remove(user.id, id)
+        return json(response, 200, {})
+      }
       if (action === 'messages' && request.method === 'POST') {
         clearTimeout(deadline)
-        const input = await body(request)
+        const input = await body(request, MAX_MESSAGE_BODY, '图片合计不能超过 30 MB。')
         const images = input && typeof input === 'object' && 'images' in input ? input.images : []
         if (
           !Array.isArray(images) ||
@@ -275,8 +294,10 @@ export function createApp(
                   response.once('close', finish)
                 })
             }
-          } catch {
-            if (!closed) response.end('event: failure\ndata: {}\n\n')
+          } catch (error) {
+            // 会话已删除时单独告知，不提示重新连接
+            const gone = error instanceof HttpError && error.status === 404
+            if (!closed) response.end(`event: ${gone ? 'deleted' : 'failure'}\ndata: {}\n\n`)
           } finally {
             writing = false
             if (dirty && !closed) schedule()
