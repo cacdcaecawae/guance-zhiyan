@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtemp, readFile, readdir, rm, chmod, stat } from 'node:fs/promises'
+import { mkdtemp, readFile, readdir, rm, chmod, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve, sep } from 'node:path'
 import { once } from 'node:events'
@@ -825,6 +825,193 @@ test('HTTP: authentication, ownership, request boundaries and file download', as
     await agents.close()
     store.close()
     assert.ok(resolve(root).startsWith(resolve(tmpdir()) + sep) && root.includes('gczy-http-test-'))
+    await rm(root, { recursive: true })
+  }
+})
+
+test('HTTP: rename, pin and delete sessions; deletion clears history and files', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'gczy-session-actions-test-'))
+  const store = new Store(root)
+  let hang = false
+  const model = new TestModel(() => (hang ? 'hang' : textChunks('好的')))
+  const agents = await new Agents(store, { adapter: model }).init()
+  const server = createApp(store, agents, {
+    origin: 'http://trusted.test',
+    authenticate: async (req) =>
+      typeof req.headers['x-test-user'] === 'string'
+        ? { subject: req.headers['x-test-user'], name: 'Test' }
+        : undefined,
+  })
+  server.listen(0, '127.0.0.1')
+  await once(server, 'listening')
+  const address = server.address()
+  assert.ok(address && typeof address !== 'string')
+  const base = `http://127.0.0.1:${address.port}`
+  const call = (method: string, path: string, body?: object, user = 'alice') =>
+    fetch(base + path, {
+      method,
+      headers: { 'x-test-user': user, 'Content-Type': 'application/json' },
+      body: body && JSON.stringify(body),
+    })
+  const list = async () =>
+    (await (await call('GET', '/api/sessions')).json()) as { title: string; pinned: boolean }[]
+  try {
+    const sessions = []
+    for (const title of ['第一', '第二']) {
+      const { id } = (await (await call('POST', '/api/sessions')).json()) as { id: string }
+      assert.equal(
+        (await call('PATCH', `/api/sessions/${id}`, { title: ` ${title} ` })).status,
+        200,
+      )
+      sessions.push(id)
+    }
+    const [first, second] = sessions
+    assert.deepEqual(await list(), [
+      { id: second, title: '第二', pinned: false },
+      { id: first, title: '第一', pinned: false },
+    ])
+    for (const body of [
+      {},
+      { title: ' ' },
+      { title: '长'.repeat(81) },
+      { title: '换\n行' },
+      { title: 1 },
+      { pinned: 'yes' },
+    ])
+      assert.equal((await call('PATCH', `/api/sessions/${first}`, body)).status, 400)
+    assert.equal(
+      (await call('PATCH', `/api/sessions/${first}`, { title: '他人' }, 'bob')).status,
+      404,
+    )
+    // 置顶的排在前面，越晚置顶越靠前；取消置顶回到创建顺序
+    const pinned = await call('PATCH', `/api/sessions/${first}`, { pinned: true })
+    assert.deepEqual(await pinned.json(), { id: first, title: '第一', pinned: true })
+    assert.deepEqual(
+      (await list()).map((session) => session.title),
+      ['第一', '第二'],
+    )
+    await call('PATCH', `/api/sessions/${second}`, { pinned: true })
+    assert.deepEqual(
+      (await list()).map((session) => session.title),
+      ['第二', '第一'],
+    )
+    await call('PATCH', `/api/sessions/${second}`, { pinned: false })
+    assert.deepEqual(
+      (await list()).map((session) => [session.title, session.pinned]),
+      [
+        ['第一', true],
+        ['第二', false],
+      ],
+    )
+    // 已有标题的会话提问后不再被问题覆盖
+    assert.equal(
+      (await call('POST', `/api/sessions/${first}/messages`, { question: '问题' })).status,
+      202,
+    )
+    await agents.active.get(first)?.done
+    assert.equal(store.session(store.user('alice', 'Test').id, first).title, '第一')
+
+    const alice = store.user('alice', 'Test').id
+    const file = await agents.files.create(alice, first, '报告', 'md', '# 内容')
+    const history = (await readdir(join(root, 'sessions'), { recursive: true })).filter((path) =>
+      path.includes(first),
+    )
+    assert.ok(history.length, 'the question was persisted')
+    hang = true
+    assert.equal(
+      (await call('POST', `/api/sessions/${second}/messages`, { question: '等' })).status,
+      202,
+    )
+    const running = await call('DELETE', `/api/sessions/${second}`)
+    assert.equal(running.status, 409)
+    assert.match(((await running.json()) as { error: string }).error, /请先停止/)
+    await call('POST', `/api/sessions/${second}/stop`)
+    assert.equal((await call('DELETE', `/api/sessions/${first}`, undefined, 'bob')).status, 404)
+    assert.equal((await call('GET', `/api/sessions/${first}`)).status, 200, 'others cannot delete')
+
+    // 数据目录里多出的普通文件不影响清理历史
+    await writeFile(join(root, 'sessions', 'stray.txt'), '')
+    // 正在查看该会话的连接收到“已删除”，而不是提示重新连接
+    const stream = await fetch(`${base}/api/sessions/${first}/events`, {
+      headers: { 'x-test-user': 'alice' },
+    })
+    const reader = stream.body!.pipeThrough(new TextDecoderStream()).getReader()
+    assert.match((await reader.read()).value!, /snapshot/)
+    assert.equal((await call('DELETE', `/api/sessions/${first}`)).status, 200)
+    let received = ''
+    for (let chunk = await reader.read(); !chunk.done; chunk = await reader.read())
+      received += chunk.value
+    assert.match(received, /event: deleted/)
+    assert.deepEqual(
+      (await list()).map((session) => session.title),
+      ['第二'],
+    )
+    for (const path of [`/api/sessions/${first}`, `/api/files/${file.id}`])
+      assert.equal((await call('GET', path)).status, 404)
+    assert.equal((await call('DELETE', `/api/sessions/${first}`)).status, 404)
+    assert.deepEqual(
+      (await readdir(join(root, 'sessions'), { recursive: true })).filter((path) =>
+        path.includes(first),
+      ),
+      [],
+      'message history is removed',
+    )
+    await assert.rejects(stat(agents.files.path(file.id)), { code: 'ENOENT' })
+    assert.equal(
+      store.db.prepare('SELECT COUNT(*) AS n FROM artifacts WHERE session_id=?').get(first)!.n,
+      0,
+    )
+    // 停止后的会话可以删除
+    assert.equal((await call('DELETE', `/api/sessions/${second}`)).status, 200)
+    assert.deepEqual(await list(), [])
+  } finally {
+    server.closeAllConnections()
+    await new Promise<void>((resolveClose) => server.close(() => resolveClose()))
+    await agents.close()
+    store.close()
+    assert.ok(
+      resolve(root).startsWith(resolve(tmpdir()) + sep) &&
+        root.includes('gczy-session-actions-test-'),
+    )
+    await rm(root, { recursive: true })
+  }
+})
+
+test('session deletion reclaims the sandbox first and keeps everything when that fails', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'gczy-session-removal-test-'))
+  const store = new Store(root)
+  let discarding = Promise.withResolvers<void>()
+  const sandboxes = { discard: () => discarding.promise, close: async () => {} }
+  const agents = await new Agents(store, {
+    adapter: new TestModel(() => textChunks('好的')),
+    sandboxes: sandboxes as never,
+  }).init()
+  try {
+    const user = store.user('removal', 'Test').id
+    const { id } = store.create(user)
+    const removal = agents.remove(user, id)
+    // 回收期间不能再提问，也不能重复删除
+    await assert.rejects(agents.start(user, id, '问题'), { status: 409 })
+    await assert.rejects(agents.remove(user, id), { status: 409 })
+    discarding.reject(new Error('kill failed'))
+    await assert.rejects(removal, { status: 503 })
+    assert.equal(store.session(user, id).id, id, 'the session survives a failed reclaim')
+    // 未回收的实例记录是重启后回收的唯一线索：不随会话删除
+    store.db.prepare('INSERT INTO sandboxes(session_id, remote_id) VALUES(?, ?)').run(id, 'remote')
+    discarding = Promise.withResolvers<void>()
+    discarding.resolve()
+    await assert.rejects(agents.remove(user, id), { status: 503 })
+    assert.equal(store.db.prepare('SELECT COUNT(*) AS n FROM sandboxes').get()!.n, 1)
+    store.db.prepare('DELETE FROM sandboxes').run()
+    await agents.remove(user, id)
+    assert.throws(() => store.session(user, id), { status: 404 })
+  } finally {
+    await agents.close()
+    store.close()
+    assert.ok(
+      resolve(root).startsWith(resolve(tmpdir()) + sep) &&
+        root.includes('gczy-session-removal-test-'),
+    )
     await rm(root, { recursive: true })
   }
 })

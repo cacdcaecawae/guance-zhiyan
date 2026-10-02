@@ -12,6 +12,7 @@ function SheetContent({
   children,
   side = 'right',
   title,
+  onEscapeKeyDown,
   ...props
 }: ComponentProps<typeof SheetPrimitive.Content> & {
   side?: 'left' | 'right'
@@ -36,6 +37,12 @@ function SheetContent({
           const label = target?.getAttribute('aria-label')
           if (label)
             document.querySelector<HTMLElement>(`[aria-label="${CSS.escape(label)}"]`)?.focus()
+        }}
+        onEscapeKeyDown={(e) => {
+          onEscapeKeyDown?.(e)
+          // 标了 data-own-escape 的控件（如重命名输入框）自己处理 Esc，再按一次才关闭抽屉
+          if (e.target instanceof Element && e.target.closest('[data-own-escape]'))
+            e.preventDefault()
         }}
         aria-describedby={undefined}
         className={cn(

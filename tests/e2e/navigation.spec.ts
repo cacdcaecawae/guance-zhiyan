@@ -62,8 +62,8 @@ test('首次发送保留等待期间的新草稿和图片；后退、前进和�
   await expect(box).toHaveValue('')
   await box.fill('切换前的草稿')
   await page.getByLabel('选择图片').setInputFiles(png)
-  await page.getByRole('button', { name: '新建研究' }).click()
-  await expect(page).not.toHaveURL(firstSession)
+  await page.getByRole('link', { name: '新建研究' }).click()
+  await expect(page).toHaveURL(/\/workspace$/)
   await expect(box).toHaveValue('')
   await expect(box).toBeFocused()
   await expect(form.getByRole('img')).toHaveCount(0)
@@ -99,75 +99,15 @@ test('首次发送失败保留图片和文字，重试不重复新建会话', as
   expect(await (await page.request.get('/api/sessions')).json()).toHaveLength(1)
 })
 
-for (const returnToWorkspace of [false, true]) {
-  test(`新建研究的延迟完成不覆盖更新的导航${returnToWorkspace ? '，包括离开后返回同一地址' : ''}`, async ({
-    page,
-  }) => {
-    const pending = await holdPost(page, '**/api/sessions')
-    await page.goto('/workspace')
-    await page.getByRole('button', { name: '新建研究' }).click()
-    const request = await pending.started
-    await page.getByRole('link', { name: '文献库', exact: true }).click()
-    if (returnToWorkspace) {
-      await page.getByRole('link', { name: '研究工作台', exact: true }).click()
-      await page.getByRole('textbox', { name: '研究问题' }).fill('返回后的草稿')
-    }
-    const destination = page.url()
-    const response = await request.fetch()
-    const created = await response.json()
-    await request.fulfill({ response })
-    // The sidebar link proves the response has reached the application's store.
-    await expect(page.locator(`nav a[href="/workspace/${created.id}"]`)).toBeVisible()
-    await expect(page).toHaveURL(destination)
-    if (returnToWorkspace)
-      await expect(page.getByRole('textbox', { name: '研究问题' })).toHaveValue('返回后的草稿')
-  })
-}
-
-test('旧新建请求的失败不覆盖较新请求的状态；当前失败可重试并聚焦', async ({ page }) => {
-  const stale = await holdPost(page, '**/api/sessions')
-  await page.goto('/workspace')
-  const button = page.getByRole('button', { name: '新建研究' })
-  await button.click()
-  const staleRequest = await stale.started
-  await page.getByRole('link', { name: '文献库', exact: true }).click()
-  await page.getByRole('link', { name: '研究工作台', exact: true }).click()
-  const latest = await holdPost(page, '**/api/sessions')
-  await button.click()
-  const latestRequest = await latest.started
-  await staleRequest.fulfill({ status: 503, json: { error: '过期的新建错误' } })
-  await expect(button).toHaveAttribute('aria-disabled', 'true')
-  await expect(page.getByText('过期的新建错误')).toHaveCount(0)
-  await latestRequest.fulfill({ status: 503, json: { error: '当前的新建错误' } })
-  await expect(page.getByRole('alert')).toContainText('当前的新建错误')
-  await expect(button).toHaveAttribute('aria-disabled', 'false')
-  await button.click()
-  await expect(page).toHaveURL(/\/workspace\/[0-9a-f-]{36}$/)
-  await expect(page.getByRole('textbox', { name: '研究问题' })).toBeFocused()
-  await expect(page.getByRole('alert')).toHaveCount(0)
-})
-
-test('手机关闭导航抽屉取消待完成新建的跳转，重新打开仍可正常新建', async ({ page }) => {
+test('手机上点新建研究：关闭抽屉、聚焦输入框，发出问题前不建会话', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 900 })
-  const pending = await holdPost(page, '**/api/sessions')
   await page.goto('/workspace')
   await page.getByRole('button', { name: '切换侧栏' }).click()
-  await page.getByRole('button', { name: '新建研究' }).click()
-  const request = await pending.started
-  await page.getByRole('button', { name: '关闭', exact: true }).click()
+  await page.getByRole('link', { name: '新建研究' }).click()
   await expect(page.getByRole('dialog')).toHaveCount(0)
-  await page.getByRole('textbox', { name: '研究问题' }).fill('关闭后继续输入')
-  const response = await request.fetch()
-  const created = await response.json()
-  await request.fulfill({ response })
-  await page.getByRole('button', { name: '切换侧栏' }).click()
-  await expect(page.locator(`nav a[href="/workspace/${created.id}"]`)).toBeVisible()
   await expect(page).toHaveURL(/\/workspace$/)
-  await page.getByRole('button', { name: '新建研究' }).click()
-  await expect(page.getByRole('dialog')).toHaveCount(0)
-  await expect(page).toHaveURL(/\/workspace\/[0-9a-f-]{36}$/)
-  await expect(page.getByRole('textbox', { name: '研究问题' })).toHaveValue('')
   await expect(page.getByRole('textbox', { name: '研究问题' })).toBeFocused()
+  expect(await (await page.request.get('/api/sessions')).json()).toEqual([])
 })
 
 test('同一会话断线后重连读取失败，恢复时保留草稿和附图并可继续发送', async ({ page }) => {
@@ -211,41 +151,3 @@ test('同一会话断线后重连读取失败，恢复时保留草稿和附图�
   await expect(form.getByRole('img')).toHaveCount(0)
   await expect(page.getByRole('list', { name: '问题附图' }).getByRole('img')).toBeVisible()
 })
-
-for (const moveFocus of [false, true]) {
-  test(`新建研究首次读取失败，重试后${moveFocus ? '尊重用户转移的焦点' : '恢复输入焦点'}`, async ({
-    page,
-  }) => {
-    await page.goto('/workspace')
-    const sessionRead = /\/api\/sessions\/[^/]+$/
-    await page.route(sessionRead, (route) =>
-      route.fulfill({ status: 503, json: { error: '首次读取失败' } }),
-    )
-    await page.getByRole('button', { name: '新建研究' }).click()
-    await expect(page.getByRole('alert')).toContainText('首次读取失败')
-    await page.unroute(sessionRead)
-    const started = Promise.withResolvers<Route>()
-    let captured = false
-    // Keep this route registered until the held read is explicitly released.
-    await page.route(sessionRead, (route) => {
-      if (captured) return route.fallback()
-      captured = true
-      started.resolve(route)
-    })
-    await page.getByRole('button', { name: '重试加载' }).press('Enter')
-    const pending = await started.promise
-    await expect(page.getByText('正在加载会话…')).toBeVisible()
-    await expect(page.locator('body')).toBeFocused()
-    const elsewhere = page.getByRole('tab', { name: '对话' })
-    if (moveFocus) await elsewhere.focus()
-    await pending.continue()
-    await expect(page.getByText('正在加载会话…')).toBeHidden()
-    const box = page.getByRole('textbox', { name: '研究问题' })
-    await expect(moveFocus ? elsewhere : box).toBeFocused()
-    if (!moveFocus) {
-      // A locator fill/press would focus the textbox and could conceal a regression.
-      await page.keyboard.type('重试后继续输入')
-      await expect(box).toHaveValue('重试后继续输入')
-    }
-  })
-}
