@@ -1,12 +1,6 @@
-import {
-  ArrowDownIcon,
-  CheckIcon,
-  CircleAlertIcon,
-  CopyIcon,
-  Loader2Icon,
-  RotateCcwIcon,
-} from 'lucide-react'
+import { ArrowDownIcon, CheckIcon, CircleAlertIcon, CopyIcon, RotateCcwIcon } from 'lucide-react'
 import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { SlipsMark } from '@/app/logo'
 import { Button } from '@/components/ui/button'
 import { imageUrl } from '@/services/research'
 import type { AssistantMessage, Message } from '@/types'
@@ -177,7 +171,8 @@ function AnswerArticle({
       <AnswerContent message={message} />
       {message.status === 'loading' && (
         <div role="status" className="flex items-center gap-2 text-ui-caption text-brand">
-          <Loader2Icon className="size-4 animate-spin" aria-hidden />
+          {/* 思考与回答阶段都显示：竹简依次抽出 */}
+          <SlipsMark size={20} loading />
           正在生成…
         </div>
       )}

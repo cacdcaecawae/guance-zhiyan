@@ -10,22 +10,22 @@
 
 所有颜色只在 `src/styles/tokens.css` 定义，浅色在 `:root`，深色在 `.dark`。组件只用语义类名，不写硬编码颜色（hex、`white` / `black` 等非语义色及其透明度变体，如 `text-white/60`）；语义 token 可加透明度，仅用于弱边框与悬停（如 `border-brand/40`、`hover:bg-primary/90`）；遮罩用 `bg-overlay`。
 
-| 类别     | Token（Tailwind 类前缀 `bg-` / `text-` / `border-`）                                                                         |
-| -------- | ---------------------------------------------------------------------------------------------------------------------------- |
-| 结构面   | `background` 页面、`sidebar` 侧栏、`surface` / `surface-hover` 内容面、`card` / `card-border` 卡片                           |
-| 边框     | `border` 分隔线与控件边框、`border-hover` 悬停边框                                                                           |
-| 浮层     | `popover` / `popover-border`（抽屉、菜单、对话框）、`overlay` 遮罩                                                           |
-| 输入     | `input` / `input-focused`、`input-border` / `input-border-hover` / `input-border-focused`                                    |
-| 文本     | `foreground` 正文、`foreground-subtle` 次要、`foreground-subtlest` 弱提示                                                    |
-| 状态面   | `hover` 悬停、`selected` 选中、`accent` 弱强调面（激活引用）、`tag` 徽标与禁用的主按钮、`find-highlight` 片段高亮            |
-| 强调     | `brand` 藏青：链接、焦点环、聚焦边框；`primary` / `primary-foreground` 藏青主按钮；`seal` / `seal-foreground` 朱红，只做装饰 |
-| 语义状态 | `destructive` 错误，只用于真实状态，不做装饰；需要成功、警告等状态色时再补，并复核对比度                                     |
+| 类别     | Token（Tailwind 类前缀 `bg-` / `text-` / `border-`）                                                                                                 |
+| -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 结构面   | `background` 页面、`sidebar` 侧栏、`surface` / `surface-hover` 内容面、`card` / `card-border` 卡片                                                   |
+| 边框     | `border` 分隔线与控件边框、`border-hover` 悬停边框                                                                                                   |
+| 浮层     | `popover` / `popover-border`（抽屉、菜单、对话框）、`overlay` 遮罩                                                                                   |
+| 输入     | `input` / `input-focused`、`input-border` / `input-border-hover` / `input-border-focused`                                                            |
+| 文本     | `foreground` 正文、`foreground-subtle` 次要、`foreground-subtlest` 弱提示                                                                            |
+| 状态面   | `hover` 悬停、`selected` 选中、`accent` 弱强调面（激活引用）、`tag` 徽标与禁用的主按钮、`find-highlight` 片段高亮                                    |
+| 强调     | `brand` 藏青：链接、焦点环、聚焦边框；`primary` / `primary-foreground` 藏青主按钮；`seal` / `seal-foreground` 朱红，只做装饰；`glint` 标志扫光的高光 |
+| 语义状态 | `destructive` 错误，只用于真实状态，不做装饰；需要成功、警告等状态色时再补，并复核对比度                                                             |
 
 规则：
 
 - 页面根 `bg-background text-foreground`；侧栏 `bg-sidebar`；主内容区只在 `<main>` 上铺一次 `bg-surface`，顶栏与页面不再各自铺底；卡片 `bg-card`；浮层 `bg-popover`
-- 朱红（`seal`）只用于有序列表编号、当前页签下划线、当前会话标记、文件格式标签和文档标题下的细线，不表达任何状态；错误用 `destructive` 并写明原因，回答与工具中的错误另配警示图标
-- 品牌色不做大面积填充；不使用渐变背景、玻璃效果，标志（朱漆鎏金）是唯一例外
+- 朱红（`seal`）只用于有序列表编号、当前页签下划线、当前会话标记、文件格式标签、文档标题下的细线和标志中抽出的竹简，不表达任何状态；错误用 `destructive` 并写明原因，回答与工具中的错误另配警示图标
+- 品牌色不做大面积填充；不使用渐变背景、玻璃效果（标志竹简上掠过的一道扫光除外）
 - 用文字层级表达信息密度，再考虑加边框或颜色
 - 文字颜色对其所在背景的对比度不低于 4.5:1（WCAG AA），`foreground-subtlest` 也不例外；修改 `tokens.css` 或把文字放到新背景上时复核
 
@@ -71,19 +71,22 @@
 
 ## 标志
 
-`src/app/logo.tsx`，图形资产，颜色固定、不随主题变化：
+`src/app/logo.tsx`。“管策”取法管仲经国治世之学，“智研”寓以大模型提升研究效能；“管”“策”同为竹字头，“策”本义是竹简，也指运筹用的筹策，所以标志画成一束竹简、抽出其中一枚：从文献中抽出的一段原文，也是由此得出的对策。字标右接的“LENS”（透镜、放大镜）寓意研究，与宣传版右上角的放大镜角标同义。
 
-- `Nameplate` 铭牌：朱漆底、鎏金双线框，左上与右下「」角饰（引文可溯源），鎏金衬线“管策智研”带暗红压影。侧栏顶部使用，下方以衬线小字署名“中国社会科学院大学”。
-- `Seal` 方印：单字“策”，用于网站图标、欢迎状态和连接页；小于 40px 时去掉内框。
-- 鎏光：一道光带扫过铭牌，悬停时扫一次，`prefers-reduced-motion` 时不播放；这是全站唯一的装饰动效。
-- 字形取自 Noto Serif SC（SIL OFL 1.1）wght 900 并转成路径（`logo-glyphs.ts`），不依赖用户字体；`public/favicon.svg` 是同一方印。
+- `SlipsMark` 竹简：七枚平头竹简，抽出的一枚为朱红（`seal`），其余为 `foreground-subtlest`，随主题切换；不加编绳、刻痕等细节。几何以 48×48 为基准按比例缩放。用于侧栏、欢迎状态、“敬请期待”页和连接页，对读屏隐藏
+- 点击：点哪一枚就抽出哪一枚，回弹上移、泛朱红光晕并有一道扫光（`glint`）自下而上掠过，原来那枚落回褪色，其余由近及远依次轻跳；再点抽出的那枚则原地弹一下。只响应指针、不进 Tab 顺序，刷新后回到居中一枚
+- 生成中：回答下方“正在生成…”前的 `SlipsMark loading`，不响应点击，竹简自右向左（竹简的阅读顺序）依次抽出，同一时刻只有一枚完全抽出
+- 这套点击与生成中动效是全站唯一的装饰动效；`prefers-reduced-motion` 时去掉过渡与动画，点击后直接到位，生成中静止
+- `Wordmark` 字标：衬线“管策智研”右接 LENS 铭牌（墨色实底、侧栏底色字），只用于侧栏顶部，与竹简横排，下方以衬线小字署名“中国社会科学院大学”
+- 宣传版（`docs/brand/logo-promo.svg` 浅底用、`logo-promo-dark.svg` 深底用）：竹简在上、“管策智研”在下，字标右上角挂放大镜方底角标，不带 LENS；用于答辩材料、海报等应用以外的场合
+- 字形取自 Noto Serif SC（SIL OFL 1.1），“管策智研”wght 600、“LENS”wght 700，转成路径（`logo-glyphs.ts`），不依赖用户字体；`public/favicon.svg` 是同一束竹简，随浏览器深浅色换配色
 - 不使用或改动学校官方校徽；需要时按学校视觉识别规范原样放置并经学校同意。
 
 ## 层次与阴影
 
 - 主要靠背景对比和边框分层；页面与侧栏无阴影
 - 浮层（抽屉、对话框、菜单）与悬浮的“回到底部”按钮用 `shadow-md`；输入区外壳与文件预览的“纸”用 `shadow-sm`；不做厚重阴影
-- 动效保持短促克制：状态变化用 `transition-colors`，加载指示可用 `animate-spin`；不做装饰性的入场、位移、缩放动效
+- 动效保持短促克制：状态变化用 `transition-colors`，加载指示可用 `animate-spin`，回答生成中用竹简依次抽出；除标志竹简外，不做装饰性的入场、位移、缩放动效
 
 ## 组件
 

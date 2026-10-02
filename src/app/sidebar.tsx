@@ -3,7 +3,7 @@ import { Link, NavLink } from 'react-router'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/cn'
 import { useResearch } from '@/services/research'
-import { Nameplate } from './logo'
+import { SlipsMark, Wordmark } from './logo'
 import { SessionList } from './session-list'
 import { ThemeToggle } from './theme-toggle'
 
@@ -22,11 +22,14 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
   const { user } = useResearch()
   return (
     <nav aria-label="主导航" className="flex h-full min-h-0 flex-col gap-4 p-3">
-      {/* 铭牌与校名署名：配色呼应社科大的中国红 */}
-      <div className="flex flex-col items-center gap-2 border-b border-border px-1 pt-1 pb-3">
-        <Nameplate width={216} className="h-auto w-full max-w-52" />
-        <div className="pl-[0.3em] font-serif text-ui-caption font-semibold tracking-[0.3em] text-foreground">
-          中国社会科学院大学
+      {/* 竹简标志、字标与校名署名 */}
+      <div className="flex items-center gap-2.5 border-b border-border px-1 pt-1 pb-3">
+        <SlipsMark size={36} />
+        <div className="flex min-w-0 flex-col gap-1.5">
+          <Wordmark height={18} />
+          <div className="font-serif text-ui-sm font-semibold tracking-[0.12em] text-foreground-subtle">
+            中国社会科学院大学
+          </div>
         </div>
       </div>
 

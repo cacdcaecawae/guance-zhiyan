@@ -112,26 +112,137 @@
     @apply border-t border-border;
   }
 
-  /* 铭牌鎏光：悬停时一道光带扫过一次。只属于标志，减少动效时不播放。 */
-  .nameplate-sheen {
-    transform: translateX(-120px);
+  /* 标志竹简（src/app/logo.tsx），全站唯一的装饰动效。点中的一枚回弹抽出、泛朱红光晕并有一道扫光自下而上掠过，
+     落回的一枚褪色，其余由近及远依次轻跳；生成中自右向左依次抽出。减少动效时去掉过渡与动画，只保留抽出状态。
+     几何以 48×48 为基准：竹简宽 4、高 34、顶边 10，抽出 6。 */
+  .slips {
+    position: relative;
+    display: inline-block;
+    flex-shrink: 0;
   }
-  .group\/nameplate:hover .nameplate-sheen {
-    animation: nameplate-sweep 1.2s cubic-bezier(0.4, 0, 0.2, 1) both;
+  .slip {
+    position: absolute;
+    top: calc(10 / 48 * 100%);
+    width: calc(4 / 48 * 100%);
+    height: calc(34 / 48 * 100%);
+    transition: transform 0.32s cubic-bezier(0.4, 0, 0.2, 1);
+  }
+  .slip[data-on] {
+    transform: translateY(calc(-6 / 34 * 100%));
+    transition: transform 0.55s cubic-bezier(0.34, 1.56, 0.64, 1);
+  }
+  .slips:not([data-loading]) .slip {
+    cursor: pointer;
+  }
+  @media (hover: hover) {
+    .slips:not([data-loading]) .slip:not([data-on]):hover {
+      transform: translateY(-6%);
+      transition-duration: 0.18s;
+    }
+  }
+  .slip-fx {
+    position: absolute;
+    inset: 0;
+    overflow: hidden;
+    border-radius: 20% / calc(0.8 / 34 * 100%);
+    background-color: var(--color-foreground-subtlest);
+  }
+  .slip[data-on] .slip-fx {
+    background-color: var(--color-seal);
+  }
+  .slip-fx::after {
+    content: '';
+    position: absolute;
+    inset-inline: 0;
+    top: 100%;
+    height: 60%;
+    opacity: 0;
+    background: linear-gradient(to top, transparent, var(--color-glint), transparent);
+  }
+  .slip-fx[data-fx='hit'] {
+    animation:
+      slip-in 0.3s ease-out,
+      slip-glow 0.9s ease-out;
+  }
+  .slip-fx[data-fx='bob'] {
+    animation:
+      slip-bob 0.5s cubic-bezier(0.34, 1.56, 0.64, 1),
+      slip-glow 0.9s ease-out;
+  }
+  .slip-fx[data-fx='hit']::after,
+  .slip-fx[data-fx='bob']::after {
+    animation: slip-sweep 0.65s cubic-bezier(0.4, 0, 0.2, 1) 0.12s;
+  }
+  .slip-fx[data-fx='drop'] {
+    animation: slip-out 0.35s ease-out;
+  }
+  .slip-fx[data-fx='wave'] {
+    animation: slip-wave 0.42s ease-in-out calc(40ms + var(--distance) * 50ms) both;
+  }
+  .slips[data-loading] .slip-fx {
+    animation: slip-scan 1.5s cubic-bezier(0.4, 0, 0.2, 1) calc(var(--order) * 150ms) infinite both;
   }
   @media (prefers-reduced-motion: reduce) {
-    .nameplate-sheen {
+    .slip,
+    .slip[data-on] {
+      transition: none;
+    }
+    .slip-fx,
+    .slip-fx::after {
       animation: none !important;
-      opacity: 0;
     }
   }
 }
 
-@keyframes nameplate-sweep {
+@keyframes slip-in {
   from {
-    transform: translateX(-120px);
+    background-color: var(--color-foreground-subtlest);
+  }
+}
+@keyframes slip-out {
+  from {
+    background-color: var(--color-seal);
+  }
+}
+/* 光晕随标志尺寸缩放 */
+@keyframes slip-glow {
+  30% {
+    box-shadow: 0 0 calc(var(--size) * 0.25px) calc(var(--size) * 0.03px)
+      color-mix(in srgb, var(--color-seal) 55%, transparent);
+  }
+}
+@keyframes slip-sweep {
+  from {
+    opacity: 1;
+    transform: translateY(0);
   }
   to {
-    transform: translateX(720px);
+    opacity: 1;
+    transform: translateY(-270%);
+  }
+}
+@keyframes slip-bob {
+  35% {
+    transform: translateY(-10%);
+  }
+}
+/* 离点中的一枚越近跳得越高 */
+@keyframes slip-wave {
+  40% {
+    transform: translateY(calc(-1% * max(3, 10 - 2.5 * var(--distance))));
+  }
+}
+/* 每枚只在约 0.4s 内抽出又落回，相邻相隔 150ms：同一时刻只有一枚完全抽出，七枚走完后停 0.2s 再从右起 */
+@keyframes slip-scan {
+  0%,
+  26%,
+  100% {
+    transform: translateY(0);
+    background-color: var(--color-foreground-subtlest);
+  }
+  8%,
+  16% {
+    transform: translateY(calc(-6 / 34 * 100%));
+    background-color: var(--color-seal);
   }
 }
