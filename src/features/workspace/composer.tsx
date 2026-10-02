@@ -1,4 +1,11 @@
-import { ImagePlusIcon, SendHorizontalIcon, SquareIcon, XIcon } from 'lucide-react'
+import {
+  FileIcon,
+  ImagePlusIcon,
+  PlusIcon,
+  SendHorizontalIcon,
+  SquareIcon,
+  XIcon,
+} from 'lucide-react'
 import {
   useCallback,
   useRef,
@@ -8,6 +15,12 @@ import {
   type ReactNode,
 } from 'react'
 import { Button } from '@/components/ui/button'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
 import { ResizeHandle } from '@/components/ui/resize-handle'
 import { Textarea } from '@/components/ui/textarea'
 import { readPref, writePref } from '@/lib/storage'
@@ -142,17 +155,31 @@ export function Composer({ onSubmit, busy = false, onStop, children, autoFocus }
           </ul>
         )}
         <div className="flex items-end gap-2">
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            aria-label="添加图片"
-            title="添加图片"
-            onClick={() => picker.current?.click()}
-            className="size-8 shrink-0 rounded-lg text-foreground-subtle"
-          >
-            <ImagePlusIcon />
-          </Button>
+          {/* 参照 Claude 的“+”入口；文件附件尚未上线，菜单里明确写“敬请期待” */}
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                aria-label="添加图片或文件"
+                title="添加图片或文件"
+                className="size-8 shrink-0 rounded-lg text-foreground-subtle data-[state=open]:bg-hover data-[state=open]:text-foreground"
+              >
+                <PlusIcon />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent side="top" align="start" className="min-w-44">
+              <DropdownMenuItem onSelect={() => picker.current?.click()}>
+                <ImagePlusIcon />
+                添加图片
+              </DropdownMenuItem>
+              <DropdownMenuItem disabled>
+                <FileIcon />
+                添加文件（敬请期待）
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
           <input
             ref={picker}
             type="file"
