@@ -57,8 +57,9 @@ DSH `tool-bash`、`tool-fs`、`shell`、`shell-env`、`fs`、`fs-local` 均固�
 
 ## Noto Serif SC
 
-The logo glyphs in `src/app/logo-glyphs.ts` and `public/favicon.svg` are outlines
-of “管策智研” converted from Noto Serif SC (weight 900; the Noto build of Source Han Serif), © Adobe,
+The wordmark outlines in `src/app/logo-glyphs.ts` and `docs/brand/*.svg` are “管策智研”
+(weight 600) and “LENS” (weight 700) converted from Noto Serif SC (the Noto build of Source Han Serif;
+the variable font from `@fontsource-variable/noto-serif-sc` instantiated at those weights), © Adobe,
 licensed under the [SIL Open Font License 1.1](https://openfontlicense.org/).
 The web app also self-hosts the Noto Serif SC variable font through
 [`@fontsource-variable/noto-serif-sc`](https://fontsource.org/fonts/noto-serif-sc)

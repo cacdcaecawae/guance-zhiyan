@@ -39,9 +39,11 @@
   --primary: #23395d;
   --primary-foreground: #ffffff;
   --destructive: #b3261e;
-  /* 朱红：印章、编号、当前页签等装饰，不表达状态 */
+  /* 朱红：标志竹简、编号、当前页签等装饰，不表达状态 */
   --seal: #b0302a;
   --seal-foreground: #ffffff;
+  /* 标志竹简扫光的高光，只用于标志 */
+  --glint: rgb(255 255 255 / 0.75);
   --trace-model: #46578a;
   --trace-tool: #8a5522;
   --trace-context: #56692a;
@@ -81,6 +83,7 @@
   --destructive: #ee7a70;
   --seal: #e06a5e;
   --seal-foreground: #1b1b1d;
+  --glint: rgb(255 255 255 / 0.5);
   --trace-model: #a3b0e0;
   --trace-tool: #dba56c;
   --trace-context: #b0c47f;
@@ -123,6 +126,7 @@
   --color-destructive: var(--destructive);
   --color-seal: var(--seal);
   --color-seal-foreground: var(--seal-foreground);
+  --color-glint: var(--glint);
   --color-ring: var(--brand);
 
   /* 字体：系统无衬线栈，兼容中文 */

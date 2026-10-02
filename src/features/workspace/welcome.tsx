@@ -1,4 +1,4 @@
-import { Seal } from '@/app/logo'
+import { SlipsMark } from '@/app/logo'
 
 const sampleQuestions = [
   '搜索公共政策评估方法，并附来源',
@@ -14,7 +14,7 @@ interface WelcomeProps {
 export function Welcome({ onPick }: WelcomeProps) {
   return (
     <div className="mx-auto flex w-full max-w-[52rem] flex-col items-center gap-3 py-6 text-center">
-      <Seal size={52} />
+      <SlipsMark size={52} />
       <h2 className="mt-1 font-serif text-ui-display font-bold tracking-wider">开始一项研究</h2>
       <p className="text-ui-base text-foreground-subtle">
         提出研究问题，按需搜索网页、整理资料并生成文件。
