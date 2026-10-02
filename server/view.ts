@@ -123,6 +123,7 @@ export function messagesFromEvents(
         questionImages: images,
         status: 'loading',
         parts: [],
+        startedAt: event.time,
       }
       messages.push(answer)
     } else if (
@@ -155,6 +156,7 @@ export function messagesFromEvents(
           : toolText(textOf(event.data.message.content))
       }
     } else if (answer && event.type === 'turn/end') {
+      answer.endedAt = event.time
       const reason = event.data.reason
       answer.status =
         reason.kind === 'completed'

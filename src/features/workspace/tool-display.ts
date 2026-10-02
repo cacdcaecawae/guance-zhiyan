@@ -32,13 +32,16 @@ export function toolSummary(input: string): string {
   }
 }
 
-/** 过程与最终回答的分界，adapted from DSH's turn-process boundary; see THIRD_PARTY_NOTICES. */
+/**
+ * 过程与最终回答的分界，adapted from DSH's turn-process boundary; see THIRD_PARTY_NOTICES.
+ * 最终回答只从最后一步的正文起算；这一步的思考与此前的思考、工具一样归入过程（DSH 同样随过程折起）。
+ */
 export function splitAnswer(message: AssistantMessage) {
   const lastTool = message.parts.findLastIndex((part) => part.type === 'tool')
   const lastText = message.parts.findLast((part) => part.type === 'text')
   const finalStart =
     lastText && message.parts.indexOf(lastText) > lastTool
-      ? message.parts.findIndex((part) => part.type !== 'tool' && part.step === lastText.step)
+      ? message.parts.findIndex((part) => part.type === 'text' && part.step === lastText.step)
       : message.parts.length
   return { process: message.parts.slice(0, finalStart), final: message.parts.slice(finalStart) }
 }

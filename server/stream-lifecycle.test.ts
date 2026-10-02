@@ -183,6 +183,11 @@ test('disconnect during a tool turn, reconnect, stop and retry preserve one copy
     while (view.running)
     const answer = view.messages.at(-1)
     assert.ok(answer?.role === 'assistant' && answer.status === 'stopped')
+    assert.ok(
+      answer.startedAt !== undefined && answer.endedAt !== undefined,
+      'the answer carries its turn start and end times',
+    )
+    assert.ok(answer.endedAt >= answer.startedAt)
     assert.equal(view.messages.length, 2)
     assert.equal(answer.parts.filter((part) => part.type === 'text').length, 1)
     const tools = answer.parts.filter((part) => part.type === 'tool')

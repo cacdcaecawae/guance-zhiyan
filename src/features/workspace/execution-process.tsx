@@ -7,6 +7,7 @@ import {
   Loader2Icon,
   WrenchIcon,
 } from 'lucide-react'
+import { useEffect, useState } from 'react'
 import type { AnswerPart, AssistantMessage } from '@/types'
 import { citationOrder } from './citations'
 import { Markdown } from './markdown'
@@ -69,28 +70,55 @@ export function ToolRow({ part }: { part: Extract<AnswerPart, { type: 'tool' }> 
   )
 }
 
+/** 用时（同 DSH）：不满一分钟只写秒，满一分钟写分秒，满一小时写时分秒；进行中秒数不补零，以免跳动。 */
+function formatDuration(ms: number, live: boolean) {
+  const total = Math.floor(Math.max(1000, ms) / 1000)
+  const pad = (n: number) => String(n).padStart(2, '0')
+  const hours = Math.floor(total / 3600)
+  const minutes = Math.floor(total / 60) % 60
+  const seconds = live ? String(total % 60) : pad(total % 60)
+  if (hours) return `${hours}小时${pad(minutes)}分${seconds}秒`
+  return minutes ? `${minutes}分${seconds}秒` : `${total}秒`
+}
+
+/**
+ * 执行过程标题，adapted from DSH TurnProcessNodeView：进行中每秒更新用时，完成写用时，停止与失败直接写明。
+ * 单独成组件，每秒只重绘这一行。用时以服务器记录的开始时间对照本机时钟，两边时钟不一致时进行中的用时会有偏差。
+ */
+function ProcessLabel({ message }: { message: AssistantMessage }) {
+  const { status, startedAt, endedAt } = message
+  const ticking = status === 'loading' && startedAt !== undefined
+  const [now, setNow] = useState(Date.now)
+  useEffect(() => {
+    if (!ticking) return
+    const timer = setInterval(() => setNow(Date.now()), 1000)
+    return () => clearInterval(timer)
+  }, [ticking])
+  if (status === 'loading')
+    return startedAt === undefined
+      ? '进行中'
+      : `进行中，用时 ${formatDuration(now - startedAt, true)}`
+  // 停止与失败也带用时（DSH 只写状态）：回答下方另有一行写明停止或失败原因，避免两行重复
+  const state = status === 'stopped' ? '已停止' : status === 'error' ? '处理失败' : '已完成'
+  return startedAt === undefined || endedAt === undefined
+    ? state
+    : `${state}，用时 ${formatDuration(endedAt - startedAt, false)}`
+}
+
 /** Adapted from DSH's turn-process / final-answer boundary; see THIRD_PARTY_NOTICES. */
 export function AnswerContent({ message }: { message: AssistantMessage }) {
   const { process, final } = splitAnswer(message)
+  // 完成后默认折起，进行中、停止和失败时展开；用户手动展开或折起后以用户为准
+  const [chosen, setChosen] = useState<boolean>()
+  const open = chosen ?? message.status !== 'done'
   // One numbering for the whole answer: the same passage keeps its number across steps.
   const citations = citationOrder(
     message.parts.flatMap((part) => (part.type === 'tool' ? [] : [part.text])),
   )
-  // 汇总按工具种类计数，如“联网搜索 2 次 · 生成文件 1 次”；没有工具时写“执行过程”。
-  const counts = new Map<string, number>()
-  for (const part of process)
-    if (part.type === 'tool') {
-      const name = toolNames[part.name] ?? part.name
-      counts.set(name, (counts.get(name) ?? 0) + 1)
-    }
-  const failed = process.filter((part) => part.type === 'tool' && part.status === 'error').length
-  const summary =
-    [...counts].map(([name, count]) => `${name} ${count} 次`).join(' · ') || '执行过程'
   const renderPart = (part: AnswerPart, inProcess: boolean) =>
     part.type === 'tool' ? (
       <ToolRow key={part.id} part={part} />
     ) : part.type === 'reasoning' ? (
-      // 最终一步的思考不在可收起的过程内，但同样按页边批注排列
       <div key={part.id}>
         <Reasoning
           text={part.text}
@@ -112,16 +140,25 @@ export function AnswerContent({ message }: { message: AssistantMessage }) {
     )
   return (
     <>
+      {/* 同 DSH：每轮都写用时；没有过程内容时只是一行文字，不能展开 */}
+      {!process.length && (
+        <p className="py-1 text-ui-caption text-foreground-subtlest">
+          <ProcessLabel message={message} />
+        </p>
+      )}
       {!!process.length && (
-        <details open className="group/process min-w-0">
+        <details
+          open={open}
+          // 只记录用户的操作：随状态自动展开或折起时，toggle 事件里的值与本次渲染的 open 相同
+          onToggle={(event) => {
+            if (event.currentTarget.open !== open) setChosen(event.currentTarget.open)
+          }}
+          className="group/process min-w-0"
+        >
           <summary className="flex w-fit cursor-pointer list-none items-center gap-1.5 rounded-md py-1 text-ui-caption text-foreground-subtlest outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring [&::-webkit-details-marker]:hidden">
-            <span>{summary}</span>
-            {!!failed && (
-              <span className="inline-flex items-center gap-1 text-destructive">
-                · <CircleAlertIcon className="size-3" aria-hidden />
-                {failed} 次失败
-              </span>
-            )}
+            <span>
+              <ProcessLabel message={message} />
+            </span>
             <ChevronDownIcon className="size-3 group-open/process:rotate-180" aria-hidden />
           </summary>
           {/* 过程像页边批注：左侧细线，与最终回答区分主次 */}

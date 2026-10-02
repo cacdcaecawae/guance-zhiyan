@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react'
+import { act, fireEvent, render, screen, within } from '@testing-library/react'
 import { expect, it, vi } from 'vitest'
 import { MessageList } from './message-list'
 import type { AssistantMessage } from '@/types'
@@ -63,19 +63,64 @@ it('复制只写入最终回答；剪贴板失败或不可用时明确提示', a
   expect(screen.getByText('复制失败')).toBeInTheDocument()
 })
 
-it('执行过程汇总只列非零计数，全为零时写“执行过程”', () => {
-  const tool = { ...answer, parts: [answer.parts[1], answer.parts[2]] }
-  const { rerender } = render(
-    <MessageList sessionId="s" messages={[tool]} busy={false} onRetry={() => {}} />,
-  )
-  expect(screen.getByText('生成文件 1 次')).toBeInTheDocument()
-  const reasoning: AssistantMessage = {
+it('执行过程标题写用时，完成后折起；最后一步的思考也收在过程里，正文留在外面', () => {
+  const message: AssistantMessage = {
     ...answer,
-    status: 'error',
-    parts: [{ id: 'r', type: 'reasoning', step: 1, text: '思考' }],
+    startedAt: 1_000,
+    endedAt: 66_000,
+    parts: [
+      { id: 'r1', type: 'reasoning', step: 1, text: '先查' },
+      answer.parts[1],
+      { id: 'r2', type: 'reasoning', step: 2, text: '再想' },
+      answer.parts[2],
+    ],
   }
-  rerender(<MessageList sessionId="s" messages={[reasoning]} busy={false} onRetry={() => {}} />)
-  expect(screen.getByText('执行过程')).toBeInTheDocument()
+  render(<MessageList sessionId="s" messages={[message]} busy={false} onRetry={() => {}} />)
+  const process = screen.getByText('已完成，用时 1分05秒').closest('details')!
+  expect(process).not.toHaveAttribute('open')
+  expect(within(process).getAllByText('思考过程')).toHaveLength(2)
+  expect(process).not.toContainElement(screen.getByText('文件已生成'))
+  expect(screen.queryByText(/次|失败/)).not.toBeInTheDocument()
+})
+
+it('没有过程内容的回答也写用时，只是不能展开', () => {
+  const plain: AssistantMessage = {
+    ...answer,
+    startedAt: 0,
+    endedAt: 3_400,
+    parts: [answer.parts[2]],
+  }
+  render(<MessageList sessionId="s" messages={[plain]} busy={false} onRetry={() => {}} />)
+  const label = screen.getByText('已完成，用时 3秒')
+  expect(label.closest('details')).toBeNull()
+})
+
+it('进行中每秒更新用时并保持展开；停止与失败写明状态与用时', () => {
+  vi.useFakeTimers({ now: 13_500 })
+  const running: AssistantMessage = { ...answer, status: 'loading', startedAt: 1_000 }
+  const { rerender } = render(
+    <MessageList sessionId="s" messages={[running]} busy onRetry={() => {}} />,
+  )
+  const label = screen.getByText('进行中，用时 12秒')
+  expect(label.closest('details')).toHaveAttribute('open')
+  act(() => vi.advanceTimersByTime(1000))
+  expect(label).toHaveTextContent('进行中，用时 13秒')
+  vi.useRealTimers()
+  for (const [status, text] of [
+    ['stopped', '已停止，用时 4秒'],
+    ['error', '处理失败，用时 4秒'],
+  ] as const) {
+    rerender(
+      <MessageList
+        sessionId="s"
+        messages={[{ ...running, status, endedAt: 5_000 }]}
+        busy={false}
+        onRetry={() => {}}
+      />,
+    )
+    expect(label).toHaveTextContent(text)
+    expect(label.closest('details')).toHaveAttribute('open')
+  }
 })
 
 it('离开底部时出现“回到底部”，点击滚到容器底部', () => {
