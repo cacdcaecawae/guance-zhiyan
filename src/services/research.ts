@@ -116,7 +116,12 @@ function inOrder<T>(id: string, task: () => Promise<T>) {
 
 export async function createSession() {
   const session = await request<SessionSummary>('/sessions', { method: 'POST' })
-  setSessions([session, ...state.sessions])
+  // 并发列表刷新可能已包含新会话；保留该条记录及服务端排序。
+  setSessions(
+    state.sessions.some((item) => item.id === session.id)
+      ? state.sessions
+      : [session, ...state.sessions],
+  )
   return session
 }
 
