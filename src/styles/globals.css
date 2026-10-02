@@ -114,7 +114,7 @@
 
   /* 标志竹简（src/app/logo.tsx），全站唯一的装饰动效。点中的一枚回弹抽出、泛朱红光晕并有一道扫光自下而上掠过，
      落回的一枚褪色，其余由近及远依次轻跳；生成中自右向左依次抽出。减少动效时去掉过渡与动画，只保留抽出状态。
-     几何以 48×48 为基准：竹简宽 4、高 34、顶边 10，抽出 6。 */
+     竹简的位置、尺寸与抽出高度（--lift）由 logo.tsx 按显示尺寸取整到像素，静止时都落在整像素上。 */
   .slips {
     position: relative;
     display: inline-block;
@@ -122,13 +122,10 @@
   }
   .slip {
     position: absolute;
-    top: calc(10 / 48 * 100%);
-    width: calc(4 / 48 * 100%);
-    height: calc(34 / 48 * 100%);
     transition: transform 0.32s cubic-bezier(0.4, 0, 0.2, 1);
   }
   .slip[data-on] {
-    transform: translateY(calc(-6 / 34 * 100%));
+    transform: translateY(calc(-1 * var(--lift)));
     transition: transform 0.55s cubic-bezier(0.34, 1.56, 0.64, 1);
   }
   .slips:not([data-loading]) .slip {
@@ -242,7 +239,7 @@
   }
   8%,
   16% {
-    transform: translateY(calc(-6 / 34 * 100%));
+    transform: translateY(calc(-1 * var(--lift)));
     background-color: var(--color-seal);
   }
 }
