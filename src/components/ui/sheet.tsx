@@ -12,6 +12,7 @@ function SheetContent({
   children,
   side = 'right',
   title,
+  onEscapeKeyDown,
   ...props
 }: ComponentProps<typeof SheetPrimitive.Content> & {
   side?: 'left' | 'right'
@@ -36,6 +37,11 @@ function SheetContent({
           const label = target?.getAttribute('aria-label')
           if (label)
             document.querySelector<HTMLElement>(`[aria-label="${CSS.escape(label)}"]`)?.focus()
+        }}
+        onEscapeKeyDown={(e) => {
+          onEscapeKeyDown?.(e)
+          // 输入框里的 Esc 先交给输入框（如取消重命名），再按一次才关闭抽屉
+          if (e.target instanceof HTMLInputElement) e.preventDefault()
         }}
         aria-describedby={undefined}
         className={cn(

@@ -1,3 +1,4 @@
+import { readdir, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
 import AgentRegistry, { type AgentHandle } from '@deepseek-ai/dsh-agent'
@@ -421,6 +422,38 @@ export class Agents {
       await this.options.sandboxes?.stop(userId, id)
       await run.ready
       await run.done
+    }
+  }
+  /**
+   * 先删数据库记录，此后提问与读取一律 404；再清理消息历史、会话文件和沙箱容器。
+   * 附图按内容存储、可能被其他会话共用，保留且不退配额；沙箱工作区卷由管理服务保留。
+   */
+  async remove(userId: string, id: string) {
+    this.store.session(userId, id)
+    if (this.active.has(id)) throw new HttpError(409, '当前会话仍在生成，请先停止。')
+    const files = this.store.remove(userId, id)
+    this.failed.delete(id)
+    this.notify(id)
+    const history = join(this.store.root, 'sessions')
+    const results = await Promise.allSettled([
+      // DSH 不提供删除接口：历史按 sessions/<工作目录>/<会话 id>/ 存放
+      readdir(history).then(
+        (projects) =>
+          Promise.all(
+            projects.map((project) =>
+              rm(join(history, project, id), { recursive: true, force: true }),
+            ),
+          ),
+        (error: NodeJS.ErrnoException) => {
+          if (error.code !== 'ENOENT') throw error
+        },
+      ),
+      ...files.map((file) => rm(this.files.path(file), { force: true })),
+      this.options.sandboxes?.discard(id),
+    ])
+    if (results.some((result) => result.status === 'rejected')) {
+      console.warn(`会话 ${id} 已删除，但历史、文件或沙箱容器未能完全清理。`)
+      throw new HttpError(500, '会话已删除，但未能完全清理，请联系管理员。')
     }
   }
   async close() {

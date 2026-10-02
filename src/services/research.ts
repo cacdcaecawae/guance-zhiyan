@@ -90,6 +90,31 @@ export async function createSession() {
   return session
 }
 
+const reloadSessions = async () => update({ sessions: await request('/sessions') })
+
+export async function updateSession(id: string, patch: { title?: string; pinned?: boolean }) {
+  const session = await request<SessionSummary>(`/sessions/${id}`, {
+    method: 'PATCH',
+    body: JSON.stringify(patch),
+  })
+  update({ current: state.current?.id === id ? { ...state.current, ...session } : state.current })
+  // 置顶改变排序，以服务端列表为准
+  if (patch.pinned === undefined)
+    update({ sessions: state.sessions.map((s) => (s.id === id ? session : s)) })
+  else await reloadSessions()
+}
+
+export async function deleteSession(id: string) {
+  try {
+    await request(`/sessions/${id}`, { method: 'DELETE' })
+  } catch (error) {
+    // 清理失败时会话记录可能已删除，以服务端列表为准
+    await reloadSessions().catch(() => {})
+    throw error
+  }
+  update({ sessions: state.sessions.filter((s) => s.id !== id) })
+}
+
 /** A single subscription owns the visible session. Route changes invalidate old reads. */
 export function watchSession(id?: string) {
   const version = ++generation
@@ -103,7 +128,7 @@ export function watchSession(id?: string) {
       loading: false,
       error: null,
       connectionError: null,
-      sessions: state.sessions.map((s) => (s.id === id ? { id: s.id, title: session.title } : s)),
+      sessions: state.sessions.map((s) => (s.id === id ? { ...s, title: session.title } : s)),
     })
   }
   if (id)

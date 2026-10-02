@@ -1,6 +1,6 @@
 import { act, renderHook } from '@testing-library/react'
 import { expect, it, vi } from 'vitest'
-import { askQuestion, createSession, useResearch, watchSession } from './research'
+import { askQuestion, createSession, deleteSession, useResearch, watchSession } from './research'
 import type { Session } from '@/types'
 
 it('会话切换丢弃过时读取；HTTP 确认不覆盖较新的流式状态', async () => {
@@ -97,6 +97,31 @@ it('重新提问只传本会话已存图片的 id，不下载原图再上传', a
     expect(path).toBe('/api/sessions/s1/messages')
     expect(JSON.parse(String(init?.body))).toEqual({ question: '', images: [{ id: 'sha256:1' }] })
   } finally {
+    vi.unstubAllGlobals()
+  }
+})
+
+it('删除时清理失败：报告错误，会话列表以服务端为准', async () => {
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (path: string, init?: RequestInit) => {
+      if (init?.method === 'POST') return Response.json({ id: 'gone', title: '新研究' })
+      if (init?.method === 'DELETE')
+        return Response.json(
+          { error: '会话已删除，但未能完全清理，请联系管理员。' },
+          { status: 500 },
+        )
+      return Response.json(path === '/api/sessions' ? [] : {})
+    }),
+  )
+  const { result, unmount } = renderHook(useResearch)
+  try {
+    await act(() => createSession())
+    expect(result.current.sessions.some((s) => s.id === 'gone')).toBe(true)
+    await act(() => expect(deleteSession('gone')).rejects.toThrow('未能完全清理'))
+    expect(result.current.sessions.some((s) => s.id === 'gone')).toBe(false)
+  } finally {
+    unmount()
     vi.unstubAllGlobals()
   }
 })
