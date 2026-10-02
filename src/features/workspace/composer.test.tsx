@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
 import { Composer } from './composer'
@@ -90,6 +90,29 @@ describe('Composer', () => {
     await userEvent.click(screen.getByRole('button', { name: '发送' }))
     expect(onSubmit).toHaveBeenCalledExactlyOnceWith('', [chart])
     expect(screen.queryByRole('img')).not.toBeInTheDocument()
+  })
+
+  it('“+”菜单：添加图片打开选图，添加文件标为敬请期待且不可选', async () => {
+    const user = userEvent.setup()
+    const pick = vi.spyOn(HTMLInputElement.prototype, 'click').mockImplementation(() => {})
+    render(<Composer onSubmit={vi.fn()} />)
+    const trigger = screen.getByRole('button', { name: '添加图片或文件' })
+    await user.click(trigger)
+    const file = screen.getByRole('menuitem', { name: '添加文件（敬请期待）' })
+    expect(file).toHaveAttribute('aria-disabled', 'true')
+    fireEvent.click(file)
+    expect(pick).not.toHaveBeenCalled()
+    await user.click(screen.getByRole('menuitem', { name: '添加图片' }))
+    expect(pick).toHaveBeenCalledOnce()
+    expect(screen.queryByRole('menu')).not.toBeInTheDocument()
+    // 键盘：Enter 打开并落在“添加图片”，跳过不可用项，选择后焦点回到“+”
+    act(() => trigger.focus())
+    await user.keyboard('{Enter}')
+    expect(screen.getByRole('menuitem', { name: '添加图片' })).toHaveFocus()
+    await user.keyboard('{ArrowDown}{Enter}')
+    expect(pick).toHaveBeenCalledTimes(2)
+    await waitFor(() => expect(trigger).toHaveFocus())
+    pick.mockRestore()
   })
 
   it('发送成功后只移除已发送的图片，等待期间新加的图片保留', async () => {

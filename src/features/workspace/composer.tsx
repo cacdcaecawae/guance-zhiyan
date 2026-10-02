@@ -1,4 +1,12 @@
-import { ImagePlusIcon, SendHorizontalIcon, SquareIcon, XIcon } from 'lucide-react'
+import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
+import {
+  FileIcon,
+  ImagePlusIcon,
+  PlusIcon,
+  SendHorizontalIcon,
+  SquareIcon,
+  XIcon,
+} from 'lucide-react'
 import {
   useCallback,
   useRef,
@@ -142,17 +150,44 @@ export function Composer({ onSubmit, busy = false, onStop, children, autoFocus }
           </ul>
         )}
         <div className="flex items-end gap-2">
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            aria-label="添加图片"
-            title="添加图片"
-            onClick={() => picker.current?.click()}
-            className="size-8 shrink-0 rounded-lg text-foreground-subtle"
-          >
-            <ImagePlusIcon />
-          </Button>
+          {/* 参照 Claude 的“+”入口；文件附件尚未上线，菜单里明确写“敬请期待” */}
+          <DropdownMenu.Root>
+            <DropdownMenu.Trigger asChild>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                aria-label="添加图片或文件"
+                title="添加图片或文件"
+                className="size-8 shrink-0 rounded-lg text-foreground-subtle data-[state=open]:bg-hover data-[state=open]:text-foreground"
+              >
+                <PlusIcon />
+              </Button>
+            </DropdownMenu.Trigger>
+            <DropdownMenu.Portal>
+              <DropdownMenu.Content
+                side="top"
+                align="start"
+                sideOffset={4}
+                className="z-50 min-w-44 rounded-lg border border-popover-border bg-popover p-1 text-foreground shadow-md"
+              >
+                <DropdownMenu.Item
+                  onSelect={() => picker.current?.click()}
+                  className="flex cursor-default items-center gap-2 rounded-md px-2 py-1.5 text-ui-caption outline-none select-none data-highlighted:bg-selected"
+                >
+                  <ImagePlusIcon className="size-4 text-foreground-subtle" />
+                  添加图片
+                </DropdownMenu.Item>
+                <DropdownMenu.Item
+                  disabled
+                  className="flex cursor-default items-center gap-2 rounded-md px-2 py-1.5 text-ui-caption outline-none select-none data-disabled:pointer-events-none data-disabled:opacity-50"
+                >
+                  <FileIcon className="size-4 text-foreground-subtle" />
+                  添加文件（敬请期待）
+                </DropdownMenu.Item>
+              </DropdownMenu.Content>
+            </DropdownMenu.Portal>
+          </DropdownMenu.Root>
           <input
             ref={picker}
             type="file"
