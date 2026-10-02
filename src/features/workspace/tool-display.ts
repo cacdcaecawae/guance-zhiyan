@@ -101,9 +101,8 @@ export type ProcessItem =
   | { kind: 'group'; key: string; parts: AnswerPart[]; activity: Activity; title: string }
   | { kind: 'reply'; part: Extract<AnswerPart, { type: 'text' }> }
 
-function group(parts: AnswerPart[], closed: boolean): ProcessItem {
+function group(parts: AnswerPart[], closed: boolean, key: string): ProcessItem {
   const tools = parts.filter((part): part is Tool => part.type === 'tool')
-  const key = parts[0].id
   if (!closed) {
     // 未结束的组写正在运行的工具及其参数；没有运行工具时写“正在分析请求”
     // ponytail: 取成员顺序中最后一个运行中的工具；DSH 按调用开始时间取最新，要更准时给工具补开始时间
@@ -137,6 +136,8 @@ function group(parts: AnswerPart[], closed: boolean): ProcessItem {
 /**
  * 过程分组，adapted from DSH conversation-nodes/process-groups 与 process-activity：
  * 相邻的思考与工具成一组，阶段回复把组切开并单独排列；tailClosed 表示末组已结束（轮次结束或其后已有回复）。
+ * 过程按事件顺序追加，组序位跨实时流与持久快照稳定；片段 id 会在提交时改变，不能作为组 key。
+ * 若以后支持重排旧过程，须改用稳定的组标识。
  */
 export function processItems(process: AnswerPart[], tailClosed: boolean): ProcessItem[] {
   const items: ProcessItem[] = []
@@ -146,10 +147,10 @@ export function processItems(process: AnswerPart[], tailClosed: boolean): Proces
       members.push(part)
       continue
     }
-    if (members.length) items.push(group(members, true))
+    if (members.length) items.push(group(members, true, `group-${items.length}`))
     members = []
     items.push({ kind: 'reply', part })
   }
-  if (members.length) items.push(group(members, tailClosed))
+  if (members.length) items.push(group(members, tailClosed, `group-${items.length}`))
   return items
 }
