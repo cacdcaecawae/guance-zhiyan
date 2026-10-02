@@ -29,3 +29,11 @@ it('生成中的竹简依次抽出，不响应点击', () => {
   expect(effects(container)).toEqual(Array(7).fill(undefined))
   expect(container.querySelector('.slips')).toHaveAttribute('data-loading')
 })
+
+it('小尺寸下竹简落在整像素上、粗细一致，缝不小于 1px', () => {
+  const { container } = render(<SlipsMark size={20} loading />)
+  const box = (s: HTMLElement) => ({ left: s.style.left, width: s.style.width })
+  expect(slips(container).map(box)).toEqual(
+    [0, 3, 6, 9, 12, 15, 18].map((left) => ({ left: `${left}px`, width: '2px' })),
+  )
+})

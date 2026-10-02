@@ -1,5 +1,6 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48">
-  <!-- 与 src/app/logo.tsx 的竹简标志同形；配色取 tokens.css 的 foreground-subtlest 与 seal，浏览器为深色时换深色值 -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16">
+  <!-- 与 src/app/logo.tsx 的竹简标志同形，按 16px 像素网格画（竹简与缝各 1px），1 倍屏也不糊；
+       配色取 tokens.css 的 foreground-subtlest 与 seal，浏览器为深色时换深色值 -->
   <style>
     rect { fill: #606066; }
     .on { fill: #b0302a; }
@@ -8,11 +9,11 @@
       .on { fill: #e06a5e; }
     }
   </style>
-  <rect x="3.5" y="10" width="4" height="34" rx="0.8" />
-  <rect x="9.5" y="10" width="4" height="34" rx="0.8" />
-  <rect x="15.5" y="10" width="4" height="34" rx="0.8" />
-  <rect class="on" x="21.5" y="4" width="4" height="34" rx="0.8" />
-  <rect x="27.5" y="10" width="4" height="34" rx="0.8" />
-  <rect x="33.5" y="10" width="4" height="34" rx="0.8" />
-  <rect x="39.5" y="10" width="4" height="34" rx="0.8" />
+  <rect x="1" y="4" width="1" height="11" />
+  <rect x="3" y="4" width="1" height="11" />
+  <rect x="5" y="4" width="1" height="11" />
+  <rect class="on" x="7" y="2" width="1" height="11" />
+  <rect x="9" y="4" width="1" height="11" />
+  <rect x="11" y="4" width="1" height="11" />
+  <rect x="13" y="4" width="1" height="11" />
 </svg>
