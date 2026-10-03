@@ -37,3 +37,17 @@ it('未结束的组写正在运行的工具与参数，没有运行工具时写�
   ])
   expect(titles([tool('a', 'web_search'), think('r2')], false)).toEqual(['正在分析请求'])
 })
+
+it('已结束的组不把失败说成完成：全部失败写“…失败”，有工具被停止时加“已中断”', () => {
+  const stopped = { ...tool('s', 'web_fetch'), status: 'stopped' } as const
+  expect(titles([tool('a', 'create_file', 'error')])).toEqual(['生成文件失败'])
+  expect(titles([tool('a', 'web_search'), tool('b', 'create_file', 'error')])).toEqual([
+    '已搜索网页，生成文件失败',
+  ])
+  expect(titles([tool('a', 'web_fetch'), stopped])).toEqual(['已访问网页，已中断'])
+  expect(titles([stopped])).toEqual(['已中断'])
+  // 同一类里只要成功过一次就写“已…”，偶发的单次失败不另列
+  expect(titles([tool('a', 'web_search', 'error'), tool('b', 'web_search')])).toEqual([
+    '已搜索网页',
+  ])
+})

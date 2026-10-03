@@ -114,8 +114,13 @@ function inOrder<T>(id: string, task: () => Promise<T>) {
   return result
 }
 
+// 本页删除过的会话：迟到的新建确认不能把它恢复到列表
+const deleted = new Set<string>()
+
 export async function createSession() {
   const session = await request<SessionSummary>('/sessions', { method: 'POST' })
+  // 确认到达前这条记录已从侧栏删除：不再插回，交给调用方重新新建
+  if (deleted.has(session.id)) throw new Error('该研究记录已删除，请重新发送。')
   // 并发列表刷新可能已包含新会话；保留该条记录及服务端排序。
   setSessions(
     state.sessions.some((item) => item.id === session.id)
@@ -131,7 +136,7 @@ export const updateSession = (id: string, patch: { title?: string; pinned?: bool
       method: 'PATCH',
       body: JSON.stringify(patch),
     })
-    update({ current: state.current?.id === id ? { ...state.current, ...session } : state.current })
+    // 当前会话的标题由实时流送达（服务端已通知），这里只改列表：两处都写会让增量追加重复叠加
     // 置顶改变排序，以服务端列表为准
     if (patch.pinned === undefined)
       setSessions(state.sessions.map((s) => (s.id === id ? session : s)))
@@ -158,9 +163,11 @@ export const deleteSession = (id: string) =>
         await reloadSessions().catch(() => {})
         throw error
       }
+      deleted.add(id)
       setSessions(state.sessions.filter((s) => s.id !== id))
       return error instanceof Error ? error.message : '会话已删除，但未能完全清理。'
     }
+    deleted.add(id)
     setSessions(state.sessions.filter((s) => s.id !== id))
   })
 

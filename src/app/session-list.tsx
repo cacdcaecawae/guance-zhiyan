@@ -1,6 +1,6 @@
 import * as DialogPrimitive from '@radix-ui/react-dialog'
 import { CircleIcon, EllipsisIcon, PencilIcon, PinIcon, PinOffIcon, Trash2Icon } from 'lucide-react'
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { flushSync } from 'react-dom'
 import { NavLink, useMatch, useNavigate } from 'react-router'
 import { Button } from '@/components/ui/button'
@@ -32,6 +32,11 @@ export function SessionList({ onNavigate }: { onNavigate?: () => void }) {
   const list = useRef<HTMLDivElement>(null)
   const navigate = useNavigate()
   const current = useMatch('/workspace/:id')?.params.id
+  // 删除等待期间用户可能已导航到别处；删完时按最新路由判断，不用点击时的闭包
+  const latest = useRef(current)
+  useEffect(() => {
+    latest.current = current
+  })
   const focus = (selector: string) => list.current?.querySelector<HTMLElement>(selector)?.focus()
 
   const pin = async (session: SessionSummary) => {
@@ -66,7 +71,7 @@ export function SessionList({ onNavigate }: { onNavigate?: () => void }) {
       // 已删除但未能完全清理时同样离开该会话，提示改放到侧栏
       const warning = await deleteSession(target.session.id)
       deleted.current = true
-      if (current === target.session.id) navigate('/workspace')
+      if (latest.current === target.session.id) navigate('/workspace')
       setOpen(false)
       if (warning) setError(warning)
     } catch (failure) {
@@ -119,10 +124,15 @@ export function SessionList({ onNavigate }: { onNavigate?: () => void }) {
           <DialogPrimitive.Content
             role="alertdialog"
             onCloseAutoFocus={(e) => {
-              // 取消时回到这一行的操作按钮；删除后交给相邻的一行
+              // 取消时回到这一行的操作按钮；删除后交给相邻的一行，没有相邻的一行时交给“新建研究”
               e.preventDefault()
               const next = deleted.current ? target?.neighbor : target?.session.id
               if (next) focus(deleted.current ? `a[href="/workspace/${next}"]` : actions(next))
+              else
+                list.current
+                  ?.closest('nav')
+                  ?.querySelector<HTMLElement>('a[href="/workspace"]')
+                  ?.focus()
             }}
             className="fixed top-1/2 left-1/2 z-50 flex w-[calc(100vw-2rem)] max-w-sm -translate-x-1/2 -translate-y-1/2 flex-col gap-3 rounded-xl border border-popover-border bg-popover p-5 shadow-md"
           >
