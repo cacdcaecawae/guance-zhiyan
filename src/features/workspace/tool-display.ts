@@ -97,6 +97,18 @@ const doneLabels: Record<Activity, string> = {
   tools: '已调用工具',
 }
 
+const failedLabels: Record<Exclude<Activity, 'thinking'>, string> = {
+  read: '读取文件失败',
+  write: '写入文件失败',
+  edit: '编辑文件失败',
+  commands: '命令执行失败',
+  webSearch: '搜索网页失败',
+  webFetch: '访问网页失败',
+  library: '检索文献库失败',
+  file: '生成文件失败',
+  tools: '工具调用失败',
+}
+
 export type ProcessItem =
   | { kind: 'group'; key: string; parts: AnswerPart[]; activity: Activity; title: string }
   | { kind: 'reply'; part: Extract<AnswerPart, { type: 'text' }> }
@@ -118,19 +130,42 @@ function group(parts: AnswerPart[], closed: boolean, key: string): ProcessItem {
       title: `${runningLabels[activity]} · ${toolSummary(live.input)}`,
     }
   }
-  // 已结束的组按次数取前三类、不写次数；同次数按首次出现排序（Map 保留插入顺序，sort 稳定）
+  // 已结束的组按次数取前三类、不写次数；同次数按首次出现排序（Map 保留插入顺序，sort 稳定）。
+  // 不把失败说成完成：一类里至少成功一次才写“已…”，全部失败的类别写“…失败”，有工具被停止时加“已中断”
   const counts = new Map<Exclude<Activity, 'thinking'>, number>()
-  for (const tool of tools)
-    counts.set(activityOf(tool.name), (counts.get(activityOf(tool.name)) ?? 0) + 1)
+  const succeeded = new Set<Exclude<Activity, 'thinking'>>()
+  for (const tool of tools) {
+    const activity = activityOf(tool.name)
+    counts.set(activity, (counts.get(activity) ?? 0) + 1)
+    if (tool.status !== 'error' && tool.status !== 'stopped') succeeded.add(activity)
+  }
   const ranked = [...counts].sort((a, b) => b[1] - a[1]).map(([activity]) => activity)
-  const labels = ranked.slice(0, 3).map((activity) => doneLabels[activity])
+  const done = ranked.filter((activity) => succeeded.has(activity))
+  const failed = ranked.filter(
+    (activity) =>
+      !succeeded.has(activity) &&
+      tools.some((tool) => tool.status === 'error' && activityOf(tool.name) === activity),
+  )
+  const labels = done.slice(0, 3).map((activity) => doneLabels[activity])
+  const summary =
+    labels.length === 2
+      ? `${labels[0]}并${labels[0].startsWith('已') && labels[1].startsWith('已') ? labels[1].slice(1) : labels[1]}`
+      : labels.join('，') + (done.length > 3 ? '等' : '')
   const title =
-    labels.length === 0
-      ? doneLabels.thinking
-      : labels.length === 2
-        ? `${labels[0]}并${labels[0].startsWith('已') && labels[1].startsWith('已') ? labels[1].slice(1) : labels[1]}`
-        : labels.join('，') + (ranked.length > 3 ? '等' : '')
-  return { kind: 'group', key, parts, activity: ranked[0] ?? 'thinking', title }
+    [
+      summary,
+      ...failed.map((activity) => failedLabels[activity]),
+      tools.some((tool) => tool.status === 'stopped') ? '已中断' : '',
+    ]
+      .filter(Boolean)
+      .join('，') || doneLabels.thinking
+  return {
+    kind: 'group',
+    key,
+    parts,
+    activity: done[0] ?? failed[0] ?? ranked[0] ?? 'thinking',
+    title,
+  }
 }
 
 /**

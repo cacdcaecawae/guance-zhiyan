@@ -937,6 +937,9 @@ test('HTTP: rename, pin and delete sessions; deletion clears history and files',
     })
     const reader = stream.body!.pipeThrough(new TextDecoderStream()).getReader()
     assert.match((await reader.read()).value!, /snapshot/)
+    // 重命名经实时流推送：客户端只从这条路径更新当前会话的标题
+    assert.equal((await call('PATCH', `/api/sessions/${first}`, { title: '第一稿' })).status, 200)
+    assert.match((await reader.read()).value!, /"path":\["title"\]/)
     assert.equal((await call('DELETE', `/api/sessions/${first}`)).status, 200)
     let received = ''
     for (let chunk = await reader.read(); !chunk.done; chunk = await reader.read())

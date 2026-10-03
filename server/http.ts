@@ -218,7 +218,10 @@ export function createApp(
           throw new HttpError(400, '置顶状态无效。')
         if (name === undefined && pinned === undefined)
           throw new HttpError(400, '没有要修改的内容。')
-        return json(response, 200, store.update(user.id, id, { title: name, pinned }))
+        const updated = store.update(user.id, id, { title: name, pinned })
+        // 当前会话的标题只经实时流更新，客户端的增量基底才与服务端一致
+        agents.notify(id)
+        return json(response, 200, updated)
       }
       if (!action && !image && request.method === 'DELETE') {
         await agents.remove(user.id, id)

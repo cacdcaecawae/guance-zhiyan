@@ -45,6 +45,8 @@ let postCount: number
 let narrow: boolean
 let sessionReads: Promise<Response>[]
 let events: { onerror?: () => void }[]
+let deletes: Promise<Response>[]
+let listed: Session[]
 
 beforeEach(async () => {
   // The real service owns module-level state; each router gets a fresh store and subscriptions.
@@ -55,6 +57,8 @@ beforeEach(async () => {
   narrow = false
   sessionReads = []
   events = []
+  deletes = []
+  listed = [session('old'), session('other')]
   window.history.replaceState({}, '', '/workspace')
   localStorage.clear()
   vi.stubGlobal('matchMedia', (query: string) => ({
@@ -82,7 +86,8 @@ beforeEach(async () => {
         createCount++
         return Response.json(session(`created-${createCount}`))
       }
-      if (path === '/api/sessions') return Response.json([session('old'), session('other')])
+      if (path === '/api/sessions') return Response.json(listed)
+      if (options?.method === 'DELETE') return deletes.shift() ?? Response.json({})
       if (path.endsWith('/messages')) {
         postCount++
         return posts.shift() ?? Response.json({})
@@ -185,6 +190,37 @@ it('首次发送失败后在侧栏删掉刚建的空记录，重试时重新新�
   ])
 })
 
+it('删除等待期间切到别的研究，删除完成后不再强制跳回工作台', async () => {
+  const pending = deferred()
+  deletes.push(pending.promise)
+  const user = userEvent.setup()
+  await open('/workspace/old')
+  const row = screen.getByRole('link', { name: '研究 old' }).closest('li')!
+  await user.click(within(row).getByRole('button', { name: '更多操作' }))
+  await user.click(await screen.findByRole('menuitem', { name: '删除' }))
+  const dialog = await screen.findByRole('alertdialog')
+  await user.click(within(dialog).getByRole('button', { name: '删除' }))
+  // 模态框挡住指针，这里直接派发点击，模拟用户在等待期间用浏览器后退等方式离开
+  fireEvent.click(screen.getByRole('link', { name: '研究 other', hidden: true }))
+  await waitFor(() => expect(window.location.pathname).toBe('/workspace/other'))
+  await act(async () => pending.resolve(Response.json({})))
+  await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument())
+  expect(window.location.pathname).toBe('/workspace/other')
+})
+
+it('删除唯一一条记录后，焦点交给“新建研究”', async () => {
+  listed = [session('old')]
+  const user = userEvent.setup()
+  await open('/workspace/old')
+  const row = screen.getByRole('link', { name: '研究 old' }).closest('li')!
+  await user.click(within(row).getByRole('button', { name: '更多操作' }))
+  await user.click(await screen.findByRole('menuitem', { name: '删除' }))
+  const dialog = await screen.findByRole('alertdialog')
+  await user.click(within(dialog).getByRole('button', { name: '删除' }))
+  await waitFor(() => expect(window.location.pathname).toBe('/workspace'))
+  await waitFor(() => expect(screen.getByRole('link', { name: '新建研究' })).toHaveFocus())
+})
+
 it('已有会话发送时也保留等待期间的新草稿', async () => {
   const pending = deferred()
   posts.push(pending.promise)
@@ -205,7 +241,7 @@ it('真正切换会话及新建研究重置文字、图片和错误；新建研�
   attach('旧草稿.png')
   send()
   expect(await screen.findByRole('alert')).toHaveTextContent('旧会话错误')
-  fireEvent.click(screen.getByRole('link', { name: '研究 other' }))
+  fireEvent.click(screen.getByRole('link', { name: '研究 other', hidden: true }))
   await waitFor(() => expect(window.location.pathname).toBe('/workspace/other'))
   await waitFor(() => expect(box()).toHaveValue(''))
   expect(screen.queryByRole('img', { name: '旧草稿.png' })).not.toBeInTheDocument()

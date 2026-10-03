@@ -210,3 +210,87 @@ it('同一会话连续重命名按提交顺序发送，后提交的标题不被�
     vi.unstubAllGlobals()
   }
 })
+
+it('重命名后继续提问：标题只经实时流更新，旧标题是新标题前缀时也不重复叠加', async () => {
+  class TestEvents extends EventTarget {
+    static last?: TestEvents
+    onmessage?: (event: MessageEvent) => void
+    onerror?: () => void
+    close = vi.fn()
+    constructor() {
+      super()
+      TestEvents.last = this
+    }
+  }
+  vi.stubGlobal('EventSource', TestEvents)
+  const snapshot: Session = {
+    id: 'renamed',
+    title: '研究',
+    provider: 'deepseek-official',
+    model: 'deepseek-flash',
+    messages: [],
+    artifacts: [],
+    trace: [],
+    running: false,
+  }
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (path: string, init?: RequestInit) => {
+      if (init?.method === 'POST') return Response.json({ id: 'renamed', title: '研究' })
+      if (init?.method === 'PATCH')
+        return Response.json({ id: 'renamed', title: '研究补充', pinned: false })
+      return Response.json(path === '/api/sessions/renamed' ? snapshot : [])
+    }),
+  )
+  const { result, unmount } = renderHook(useResearch)
+  let stop = () => {}
+  try {
+    await act(() => createSession())
+    await act(async () => {
+      stop = watchSession('renamed')
+    })
+    await vi.waitFor(() => expect(TestEvents.last).toBeDefined())
+    await act(() => updateSession('renamed', { title: '研究补充' }))
+    expect(result.current.sessions.find((s) => s.id === 'renamed')?.title).toBe('研究补充')
+    // 服务端的增量基底仍是旧标题，下一帧只追加差异
+    act(() => {
+      TestEvents.last!.onmessage?.(
+        new MessageEvent('message', {
+          data: JSON.stringify({ changes: [{ path: ['title'], append: '补充' }] }),
+        }),
+      )
+    })
+    expect(result.current.current?.title).toBe('研究补充')
+    expect(result.current.sessions.find((s) => s.id === 'renamed')?.title).toBe('研究补充')
+  } finally {
+    act(() => stop())
+    unmount()
+    vi.unstubAllGlobals()
+  }
+})
+
+it('新建确认迟于删除到达时，不把已删除的记录插回列表，并报错让调用方重新新建', async () => {
+  let respond!: (response: Response) => void
+  vi.stubGlobal(
+    'fetch',
+    vi.fn((_path: string, init?: RequestInit) =>
+      init?.method === 'POST'
+        ? new Promise<Response>((resolve) => (respond = resolve))
+        : Promise.resolve(Response.json({})),
+    ),
+  )
+  const { result, unmount } = renderHook(useResearch)
+  try {
+    const creating = createSession()
+    // 列表刷新先拿到了新会话，用户随即在侧栏删掉它
+    await act(() => deleteSession('late'))
+    await act(async () => {
+      respond(Response.json({ id: 'late', title: '新研究' }))
+      await expect(creating).rejects.toThrow('已删除')
+    })
+    expect(result.current.sessions.some((s) => s.id === 'late')).toBe(false)
+  } finally {
+    unmount()
+    vi.unstubAllGlobals()
+  }
+})
