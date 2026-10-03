@@ -66,6 +66,9 @@ export class Store {
     // 置顶时间，0 为未置顶
     if (!columns.some((column) => column.name === 'pinned'))
       this.db.exec('ALTER TABLE sessions ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0;')
+    // 已删除的会话先隐藏；磁盘清理完成前保留索引，供重启重试并继续计入产物配额。
+    if (!columns.some((column) => column.name === 'deleted'))
+      this.db.exec('ALTER TABLE sessions ADD COLUMN deleted INTEGER NOT NULL DEFAULT 0;')
     if (
       !this.db
         .prepare('PRAGMA table_info(artifacts)')
@@ -93,14 +96,16 @@ export class Store {
   list(userId: string): SessionSummary[] {
     return this.db
       .prepare(
-        'SELECT id, title, pinned FROM sessions WHERE user_id=? ORDER BY pinned DESC, created DESC LIMIT 100',
+        'SELECT id, title, pinned FROM sessions WHERE user_id=? AND deleted=0 ORDER BY pinned DESC, created DESC LIMIT 100',
       )
       .all(userId)
       .map(summary)
   }
   session(userId: string, id: string): SessionSummary & ModelSelection {
     const row = this.db
-      .prepare('SELECT id, title, provider, model FROM sessions WHERE id=? AND user_id=?')
+      .prepare(
+        'SELECT id, title, provider, model FROM sessions WHERE id=? AND user_id=? AND deleted=0',
+      )
       .get(id, userId)
     if (!row) throw new HttpError(404, '没有找到会话。')
     return row as unknown as SessionSummary & ModelSelection
@@ -120,7 +125,7 @@ export class Store {
       this.db.prepare('UPDATE sessions SET pinned=? WHERE id=?').run(pinned ? Date.now() : 0, id)
     return summary(this.db.prepare('SELECT id, title, pinned FROM sessions WHERE id=?').get(id)!)
   }
-  /** 删除会话及其文件索引，返回待从磁盘清理的会话文件 id；沙箱记录须先随容器回收删除。 */
+  /** 标记删除并保留清理线索；沙箱记录须先随容器回收删除。 */
   remove(userId: string, id: string) {
     this.session(userId, id)
     this.db.exec('BEGIN IMMEDIATE')
@@ -132,10 +137,38 @@ export class Store {
         .prepare('SELECT id FROM artifacts WHERE session_id=?')
         .all(id)
         .map((row) => String(row.id))
-      this.db.prepare('DELETE FROM artifacts WHERE session_id=?').run(id)
-      this.db.prepare('DELETE FROM sessions WHERE id=?').run(id)
+      this.db.prepare('UPDATE sessions SET deleted=1 WHERE id=?').run(id)
       this.db.exec('COMMIT')
       return files
+    } catch (error) {
+      this.db.exec('ROLLBACK')
+      throw error
+    }
+  }
+  /** 仅用于服务内部的启动恢复；正常会话与文件读取不会暴露这些记录。 */
+  pendingRemovals() {
+    return this.db
+      .prepare('SELECT id FROM sessions WHERE deleted=1')
+      .all()
+      .map((row) => ({
+        id: String(row.id),
+        files: this.db
+          .prepare('SELECT id FROM artifacts WHERE session_id=?')
+          .all(row.id!)
+          .map((file) => String(file.id)),
+      }))
+  }
+  /** 磁盘已清理后才释放文件索引与配额；失败时保留整批清理线索。 */
+  finishRemoval(id: string) {
+    this.db.exec('BEGIN IMMEDIATE')
+    try {
+      this.db
+        .prepare(
+          'DELETE FROM artifacts WHERE session_id=? AND EXISTS (SELECT 1 FROM sessions WHERE id=? AND deleted=1)',
+        )
+        .run(id, id)
+      this.db.prepare('DELETE FROM sessions WHERE id=? AND deleted=1').run(id)
+      this.db.exec('COMMIT')
     } catch (error) {
       this.db.exec('ROLLBACK')
       throw error
@@ -164,7 +197,7 @@ export class Store {
   artifact(userId: string, id: string): Artifact {
     const row = this.db
       .prepare(
-        `SELECT a.id, a.session_id AS sessionId, a.name, a.format, a.size FROM artifacts a JOIN sessions s ON s.id=a.session_id WHERE a.id=? AND s.user_id=?`,
+        `SELECT a.id, a.session_id AS sessionId, a.name, a.format, a.size FROM artifacts a JOIN sessions s ON s.id=a.session_id WHERE a.id=? AND s.user_id=? AND s.deleted=0`,
       )
       .get(id, userId)
     if (!row) throw new HttpError(404, '没有找到文件。')
