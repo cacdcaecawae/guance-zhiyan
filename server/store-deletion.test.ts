@@ -47,7 +47,8 @@ test('pending deletion preserves ownership, image quota and live sessions', asyn
     store.addImages(alice.id, [{ attachmentId: 'synthetic-shared', bytes: 12 }], 100)
     assert.throws(() => store.remove(bob.id, deleted.id), { status: 404 })
     assert.deepEqual(store.remove(alice.id, deleted.id), [file.id])
-    assert.deepEqual(store.list(alice.id).map((row) => row.id), [live.id])
+    const listed = store.list(alice.id).map((row) => row.id)
+    assert.deepEqual(listed, [live.id])
     for (const user of [alice.id, bob.id]) {
       assert.throws(() => store.session(user, deleted.id), { status: 404 })
       assert.throws(() => store.artifact(user, file.id), { status: 404 })

@@ -116,10 +116,9 @@ test('failed physical cleanup retains the artifact quota until a successful repl
   const repair = await obstructArtifact(f.agents.files.path(file.id))
   await assert.rejects(f.agents.remove(f.user.id, f.session.id), { status: 500 })
   const other = f.store.create(f.user.id)
-  await assert.rejects(
-    f.agents.files.save(f.user.id, other.id, 'more.txt', Buffer.from('x')),
-    { code: 'FILE_QUOTA' },
-  )
+  await assert.rejects(f.agents.files.save(f.user.id, other.id, 'more.txt', Buffer.from('x')), {
+    code: 'FILE_QUOTA',
+  })
   await repair()
   await f.reopen()
   const next = await f.agents.files.save(f.user.id, other.id, 'more.txt', Buffer.from('x'))
