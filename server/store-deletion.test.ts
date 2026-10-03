@@ -28,7 +28,7 @@ test('deletion migration preserves legacy sessions and defaults them to visible'
   }
 })
 
-test('pending deletion preserves ownership boundaries, shared image quota and live sessions', async () => {
+test('pending deletion preserves ownership, image quota and live sessions', async () => {
   const root = await mkdtemp(join(tmpdir(), 'guance-store-delete-'))
   const store = new Store(root)
   try {

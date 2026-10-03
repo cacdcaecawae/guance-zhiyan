@@ -50,7 +50,7 @@ async function obstructArtifact(path: string) {
   }
 }
 
-test('failed artifact cleanup keeps durable cleanup identity and blocks every normal read', async (t) => {
+test('failed cleanup keeps durable identity and blocks normal reads', async (t) => {
   const f = await fixture(t)
   const file = await f.agents.files.save(
     f.user.id,
@@ -69,12 +69,14 @@ test('failed artifact cleanup keeps durable cleanup identity and blocks every no
   const pending = f.store.db.prepare('SELECT * FROM sessions WHERE id=?').get(f.session.id)
   assert.equal(pending?.deleted, 1, 'cleanup intent must survive the failed filesystem deletion')
   assert.equal(
-    f.store.db.prepare('SELECT COUNT(*) AS n FROM artifacts WHERE session_id=?').get(f.session.id)!.n,
+    f.store.db
+      .prepare('SELECT COUNT(*) AS n FROM artifacts WHERE session_id=?')
+      .get(f.session.id)!.n,
     1,
   )
 })
 
-test('restart replays a previously failed artifact deletion after its obstruction is repaired', async (t) => {
+test('restart replays failed artifact deletion after repair', async (t) => {
   const f = await fixture(t)
   const file = await f.agents.files.save(
     f.user.id,
@@ -94,7 +96,9 @@ test('restart replays a previously failed artifact deletion after its obstructio
     0,
   )
   assert.equal(
-    f.store.db.prepare('SELECT COUNT(*) AS n FROM artifacts WHERE session_id=?').get(f.session.id)!.n,
+    f.store.db
+      .prepare('SELECT COUNT(*) AS n FROM artifacts WHERE session_id=?')
+      .get(f.session.id)!.n,
     0,
   )
   await f.reopen()
@@ -143,7 +147,7 @@ test('restart replays failed history cleanup without touching a surviving sessio
   assert.equal(f.store.session(f.user.id, other.id).id, other.id)
 })
 
-test('restart handles loss immediately after the durable marker, before any physical cleanup', async (t) => {
+test('restart handles loss after marking and before physical cleanup', async (t) => {
   const f = await fixture(t)
   const file = await f.agents.files.save(
     f.user.id,
@@ -166,7 +170,7 @@ test('restart handles loss immediately after the durable marker, before any phys
   assert.equal(f.store.imageBytes(f.user.id), 14)
 })
 
-test('startup isolates a persistent cleanup failure and completes other pending deletions', async (t) => {
+test('startup isolates failure and completes other pending deletions', async (t) => {
   const f = await fixture(t)
   const other = f.store.create(f.user.id)
   const blocked = await f.agents.files.save(
