@@ -69,9 +69,8 @@ test('failed cleanup keeps durable identity and blocks normal reads', async (t) 
   const pending = f.store.db.prepare('SELECT * FROM sessions WHERE id=?').get(f.session.id)
   assert.equal(pending?.deleted, 1, 'cleanup intent must survive the failed filesystem deletion')
   assert.equal(
-    f.store.db
-      .prepare('SELECT COUNT(*) AS n FROM artifacts WHERE session_id=?')
-      .get(f.session.id)!.n,
+    f.store.db.prepare('SELECT COUNT(*) AS n FROM artifacts WHERE session_id=?').get(f.session.id)!
+      .n,
     1,
   )
 })
@@ -96,9 +95,8 @@ test('restart replays failed artifact deletion after repair', async (t) => {
     0,
   )
   assert.equal(
-    f.store.db
-      .prepare('SELECT COUNT(*) AS n FROM artifacts WHERE session_id=?')
-      .get(f.session.id)!.n,
+    f.store.db.prepare('SELECT COUNT(*) AS n FROM artifacts WHERE session_id=?').get(f.session.id)!
+      .n,
     0,
   )
   await f.reopen()
