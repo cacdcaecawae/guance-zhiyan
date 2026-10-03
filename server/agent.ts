@@ -1,7 +1,7 @@
 import { readdir, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
-import AgentRegistry, { type AgentHandle } from '@deepseek-ai/dsh-agent'
+import AgentRegistry, { type AgentHandle, type InboxState } from '@deepseek-ai/dsh-agent'
 import AgentLoop from '@deepseek-ai/dsh-agent-loop'
 import * as ImageOffload from '@deepseek-ai/dsh-compaction-image-offload'
 import {
@@ -15,8 +15,17 @@ import LocalAttachmentStore, {
   prepareImageFile,
   type PreparedImageFile,
 } from '@deepseek-ai/dsh-attachment-local'
-import LlmRuntime, { createUserMessage, type LlmAdapter } from '@deepseek-ai/dsh-llm'
-import SessionStore, { SessionId, type SessionEvent } from '@deepseek-ai/dsh-session'
+import LlmRuntime, {
+  createSystemMessage,
+  createUserMessage,
+  type LlmAdapter,
+  type UserMessage,
+} from '@deepseek-ai/dsh-llm'
+import SessionStore, {
+  SessionId,
+  SessionLogOffset,
+  type SessionEvent,
+} from '@deepseek-ai/dsh-session'
 import SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
 import SessionPersistence from '@deepseek-ai/dsh-session-persistence-jsonl'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
@@ -259,6 +268,7 @@ export class Agents {
     question: string,
     requested?: ModelSelection,
     images: readonly (EncodedImageAttachment | { id: string })[] = [],
+    retryAttempt?: string,
   ) {
     const session = this.store.session(userId, id)
     const selection = validateSelection(requested ?? session)
@@ -273,6 +283,65 @@ export class Agents {
     const run: ActiveRun = { ready: ready.promise, stopped: false }
     this.active.set(id, run)
     try {
+      let events: readonly SessionEvent[] = []
+      let pending: readonly UserMessage[] = []
+      if (await this.ctx.sessionPersistence.stat(SessionId(id))) {
+        const handle = await this.ctx.sessionPersistence.open(SessionId(id), 'read')
+        try {
+          events = (await handle.read()).events
+          const restored = this.ctx.sessionProjections.restore(
+            {},
+            events,
+            SessionLogOffset(0),
+            handle.header,
+            handle.inheritedEventCount,
+          )
+          const inbox = restored.checkpoint.inbox?.val as InboxState | undefined
+          if (!inbox) throw new HttpError(500, '无法恢复待处理请求，请联系管理员。')
+          pending = [...inbox['next-turn'], ...inbox['next-step']]
+        } finally {
+          await handle.close()
+        }
+      }
+      const resumePending = pending.some((message) => message.source.kind === 'guance-retry')
+      if (resumePending && (!retryAttempt || pending.length !== 1))
+        throw new HttpError(409, '上次重新生成尚未开始，请先恢复重新生成。')
+      let retry:
+        { answerId: string; questionId: string; turn: number; question: UserMessage } | undefined
+      if (retryAttempt) {
+        const answer = messagesFromEvents(events, false).at(-1)
+        const lastTurn = events.findLast((event) => event.type === 'turn/start')
+        if (
+          answer?.role !== 'assistant' ||
+          (answer.status !== 'error' && answer.status !== 'stopped') ||
+          (answer.attemptId ?? answer.id) !== retryAttempt ||
+          !lastTurn
+        )
+          throw new HttpError(409, '只能重新生成最后一条失败或已停止的回答，请刷新后重试。')
+        let question: UserMessage | undefined
+        for (const event of events) {
+          const messages =
+            event.type === 'user/message'
+              ? [event.data]
+              : event.type === 'agent/inbox/spliced'
+                ? event.data.inserted
+                : []
+          for (const message of messages)
+            if (message.source.kind === 'user' || message.source.kind === 'guance-retry')
+              question = message
+        }
+        if (!question) throw new HttpError(409, '没有找到原始问题，无法重新生成。')
+        if (
+          resumePending &&
+          (question.id !== pending[0].id ||
+            pending[0].source.kind !== 'guance-retry' ||
+            pending[0].source.answerId !== answer.id)
+        )
+          throw new HttpError(409, '待处理的重新生成与当前回答不一致，请联系管理员。')
+        const questionId =
+          question.source.kind === 'guance-retry' ? question.source.questionId : question.id
+        retry = { answerId: answer.id, questionId, turn: lastTurn.data.turn + 1, question }
+      }
       const store = this.ctx.attachments as CountedAttachmentStore
       const limits = store.imageLimits
       if (images.length > limits.maxImagesPerMessage)
@@ -319,11 +388,52 @@ export class Agents {
         return
       }
       const refs = reused.map((ref) => ref ?? saved.shift()!)
-      const content = [
+      const content = retry?.question.content ?? [
         ...refs.map((attachment) => ({ type: 'image' as const, attachment })),
         ...(question ? [{ type: 'text' as const, text: question }] : []),
       ]
       const setup = async (ctx: Context, agent: AgentHandle['agent']) => {
+        if (retry) {
+          const target = retry
+          let prepared = false
+          ctx.on('agent/request', async (payload, next) => {
+            if (run.stopped) {
+              agent.cancel({ kind: 'user' })
+              payload.signal.throwIfAborted()
+            }
+            if (!prepared && payload.turn === target.turn) {
+              prepared = true
+              const events = agent.session.snapshotEvents()
+              const nodes = agent.session.surface.nodes
+              const first = nodes.findIndex((seq) => {
+                const event = events[seq]
+                return (
+                  event?.type === 'user/message' &&
+                  (event.data.id === target.questionId ||
+                    (event.data.source.kind === 'guance-retry' &&
+                      event.data.source.answerId === target.answerId))
+                )
+              })
+              if (first >= 0) {
+                const replaced = nodes.slice(first)
+                // DSH 的追加式替换只重建模型上下文；原始问题、失败输出和工具记录仍留在日志里。
+                agent.session.append(
+                  'system/message',
+                  {
+                    turn: payload.turn,
+                    step: payload.step,
+                    message: createSystemMessage(''),
+                  },
+                  {
+                    surfaceOp: { op: 'replace', startSeq: replaced[0], endSeq: replaced.at(-1)! },
+                    sourceEventSeqs: [...replaced],
+                  },
+                )
+              }
+            }
+            return next()
+          })
+        }
         // Offered only when the library has content; otherwise chat and web search work as usual.
         if (this.options.library?.available()) registerLibrary(ctx, this.options.library)
         else
@@ -391,8 +501,21 @@ export class Agents {
         return
       }
       this.store.selectModel(userId, id, selection)
-      this.store.title(userId, id, question || '图片提问')
-      run.handle.agent.followup(createUserMessage({ content, source: { kind: 'user' } }))
+      if (!retry) this.store.title(userId, id, question || '图片提问')
+      if (resumePending) {
+        // resume 不唤醒已有 inbox；先取消未执行的同一条，再用原身份唤醒，不排入第二条。
+        if (!run.handle.agent.inbox.remove(pending[0].id))
+          throw new HttpError(409, '待处理请求已变化，请刷新后重试。')
+        run.handle.agent.followup(pending[0])
+      } else {
+        const message = createUserMessage({
+          content,
+          source: retry
+            ? { kind: 'guance-retry', answerId: retry.answerId, questionId: retry.questionId }
+            : { kind: 'user' },
+        })
+        run.handle.agent.followup(message)
+      }
       run.done = (async () => {
         try {
           await run.handle!.agent.whenIdle()
@@ -415,6 +538,9 @@ export class Agents {
     } finally {
       ready.resolve()
     }
+  }
+  retry(userId: string, id: string, attemptId: string) {
+    return this.start(userId, id, '', undefined, [], attemptId)
   }
   async stop(userId: string, id: string) {
     this.store.session(userId, id)

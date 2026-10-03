@@ -10,6 +10,7 @@ import {
   askQuestion,
   createSession,
   stopAnswer,
+  retryAnswer,
   useResearch,
   watchSession,
 } from '@/services/research'
@@ -27,6 +28,7 @@ export function WorkspacePage({ sessionId }: { sessionId?: string }) {
   const [chosen, setChosen] = useState<ModelSelection | null>(null)
   const [operationError, setOperationError] = useState<string | null>(null)
   const [posting, setPosting] = useState(false)
+  const admitting = useRef(false)
   const [reconnect, setReconnect] = useState(0)
   const [previewId, setPreviewId] = useState<string | null>(null)
   const wide = useMediaQuery('(min-width: 1024px)')
@@ -56,6 +58,8 @@ export function WorkspacePage({ sessionId }: { sessionId?: string }) {
     (session ? { provider: session.provider, model: session.model } : catalog?.defaultSelection)
   const empty = !loading && !error && !session?.messages.length
   const submit = async (question: string, images: (File | ImageAttachment)[] = []) => {
+    if (admitting.current || session?.running) return false
+    admitting.current = true
     setPosting(true)
     setOperationError(null)
     try {
@@ -72,6 +76,22 @@ export function WorkspacePage({ sessionId }: { sessionId?: string }) {
       setOperationError(failure instanceof Error ? failure.message : '发送失败，请重试。')
       return false
     } finally {
+      admitting.current = false
+      setPosting(false)
+    }
+  }
+  const retry = async (attemptId: string) => {
+    if (!sessionId || admitting.current || session?.running) return
+    admitting.current = true
+    setPosting(true)
+    setOperationError(null)
+    try {
+      await retryAnswer(sessionId, attemptId)
+      setChosen(null)
+    } catch (failure) {
+      setOperationError(failure instanceof Error ? failure.message : '重新生成失败，请重试。')
+    } finally {
+      admitting.current = false
       setPosting(false)
     }
   }
@@ -199,7 +219,7 @@ export function WorkspacePage({ sessionId }: { sessionId?: string }) {
                   messages={session.messages}
                   busy={busy}
                   onRetry={(message) => {
-                    void submit(message.question, message.questionImages)
+                    void retry(message.attemptId ?? message.id)
                   }}
                 >
                   {!!session?.artifacts.length && (

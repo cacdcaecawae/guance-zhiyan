@@ -48,6 +48,10 @@ export class TestModel extends LlmAdapter {
           last?.content.flatMap((block) => (block.type === 'text' ? [block.text] : [])).join('') ??
           ''
         if (question.includes('持续生成')) return 'hang'
+        if (question.includes('原位重试测试')) {
+          if (last?.source?.kind !== 'guance-retry') throw new Error('Test first attempt failure')
+          return textChunks('原位重新生成已完成')
+        }
         if (question.includes('模拟失败')) throw new Error('Test provider failure')
         if (question.includes('生成报告'))
           return [

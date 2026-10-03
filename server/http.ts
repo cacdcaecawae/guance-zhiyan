@@ -185,7 +185,7 @@ export function createApp(
         return response.end(data)
       }
       const match =
-        /^\/api\/sessions\/([0-9a-f-]{36})(?:\/(messages|stop|events)|\/images\/([^/]+))?$/.exec(
+        /^\/api\/sessions\/([0-9a-f-]{36})(?:\/(messages|retry|stop|events)|\/images\/([^/]+))?$/.exec(
           path,
         )
       if (!match) throw new HttpError(404, '接口不存在。')
@@ -257,6 +257,19 @@ export function createApp(
           throw new HttpError(400, '问题须为 1–8000 个字符。')
         const selection = 'selection' in input ? validateSelection(input.selection) : undefined
         await agents.start(user.id, id, input.question.trim(), selection, images)
+        return json(response, 202, await agents.snapshot(user.id, id))
+      }
+      if (action === 'retry' && request.method === 'POST') {
+        const input = await body(request, 1024, '重新生成请求过大。')
+        if (
+          !input ||
+          typeof input !== 'object' ||
+          !('attemptId' in input) ||
+          typeof input.attemptId !== 'string' ||
+          !/^turn-\d+$/.test(input.attemptId)
+        )
+          throw new HttpError(400, '回答编号无效。')
+        await agents.retry(user.id, id, input.attemptId)
         return json(response, 202, await agents.snapshot(user.id, id))
       }
       if (action === 'stop' && request.method === 'POST') {

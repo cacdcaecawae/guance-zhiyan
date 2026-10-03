@@ -121,7 +121,12 @@ export function MessageList({
             </li>
           ) : (
             <li key={message.id} className="mt-6">
-              <AnswerArticle message={message} busy={busy} onRetry={onRetry} />
+              <AnswerArticle
+                message={message}
+                busy={busy}
+                onRetry={onRetry}
+                latest={message === messages.at(-1)}
+              />
             </li>
           ),
         )}
@@ -154,9 +159,11 @@ function AnswerArticle({
   message,
   busy,
   onRetry,
+  latest,
 }: {
   message: AssistantMessage
   busy: boolean
+  latest: boolean
   onRetry: (message: AssistantMessage) => void
 }) {
   // 只去掉开头空行与末尾空白，保留开头缩进（如缩进代码块），复制出的 Markdown 含义不变
@@ -164,9 +171,9 @@ function AnswerArticle({
     .final.flatMap((part) => (part.type === 'text' ? [part.text] : []))
     .join('\n\n')
   const finalText = joined.trim() ? joined.replace(/^\s*\n/, '').trimEnd() : ''
-  const retry = message.status === 'error' || message.status === 'stopped'
+  const retry = latest && (message.status === 'error' || message.status === 'stopped')
   return (
-    <article aria-label="回答" className="flex min-w-0 flex-col gap-2">
+    <article aria-label="回答" tabIndex={-1} className="flex min-w-0 flex-col gap-2 outline-none">
       <AnswerContent message={message} />
       {message.status === 'stopped' && (
         <p role="status" className="text-ui-caption text-foreground-subtle">
@@ -193,13 +200,15 @@ function AnswerArticle({
               variant="outline"
               size="sm"
               aria-disabled={busy}
-              onClick={() => {
-                if (!busy) onRetry(message)
+              onClick={(event) => {
+                if (busy) return
+                event.currentTarget.closest('article')?.focus({ preventScroll: true })
+                onRetry(message)
               }}
               className="ml-1 rounded-md text-foreground first:ml-1.5"
             >
               <RotateCcwIcon className="size-3.5" />
-              重新提问
+              重新生成
             </Button>
           )}
           {message.endedAt !== undefined && (

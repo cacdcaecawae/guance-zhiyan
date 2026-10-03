@@ -1,7 +1,18 @@
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
-import { expandAssistantStream, type StreamChunk, type ContentBlock } from '@deepseek-ai/dsh-llm'
+import {
+  expandAssistantStream,
+  type StreamChunk,
+  type ContentBlock,
+  type UserMessage,
+} from '@deepseek-ai/dsh-llm'
 import type { AnswerPart, AssistantMessage, ImageAttachment, Message } from '../src/types/index.ts'
 import { RAG_ERRORS } from './rag.ts'
+
+declare module '@deepseek-ai/dsh-llm/types' {
+  interface MessageSourceMap {
+    'guance-retry': { kind: 'guance-retry'; answerId: string; questionId: string }
+  }
+}
 
 /** Only the current, not-yet-committed attempt; earlier attempts may share its turn and step. */
 export interface LiveAttempt {
@@ -91,7 +102,9 @@ export function messagesFromEvents(
   let images: ImageAttachment[] = []
   let turn = 0
   const userIds = new Set<string>()
-  const addUser = (id: string, content: readonly ContentBlock[]) => {
+  let retryAnswerId: string | undefined
+  const addUser = (message: UserMessage, pending = false) => {
+    const { id, content, source } = message
     question = textOf(content)
     images = imagesOf(content).map(({ attachmentId, name, width, height }) => ({
       id: attachmentId,
@@ -99,7 +112,9 @@ export function messagesFromEvents(
       width,
       height,
     }))
-    if (!userIds.has(id)) {
+    const retry = source.kind === 'guance-retry' ? source.answerId : undefined
+    if (pending) retryAnswerId = retry
+    if (!userIds.has(id) && !retry) {
       messages.push({ id, role: 'user', text: question, ...(images.length && { images }) })
       userIds.add(id)
     }
@@ -111,13 +126,16 @@ export function messagesFromEvents(
   for (const event of events) {
     if (event.type === 'agent/inbox/spliced') {
       for (const message of event.data.inserted)
-        if (message.source.kind === 'user') addUser(message.id, message.content)
+        if (message.source.kind === 'user' || message.source.kind === 'guance-retry')
+          addUser(message, true)
     } else if (event.type === 'user/message') {
-      if (event.data.source.kind === 'user') addUser(event.data.id, event.data.content)
+      if (event.data.source.kind === 'user' || event.data.source.kind === 'guance-retry')
+        addUser(event.data)
     } else if (event.type === 'turn/start') {
       turn = event.data.turn
       answer = {
-        id: `turn-${turn}`,
+        id: retryAnswerId ?? `turn-${turn}`,
+        ...(retryAnswerId && { attemptId: `turn-${turn}` }),
         role: 'assistant',
         question,
         questionImages: images,
@@ -125,7 +143,12 @@ export function messagesFromEvents(
         parts: [],
         startedAt: event.time,
       }
-      messages.push(answer)
+      const previous = retryAnswerId
+        ? messages.findIndex((message) => message.id === retryAnswerId)
+        : -1
+      if (previous >= 0) messages[previous] = answer
+      else messages.push(answer)
+      retryAnswerId = undefined
     } else if (
       answer &&
       (event.type === 'assistant/message' || event.type === 'assistant/attempt')
