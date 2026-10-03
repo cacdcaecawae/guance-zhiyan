@@ -38,7 +38,7 @@ export function Reasoning({
     <details
       open={open}
       onToggle={(event) => setOpen(event.currentTarget.open)}
-      className="group/reasoning min-w-0 text-foreground-subtle"
+      className="group/reasoning min-w-0 text-foreground-faint"
     >
       <summary className="flex w-fit max-w-full min-w-0 cursor-pointer list-none items-center gap-2 rounded-md py-1.5 text-ui-caption outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring [&::-webkit-details-marker]:hidden">
         <AtomIcon className="size-3.5 shrink-0" aria-hidden />
@@ -46,10 +46,10 @@ export function Reasoning({
         <span className="shrink-0">思考</span>
         {running && <span className="sr-only">生成中</span>}
         {!open && summary && (
-          <span className="min-w-0 truncate text-foreground-subtlest">{summary}</span>
+          <span className="min-w-0 truncate text-foreground-faint">{summary}</span>
         )}
         <ChevronDownIcon
-          className="size-3 shrink-0 text-foreground-subtlest group-open/reasoning:rotate-180"
+          className="size-3 shrink-0 text-foreground-faint group-open/reasoning:rotate-180"
           aria-hidden
         />
       </summary>

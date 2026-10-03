@@ -24,6 +24,8 @@
   --foreground: #1b1b1d;
   --foreground-subtle: #4a4a4f;
   --foreground-subtlest: #606066;
+  /* 只用于白底（surface）上的执行过程标题行，压到 4.5:1 下限，与正文拉开；侧栏底色更深，不能用 */
+  --foreground-faint: #737378;
 
   /* 边框与状态面 */
   --border: #e3e3df;
@@ -68,6 +70,7 @@
   --foreground: #e6e5e1;
   --foreground-subtle: #b8b7b2;
   --foreground-subtlest: #a3a29d;
+  --foreground-faint: #8a8985;
 
   --border: #353533;
   --border-hover: #454542;
@@ -111,6 +114,7 @@
   --color-foreground: var(--foreground);
   --color-foreground-subtle: var(--foreground-subtle);
   --color-foreground-subtlest: var(--foreground-subtlest);
+  --color-foreground-faint: var(--foreground-faint);
 
   --color-border: var(--border);
   --color-border-hover: var(--border-hover);

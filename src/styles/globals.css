@@ -32,19 +32,20 @@
   .answer-markdown li {
     text-wrap: pretty;
   }
+  /* 标题与加粗取 700：衬线（文件预览）在小字号下 600 与正文拉不开 */
   .answer-markdown h1,
   .answer-markdown h2 {
-    @apply text-ui-xl font-semibold;
+    @apply text-ui-xl font-bold;
     margin-top: 1.4em;
   }
   .answer-markdown h3 {
-    @apply text-ui-lg font-semibold;
+    @apply text-ui-lg font-bold;
     margin-top: 1.4em;
   }
   .answer-markdown h4,
   .answer-markdown h5,
   .answer-markdown h6 {
-    @apply font-semibold text-foreground-subtle;
+    @apply font-bold text-foreground-subtle;
     margin-top: 1.2em;
   }
   .answer-markdown > :first-child {
@@ -55,7 +56,7 @@
     @apply border-b-2 border-seal pb-3 text-center text-balance;
   }
   .answer-markdown strong {
-    @apply font-semibold;
+    @apply font-bold;
   }
   /* 中文不做伪斜体，改用着重号 */
   .answer-markdown em {

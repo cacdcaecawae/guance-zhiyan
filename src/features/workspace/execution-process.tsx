@@ -47,23 +47,23 @@ export function ToolRow({ part }: { part: Extract<AnswerPart, { type: 'tool' }> 
               ? FileTextIcon
               : WrenchIcon
   return (
-    <details className="group/tool min-w-0 text-foreground-subtle">
+    <details className="group/tool min-w-0 text-foreground-faint">
       <summary className="flex w-fit max-w-full min-w-0 cursor-pointer list-none items-center gap-2 rounded-md py-1.5 text-ui-caption outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring [&::-webkit-details-marker]:hidden">
         <Icon
           className={`size-3.5 shrink-0 ${part.status === 'running' ? 'animate-spin' : ''} ${part.status === 'error' ? 'text-destructive' : ''}`}
           aria-hidden
         />
         <span className="shrink-0">{toolNames[part.name] ?? part.name}</span>
-        <span className="min-w-0 truncate text-foreground-subtlest">{toolSummary(part.input)}</span>
+        <span className="min-w-0 truncate text-foreground-faint">{toolSummary(part.input)}</span>
         <span
           className={
-            part.status === 'running' ? 'shrink-0 text-ui-sm text-foreground-subtlest' : 'sr-only'
+            part.status === 'running' ? 'shrink-0 text-ui-sm text-foreground-faint' : 'sr-only'
           }
         >
           {statusText[part.status]}
         </span>
         <ChevronDownIcon
-          className="size-3 shrink-0 text-foreground-subtlest group-open/tool:rotate-180"
+          className="size-3 shrink-0 text-foreground-faint group-open/tool:rotate-180"
           aria-hidden
         />
       </summary>
@@ -147,7 +147,7 @@ function ProcessGroup({
   const Icon = activityIcons[item.activity]
   return (
     <details className="group/step min-w-0">
-      <summary className="group/head flex w-fit max-w-full min-w-0 cursor-pointer list-none items-center gap-2 rounded-md py-1.5 text-ui-caption text-foreground-subtle outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring [&::-webkit-details-marker]:hidden">
+      <summary className="group/head flex w-fit max-w-full min-w-0 cursor-pointer list-none items-center gap-2 rounded-md py-1.5 text-ui-caption text-foreground-faint outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring [&::-webkit-details-marker]:hidden">
         <span className="relative size-3.5 shrink-0" aria-hidden>
           <Icon className="absolute inset-0 size-3.5 transition-opacity group-hover/head:opacity-0 group-focus-visible/head:opacity-0 group-open/step:opacity-0" />
           <ChevronDownIcon className="absolute inset-0 size-3.5 opacity-0 transition-opacity group-hover/head:opacity-100 group-focus-visible/head:opacity-100 group-open/step:rotate-180 group-open/step:opacity-100" />
@@ -194,8 +194,8 @@ export function AnswerContent({ message }: { message: AssistantMessage }) {
         />
       </div>
     ) : (
-      // 阶段回复与最终回答同样排版（同 DSH），只是随过程收起
-      <div key={part.id} className="py-1 font-serif text-ui-prose">
+      // 阶段回复与最终回答同样排版（同 DSH，无衬线），只是随过程收起
+      <div key={part.id} className="py-1 text-ui-prose">
         <Markdown text={part.text} citations={citations} />
       </div>
     )
@@ -212,7 +212,7 @@ export function AnswerContent({ message }: { message: AssistantMessage }) {
     </>
   )
   const controlClass =
-    'flex w-fit max-w-full min-w-0 list-none items-center gap-1.5 rounded-md py-1 text-ui-caption text-foreground-subtlest outline-none [&::-webkit-details-marker]:hidden'
+    'flex w-fit max-w-full min-w-0 list-none items-center gap-1.5 rounded-md py-1 text-ui-caption text-foreground-faint outline-none [&::-webkit-details-marker]:hidden'
   return (
     <>
       {loading && (
