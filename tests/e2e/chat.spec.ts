@@ -327,9 +327,12 @@ test('重新生成在原问题下成功，刷新后仍只有一条回答且不�
   await expect(page.getByRole('article', { name: '回答' })).toContainText('原位重新生成已完成')
   await expect(page.getByRole('article', { name: '回答' })).toHaveCount(1)
   await expect(button).toHaveCount(0)
-  await expect(page.getByText('原位重试测试', { exact: true })).toHaveCount(1)
+  // 只数对话气泡；标题、侧栏及保留的原始轨迹也会包含这段问题文字。
+  const question = page.getByRole('tabpanel', { name: '对话', exact: true }).getByText('原位重试测试')
+  await expect(question).toHaveCount(1)
   await page.reload()
   await expect(page.getByRole('article', { name: '回答' })).toContainText('原位重新生成已完成')
   await expect(page.getByRole('article', { name: '回答' })).toHaveCount(1)
   await expect(button).toHaveCount(0)
+  await expect(question).toHaveCount(1)
 })
