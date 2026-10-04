@@ -2,6 +2,7 @@ import { act, renderHook, waitFor } from '@testing-library/react'
 import { expect, it, vi } from 'vitest'
 import {
   askQuestion,
+  retryAnswer,
   createSession,
   deleteSession,
   updateSession,
@@ -9,6 +10,23 @@ import {
   watchSession,
 } from './research'
 import type { Session } from '@/types'
+
+it('重新生成只提交当前尝试编号，不重新提交问题或图片', async () => {
+  const send = vi.fn().mockResolvedValue(Response.json({}))
+  vi.stubGlobal('fetch', send)
+  try {
+    await retryAnswer('session', 'turn-2')
+    expect(send).toHaveBeenCalledWith(
+      '/api/sessions/session/retry',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({ attemptId: 'turn-2' }),
+      }),
+    )
+  } finally {
+    vi.unstubAllGlobals()
+  }
+})
 
 it('会话切换丢弃过时读取；HTTP 确认不覆盖较新的流式状态', async () => {
   const pending = new Map<string, (response: Response) => void>()
@@ -92,7 +110,7 @@ it('网络不通时给出中文错误，而不是浏览器的英文原文', asyn
   vi.unstubAllGlobals()
 })
 
-it('重新提问只传本会话已存图片的 id，不下载原图再上传', async () => {
+it('复用图片提问只传本会话已存图片的 id，不下载原图再上传', async () => {
   const fetch = vi.fn(async (_path: string, _init?: RequestInit) => Response.json({}))
   vi.stubGlobal('fetch', fetch)
   try {

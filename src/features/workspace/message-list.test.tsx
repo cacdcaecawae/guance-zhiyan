@@ -3,6 +3,38 @@ import { expect, it, vi } from 'vitest'
 import { MessageList } from './message-list'
 import type { AssistantMessage } from '@/types'
 
+it('只对最后失败回答原位重试；忙时阻止重复触发，操作后焦点保留在回答', () => {
+  const first: AssistantMessage = {
+    id: 'turn-1',
+    role: 'assistant',
+    question: 'first',
+    status: 'error',
+    parts: [],
+  }
+  const last: AssistantMessage = { ...first, id: 'turn-2', question: 'last' }
+  const onRetry = vi.fn()
+  const { rerender } = render(
+    <MessageList sessionId="s" messages={[first, last]} busy={false} onRetry={onRetry} />,
+  )
+  const button = screen.getByRole('button', { name: '重新生成' })
+  fireEvent.click(button)
+  expect(onRetry).toHaveBeenCalledExactlyOnceWith(last)
+  expect(screen.getAllByRole('article')[1]).toHaveFocus()
+  rerender(<MessageList sessionId="s" messages={[first, last]} busy onRetry={onRetry} />)
+  expect(button).toHaveAttribute('aria-disabled', 'true')
+  fireEvent.click(button)
+  expect(onRetry).toHaveBeenCalledTimes(1)
+  rerender(
+    <MessageList
+      sessionId="s"
+      messages={[first, { ...last, status: 'done' }]}
+      busy={false}
+      onRetry={onRetry}
+    />,
+  )
+  expect(screen.queryByRole('button', { name: '重新生成' })).toBeNull()
+})
+
 it('已完成的思考或工具过程没有最终正文时明确提示', () => {
   const message: AssistantMessage = {
     id: 'answer',

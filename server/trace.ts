@@ -59,7 +59,12 @@ export function traceFromEvents(
           id: message.id,
           turn,
           kind: message.source.kind === 'user' ? 'user' : 'context',
-          label: message.source.kind === 'user' ? '用户' : '上下文注入',
+          label:
+            message.source.kind === 'user'
+              ? '用户'
+              : message.source.kind === 'guance-retry'
+                ? '重新生成'
+                : '上下文注入',
           text: contentText(message.content),
           time: event.time,
         })

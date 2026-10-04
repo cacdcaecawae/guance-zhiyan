@@ -34,7 +34,7 @@ test('多轮回答、思考、格式文本和刷新恢复；不执行模型 HTML
   await expect(answer).toHaveCount(2)
 })
 
-test('流式部分回答、停止、失败后重新提问', async ({ page }) => {
+test('流式部分回答、停止、失败后原位重新生成', async ({ page }) => {
   await page.goto('/workspace')
   const box = page.getByRole('textbox', { name: '研究问题' })
   await box.fill('持续生成')
@@ -48,8 +48,17 @@ test('流式部分回答、停止、失败后重新提问', async ({ page }) => 
   await box.fill('模拟失败')
   await box.press('Enter')
   await expect(page.getByRole('alert')).toContainText('失败')
-  await page.getByRole('button', { name: '重新提问' }).last().click()
-  await expect(page.getByRole('alert')).toHaveCount(2)
+  await Promise.all([
+    page.waitForResponse(
+      (response) => response.url().endsWith('/retry') && response.status() === 202,
+    ),
+    page.getByRole('button', { name: '重新生成' }).click(),
+  ])
+  await expect(page.getByRole('alert')).toHaveCount(1)
+  await expect(page.getByRole('article', { name: '回答' })).toHaveCount(2)
+  await expect(page.getByRole('button', { name: '重新生成' })).toHaveCount(1)
+  await page.reload()
+  await expect(page.getByRole('article', { name: '回答' })).toHaveCount(2)
 })
 
 test('同一列表按平台切换 DeepSeek 模型，刷新保留，沿用同一会话历史', async ({ page }) => {
@@ -244,7 +253,7 @@ for (const width of [390, 1440]) {
   }
 }
 
-test('上传图片随问题发送，气泡上方显示原图，刷新保留，重新提问带上原图', async ({ page }) => {
+test('上传图片随问题发送，刷新及原位重新生成保留同一组原图', async ({ page }) => {
   await page.goto('/workspace')
   const png = Buffer.from(
     'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
@@ -277,8 +286,16 @@ test('上传图片随问题发送，气泡上方显示原图，刷新保留，�
   await expect(page.getByRole('alert')).toContainText('失败')
   await page.reload()
   await expect(attached.getByRole('img', { name: '表格.png' })).toHaveJSProperty('naturalWidth', 1)
-  await page.getByRole('button', { name: '重新提问' }).click()
-  await expect(attached).toHaveCount(2)
+  await Promise.all([
+    page.waitForResponse(
+      (response) => response.url().endsWith('/retry') && response.status() === 202,
+    ),
+    page.getByRole('button', { name: '重新生成' }).click(),
+  ])
+  await expect(attached).toHaveCount(1)
+  await expect(page.getByRole('article', { name: '回答' })).toHaveCount(1)
+  await page.reload()
+  await expect(attached).toHaveCount(1)
   await expect(attached.last().getByRole('img', { name: '表格.png' })).toHaveJSProperty(
     'naturalWidth',
     1,
@@ -297,4 +314,27 @@ test('下载保留含单引号、中文、空格及括号的成果文件名', as
   const download = await downloadPromise
   expect(download.suggestedFilename()).toBe(name)
   expect(await download.failure()).toBeNull()
+})
+
+test('重新生成在原问题下成功，刷新后仍只有一条回答且不再提供失败重试', async ({ page }) => {
+  await page.goto('/workspace')
+  const box = page.getByRole('textbox', { name: '研究问题' })
+  await box.fill('原位重试测试')
+  await box.press('Enter')
+  await expect(page.getByRole('alert')).toContainText('失败')
+  const button = page.getByRole('button', { name: '重新生成' })
+  await button.click()
+  await expect(page.getByRole('article', { name: '回答' })).toContainText('原位重新生成已完成')
+  await expect(page.getByRole('article', { name: '回答' })).toHaveCount(1)
+  await expect(button).toHaveCount(0)
+  // 只数对话气泡；标题、侧栏及保留的原始轨迹也会包含这段问题文字。
+  const question = page
+    .getByRole('tabpanel', { name: '对话', exact: true })
+    .getByText('原位重试测试')
+  await expect(question).toHaveCount(1)
+  await page.reload()
+  await expect(page.getByRole('article', { name: '回答' })).toContainText('原位重新生成已完成')
+  await expect(page.getByRole('article', { name: '回答' })).toHaveCount(1)
+  await expect(button).toHaveCount(0)
+  await expect(question).toHaveCount(1)
 })

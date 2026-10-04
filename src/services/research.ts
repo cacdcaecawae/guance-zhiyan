@@ -269,6 +269,8 @@ export const askQuestion = async (
     }),
   })
 export const stopAnswer = (id: string) => request(`/sessions/${id}/stop`, { method: 'POST' })
+export const retryAnswer = (id: string, attemptId: string) =>
+  request(`/sessions/${id}/retry`, { method: 'POST', body: JSON.stringify({ attemptId }) })
 export const artifactUrl = (file: Pick<Artifact, 'id'>) =>
   `/api/files/${encodeURIComponent(file.id)}`
 

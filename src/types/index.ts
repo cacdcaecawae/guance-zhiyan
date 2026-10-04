@@ -28,6 +28,8 @@ export interface ImageAttachment {
 }
 export interface AssistantMessage {
   id: string
+  /** 当前生成尝试的标识；重新生成时回答位置不变，但旧请求不能再次提交。 */
+  attemptId?: string
   role: 'assistant'
   question: string
   /** 所答问题附带的图片，重新提问时一并重发 */
