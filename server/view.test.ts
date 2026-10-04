@@ -82,3 +82,62 @@ test('only passages returned by library tools stay linked, in any link syntax an
   checkCitations(messages)
   assert.deepEqual(messages, once, 'checking again changes nothing')
 })
+
+test('incremental citation checks reuse validated text but retain ordered history authorization', () => {
+  const later = '11111111-1111-5111-a111-111111111111'
+  const messages: Message[] = [
+    {
+      id: 'turn-1',
+      role: 'assistant',
+      question: 'first',
+      status: 'done',
+      parts: [
+        {
+          id: 'tool-1',
+          type: 'tool',
+          name: 'library_search',
+          input: '{}',
+          status: 'done',
+          output: JSON.stringify({ id: returned, link: path(returned) }),
+        },
+        { id: 'old-text', type: 'text', step: 0, text: `Previous [source](${path(returned)})` },
+      ],
+    },
+    { id: 'question-2', role: 'user', text: 'continue' },
+    {
+      id: 'turn-2',
+      role: 'assistant',
+      question: 'continue',
+      status: 'loading',
+      parts: [
+        {
+          id: 'early',
+          type: 'reasoning',
+          step: 0,
+          text: `Earlier result ${path(returned)}; not returned yet ${path(later)}`,
+        },
+        {
+          id: 'tool-2',
+          type: 'tool',
+          name: 'library_get',
+          input: '{}',
+          status: 'done',
+          output: JSON.stringify({ id: later, link: path(later) }),
+        },
+        {
+          id: 'new-text',
+          type: 'text',
+          step: 1,
+          text: `Old ${path(returned)}; new ${path(later)}; invented ${path(invented)}`,
+        },
+      ],
+    },
+  ]
+  const expected = structuredClone(messages)
+  checkCitations(expected)
+  const prefix = messages[0]
+  assert.ok(prefix.role === 'assistant')
+  for (const part of prefix.parts) Object.freeze(part)
+  checkCitations(messages, 2)
+  assert.deepEqual(messages, expected)
+})

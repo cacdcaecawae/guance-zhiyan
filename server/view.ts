@@ -239,16 +239,18 @@ function returnedPassages(output: string) {
  * Any other passage path in answer or reasoning text (invented, copied from passage text, in any
  * link syntax) is removed, so a link keeps only its label. Idempotent; also applied to streamed
  * snapshots.
+ * Earlier messages may be skipped only when already checked against the unchanged history.
+ * Their tool results still authorize later citations in the original message/part order.
  */
-export function checkCitations(messages: Message[]) {
+export function checkCitations(messages: Message[], firstChangedMessage = 0) {
   const returned = new Set<string>()
-  for (const message of messages)
+  for (const [index, message] of messages.entries())
     if (message.role === 'assistant')
       for (const part of message.parts)
         if (part.type === 'tool') {
           if (part.name.startsWith('library_') && part.status === 'done')
             for (const id of returnedPassages(part.output)) returned.add(id.toLowerCase())
-        } else
+        } else if (index >= firstChangedMessage)
           part.text = part.text.replace(PASSAGE, (path, id: string) =>
             returned.has(id.toLowerCase()) ? path : '',
           )
