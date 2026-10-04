@@ -159,6 +159,10 @@ export class Agents {
       else run.live = undefined
       this.notify(agent.session.id)
     })
+    // 每次启动重试一次；单项失败保留标记，不阻止其他会话恢复或服务启动。
+    for (const removal of this.store.pendingRemovals()) {
+      await this.cleanupRemoved(removal.id, removal.files).catch(() => {})
+    }
     return this
   }
   notify(id: string) {
@@ -429,7 +433,7 @@ export class Agents {
   }
   /**
    * 先回收沙箱容器：失败时返回可重试的 503，会话和实例记录都保留，重启后仍能回收。
-   * 再删数据库记录，此后提问与读取一律 404；最后清理消息历史和会话文件。
+   * 再持久标记删除，此后提问与读取一律 404；清理磁盘成功后才移除索引与配额。
    * 附图按内容存储、可能被其他会话共用，保留且不退配额；沙箱工作区卷由管理服务保留。
    */
   async remove(userId: string, id: string) {
@@ -451,6 +455,9 @@ export class Agents {
     }
     this.failed.delete(id)
     this.notify(id)
+    await this.cleanupRemoved(id, files)
+  }
+  private async cleanupRemoved(id: string, files: string[]) {
     const history = join(this.store.root, 'sessions')
     const results = await Promise.allSettled([
       // DSH 不提供删除接口：历史按 sessions/<工作目录>/<会话 id>/ 存放
@@ -471,6 +478,12 @@ export class Agents {
     ])
     if (results.some((result) => result.status === 'rejected')) {
       console.warn(`会话 ${id} 已删除，但历史或文件未能完全清理。`)
+      throw new HttpError(500, '会话已删除，但未能完全清理，请联系管理员。')
+    }
+    try {
+      this.store.finishRemoval(id)
+    } catch {
+      console.warn(`会话 ${id} 已删除，但清理记录未能完成。`)
       throw new HttpError(500, '会话已删除，但未能完全清理，请联系管理员。')
     }
   }
