@@ -295,10 +295,12 @@ export class LibraryStore {
   activePassages(ids: string[]): Passage[] {
     if (ids.length > 256) throw new HttpError(400, '一次最多读取 256 个候选片段。')
     if (!ids.length) return []
+    // Join by the document primary key so SQLite looks up candidates instead of scanning the library.
     return this.store.db
       .prepare(
         `SELECT ${passageColumns} FROM rag_chunks c
-      JOIN rag_versions v ON v.id=c.version_id JOIN rag_documents d ON d.version_id=v.id
+      JOIN rag_versions v ON v.id=c.version_id
+      JOIN rag_documents d ON d.id=v.document_id AND d.version_id=v.id
       WHERE c.id IN (${ids.map(() => '?').join(',')})`,
       )
       .all(...ids) as unknown as Passage[]
