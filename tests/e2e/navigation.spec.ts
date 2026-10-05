@@ -99,6 +99,37 @@ test('首次发送失败保留图片和文字，重试不重复新建会话', as
   expect(await (await page.request.get('/api/sessions')).json()).toHaveLength(1)
 })
 
+test('等待确认时重新输入相同问题，首次跳转后保留新问题与新附图', async ({ page }) => {
+  const pending = await holdPost(page, '**/api/sessions/*/messages')
+  await page.goto('/workspace')
+  const box = page.getByRole('textbox', { name: '研究问题' })
+  const form = page.getByRole('form', { name: '提问' })
+  await box.fill('分析这张图')
+  await page.getByLabel('选择图片').setInputFiles({ ...png, name: '第一张.png' })
+  await box.press('Enter')
+  const request = await pending.started
+  await box.fill('')
+  await box.fill('分析这张图')
+  await page.getByLabel('选择图片').setInputFiles({ ...png, name: '第二张.png' })
+  await request.continue()
+  await expect(page).toHaveURL(/\/workspace\/[0-9a-f-]{36}$/)
+  await expect(page.getByRole('heading', { name: '测试回答' })).toBeVisible()
+  await expect(box).toHaveValue('分析这张图')
+  await expect(form.getByRole('img', { name: '第一张.png' })).toHaveCount(0)
+  await expect(form.getByRole('img', { name: '第二张.png' })).toBeVisible()
+  await expect(page.getByRole('button', { name: '发送' })).toHaveAttribute('aria-disabled', 'false')
+  const second = page.waitForRequest(
+    (req) => req.method() === 'POST' && req.url().endsWith('/messages'),
+  )
+  await box.press('Enter')
+  expect((await second).postDataJSON()).toMatchObject({
+    question: '分析这张图',
+    images: [{ name: '第二张.png' }],
+  })
+  await expect(box).toHaveValue('')
+  await expect(form.getByRole('img')).toHaveCount(0)
+})
+
 test('手机上点新建研究：关闭抽屉、聚焦输入框，发出问题前不建会话', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 900 })
   await page.goto('/workspace')
