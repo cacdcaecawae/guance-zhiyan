@@ -219,7 +219,7 @@ export class Agents {
           const parts = answer.parts.map((part) => ({ ...part }))
           appendChunks(parts, chunks, `live-${live.step}`, live.step)
           messages = [...messages.slice(0, -1), { ...answer, parts }]
-          checkCitations(messages)
+          checkCitations(messages, messages.length - 1)
         }
         trace = trace.map((row) =>
           row.id === `live-${live.turn}-${live.step}`
