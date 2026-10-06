@@ -74,3 +74,21 @@ ${header}`),
   fireEvent.keyDown(document.body, { key: 'Escape' })
   expect(onClose).toHaveBeenCalledOnce()
 })
+
+it('CSV 保留500行边界，隐藏的后续宽行仍计入总行列数', async () => {
+  const text = '表头\n' + '可见\n'.repeat(500)
+  vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(text)))
+  const exact = render(<FilePreview file={file('csv')} />)
+  await screen.findByRole('table')
+  expect(screen.getAllByRole('row')).toHaveLength(501)
+  expect(screen.queryByText(/完整内容请下载/)).not.toBeInTheDocument()
+  exact.unmount()
+  vi.stubGlobal(
+    'fetch',
+    vi.fn().mockResolvedValue(new Response(text + Array(60).fill('隐藏').join(','))),
+  )
+  render(<FilePreview file={file('csv')} />)
+  expect(await screen.findByText(/共 501 行、60 列/)).toBeInTheDocument()
+  expect(screen.getAllByRole('row')).toHaveLength(501)
+  expect(screen.queryByRole('cell', { name: '隐藏' })).not.toBeInTheDocument()
+})

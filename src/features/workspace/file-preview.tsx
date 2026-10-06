@@ -12,7 +12,7 @@ const TEXT_FORMATS = new Set(['md', 'markdown', 'csv', 'txt', 'json'])
 const MAX_PREVIEW_BYTES = 2 * 1024 * 1024
 const MAX_TABLE_ROWS = 500
 const MAX_TABLE_COLUMNS = 50
-// 预览内容来自模型或沙箱，不可信：限制渲染规模，避免巨大的表格或 Markdown 卡死页面
+// 预览内容来自模型或沙箱，不可信：限制解析结果与渲染规模，避免巨大的表格或 Markdown 卡死页面
 const MAX_MARKDOWN_CHARS = 100_000
 
 const canPreview = (file: Artifact) =>
@@ -85,23 +85,24 @@ function Body({ file }: { file: Artifact }) {
       </div>
     )
   if (file.format === 'csv') {
-    const [head = [], ...rows] = parseCsv(loaded.text)
-    const columns = Math.max(head.length, ...rows.slice(0, MAX_TABLE_ROWS).map((row) => row.length))
-    const clipped = rows.length > MAX_TABLE_ROWS || columns > MAX_TABLE_COLUMNS
+    const parsed = parseCsv(loaded.text, MAX_TABLE_ROWS + 1, MAX_TABLE_COLUMNS)
+    const [head = [], ...rows] = parsed.rows
+    const totalRows = Math.max(0, parsed.totalRows - 1)
+    const clipped = totalRows > MAX_TABLE_ROWS || parsed.columns > MAX_TABLE_COLUMNS
     return (
       <div className="answer-markdown overflow-x-auto">
         <table>
           <thead>
             <tr>
-              {head.slice(0, MAX_TABLE_COLUMNS).map((cell, index) => (
+              {head.map((cell, index) => (
                 <th key={index}>{cell}</th>
               ))}
             </tr>
           </thead>
           <tbody>
-            {rows.slice(0, MAX_TABLE_ROWS).map((row, index) => (
+            {rows.map((row, index) => (
               <tr key={index}>
-                {row.slice(0, MAX_TABLE_COLUMNS).map((cell, column) => (
+                {row.map((cell, column) => (
                   <td key={column}>{cell}</td>
                 ))}
               </tr>
@@ -110,7 +111,7 @@ function Body({ file }: { file: Artifact }) {
         </table>
         {clipped && (
           <p className="text-ui-sm text-foreground-subtlest">
-            共 {rows.length} 行、{columns} 列，此处最多显示前 {MAX_TABLE_ROWS} 行、前{' '}
+            共 {totalRows} 行、{parsed.columns} 列，此处最多显示前 {MAX_TABLE_ROWS} 行、前{' '}
             {MAX_TABLE_COLUMNS} 列，完整内容请下载。
           </p>
         )}
