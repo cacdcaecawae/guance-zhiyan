@@ -409,3 +409,35 @@ test('common terms are pruned only alongside a known rarer term and frequencies 
     await rm(root, { recursive: true })
   }
 })
+
+test('common-term frequencies use the same unicode61 normalization as matching', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'gczy-rag-normalization-'))
+  const store = new Store(root)
+  const library = new LibraryStore(store)
+  try {
+    for (let i = 0; i < 4; i++) {
+      const staged = library.stage({
+        id: `normalized-${i}`,
+        title: 'Synthetic',
+        text: `café Σ ộ can't café_café 碳达峰 synthetic passage. ${i === 0 ? 'pension' : 'ordinary'}`,
+      })
+      library.publish(staged.versionId, null)
+    }
+    const specific = await library.lexical('pension')
+    assert.equal(specific.length, 1)
+    for (const term of ['cafe', 'café', 'CAFÉ', 'cafe\u0301', 'Σ', 'σ', 'ς', 'ộ']) {
+      assert.deepEqual(await library.lexical(`${term} pension`), specific, term)
+      assert.equal((await library.lexical(term)).length, 4, 'common-only queries stay broad')
+    }
+    assert.equal((await library.lexical('café unmatchedsyntheticword')).length, 4)
+    assert.equal((await library.lexical('unmatchedsyntheticword')).length, 0)
+    for (const phrase of ["can't", 'café_café', '碳达峰'])
+      assert.equal((await library.lexical(`${phrase} pension`)).length, 4, 'phrases stay intact')
+    assert.equal((await library.lexical('___')).length, 0)
+    assert.deepEqual(await library.lexical('café ___ pension'), specific)
+  } finally {
+    store.close()
+    assert.ok(basename(root).startsWith('gczy-rag-normalization-'))
+    await rm(root, { recursive: true })
+  }
+})

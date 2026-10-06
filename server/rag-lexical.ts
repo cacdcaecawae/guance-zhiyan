@@ -7,15 +7,20 @@ const db = new DatabaseSync(path, { readOnly: true, timeout: 5000 })
 try {
   // The vocab view lives only in this connection's temp database; the source index stays read-only.
   db.exec("CREATE VIRTUAL TABLE temp.rag_vocab USING fts5vocab(main, rag_fts, 'row')")
+  // SQLite guarantees FTS3/5 unicode61 compatibility; use its tokenizer rather than JS folding.
+  db.exec('CREATE VIRTUAL TABLE temp.rag_query_tokens USING fts3tokenize(unicode61)')
   const total = Number(db.prepare('SELECT count(*) AS n FROM rag_fts_docsize').get()!.n)
   const frequency = db.prepare('SELECT doc FROM rag_vocab WHERE term=?')
+  const queryTokens = db.prepare('SELECT token FROM rag_query_tokens WHERE input=? LIMIT 2')
   const clauses = match.split(' OR ')
   // Keep phrases and unknown tokens: vocab frequencies describe single FTS terms, not phrases.
-  const counts = clauses.map((clause) =>
-    clause.includes(' ')
-      ? 0
-      : Number(frequency.get(clause.slice(1, -1).replaceAll('""', '"').toLowerCase())?.doc ?? 0),
-  )
+  const counts = clauses.map((clause) => {
+    if (clause.includes(' ')) return 0
+    const tokens = queryTokens.all(clause.slice(1, -1).replaceAll('""', '"'))
+    // A segment such as "can't" becomes an FTS phrase, despite having no literal spaces.
+    if (tokens.length !== 1) return 0
+    return Number(frequency.get(tokens[0].token!)?.doc ?? 0)
+  })
   // Prune very common terms only when a known, less common term remains; broad-only queries work.
   const selected = counts.some((count) => count > 0 && count <= total / 2)
     ? clauses.filter((_, i) => counts[i] <= total / 2).join(' OR ')
