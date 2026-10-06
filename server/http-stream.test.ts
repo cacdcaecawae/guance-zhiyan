@@ -10,6 +10,7 @@ import { applySessionFrame, type SessionFrame } from '../src/services/session-st
 import { Agents } from './agent.ts'
 import { createApp } from './http.ts'
 import { Store } from './store.ts'
+import { messagesFromEvents } from './view.ts'
 
 test('SSE sends history once, streams only changes, and reconnects with a current snapshot', async () => {
   const root = await mkdtemp(join(tmpdir(), 'gczy-stream-test-'))
@@ -134,5 +135,81 @@ test('SSE sends history once, streams only changes, and reconnects with a curren
       resolve(root).startsWith(resolve(tmpdir()) + sep) && root.includes('gczy-stream-test-'),
     )
     await rm(root, { recursive: true })
+  }
+})
+
+test('stream snapshots leave validated history untouched and check citations split across chunks', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'gczy-stream-citation-'))
+  const store = new Store(root)
+  const model = new TestModel(() => textChunks('previous answer'))
+  const agents = await new Agents(store, { adapter: model }).init()
+  const user = store.user('stream-citation', 'Test')
+  const session = store.create(user.id)
+  const next = Promise.withResolvers<void>()
+  const finish = Promise.withResolvers<void>()
+  try {
+    await agents.start(user.id, session.id, 'first question')
+    await agents.active.get(session.id)?.done
+    const prefix = 'New answer /api/library/passages/00000000-0000-'
+    const suffix = '5000-a000-000000000000 continues'
+    model.stream = async function* () {
+      yield { type: 'block-start', index: 0, blockType: 'text' }
+      yield { type: 'text-delta', index: 0, text: prefix }
+      await next.promise
+      yield { type: 'text-delta', index: 0, text: suffix }
+      await finish.promise
+      yield { type: 'block-end', index: 0, block: { type: 'text', text: prefix + suffix } }
+      yield { type: 'finish', reason: { kind: 'stop' } }
+    }
+    await agents.start(user.id, session.id, 'continue')
+    const run = agents.active.get(session.id)!
+    const waitForChunks = (count: number) =>
+      new Promise<void>((resolve) => {
+        const check = () => {
+          if (run.live?.chunks.filter((chunk) => chunk.type === 'text-delta').length === count) {
+            unsubscribe()
+            resolve()
+          }
+        }
+        const unsubscribe = agents.subscribe(user.id, session.id, check)
+        check()
+      })
+    await waitForChunks(1)
+    const before = await agents.snapshot(user.id, session.id)
+    const preserved = structuredClone(before.messages)
+    const oldAnswer = before.messages[1]
+    assert.ok(oldAnswer.role === 'assistant')
+    for (const part of oldAnswer.parts) Object.freeze(part)
+    next.resolve()
+    await waitForChunks(2)
+    const streamed = await agents.snapshot(user.id, session.id)
+    assert.deepEqual(
+      before.messages,
+      preserved,
+      'a later snapshot cannot rewrite the prior snapshot',
+    )
+    assert.deepEqual(
+      streamed.messages,
+      messagesFromEvents(await agents.events(session.id), true, run.live),
+    )
+    const answer = streamed.messages.at(-1)
+    assert.ok(answer?.role === 'assistant')
+    assert.equal(answer.parts.find((part) => part.type === 'text')?.text, 'New answer  continues')
+    finish.resolve()
+    await run.done
+    const completed = await agents.snapshot(user.id, session.id)
+    const finalAnswer = completed.messages.at(-1)
+    assert.ok(finalAnswer?.role === 'assistant')
+    assert.equal(
+      finalAnswer.parts.find((part) => part.type === 'text')?.text,
+      'New answer  continues',
+    )
+    assert.equal(finalAnswer.status, 'done')
+  } finally {
+    next.resolve()
+    finish.resolve()
+    await agents.close()
+    store.close()
+    await rm(root, { recursive: true, force: true })
   }
 })
