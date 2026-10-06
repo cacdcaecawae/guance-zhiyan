@@ -325,3 +325,119 @@ test('a title matches once per document and one document yields at most five lex
     await rm(root, { recursive: true })
   }
 })
+
+test('ranked candidates keep title weighting, stable ordering and document diversity in a large match set', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'gczy-rag-ranked-test-'))
+  const store = new Store(root)
+  const library = new LibraryStore(store)
+  try {
+    for (let i = 0; i < 50; i++) {
+      const staged = library.stage({
+        id: `synthetic-${i}`,
+        title: i === 0 ? '养老' : '合成测试文件',
+        text: Array.from(
+          { length: 24 },
+          (_, n) => `第${n + 1}条 养老${'合成测试内容。'.repeat(70)}`,
+        ).join('\n'),
+      })
+      assert.equal(staged.chunks.length, 24)
+      library.publish(staged.versionId, null)
+    }
+    const ids = await library.lexical('养老')
+    assert.equal(ids.length, 40)
+    assert.deepEqual(await library.lexical('养老'), ids)
+    const passages = ids.map((id) => library.passage(id))
+    assert.deepEqual(
+      new Set(library.activePassages(ids).map((passage) => passage.id)),
+      new Set(ids),
+      'all ranked candidates resolve through their current document',
+    )
+    assert.equal(passages[0].documentId, 'synthetic-0', 'the title retains its BM25 weight')
+    assert.equal(passages[0].ordinal, 0)
+    const grouped = Object.groupBy(passages, (passage) => passage.documentId)
+    assert.ok(Object.keys(grouped).length >= 8)
+    assert.ok(Object.values(grouped).every((items) => items!.length <= 5))
+    assert.equal((await library.lexical('养老', 1))[0], ids[0])
+    assert.deepEqual(await library.lexical('unmatchedsyntheticword'), [])
+    const replaced = library.stage({
+      id: 'synthetic-0',
+      title: '更新后的合成测试',
+      text: '第一条 新版本测试。',
+    })
+    assert.deepEqual(library.activePassages(replaced.chunks.map((passage) => passage.id)), [])
+    library.publish(replaced.versionId, passages[0].versionId)
+    assert.ok(library.activePassages(ids).every((passage) => passage.documentId !== 'synthetic-0'))
+  } finally {
+    store.close()
+    assert.ok(resolve(root).startsWith(resolve(tmpdir()) + sep))
+    assert.ok(basename(root).startsWith('gczy-rag-ranked-test-'))
+    await rm(root, { recursive: true })
+  }
+})
+
+test('common terms are pruned only alongside a known rarer term and frequencies follow publication', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'gczy-rag-frequency-test-'))
+  const store = new Store(root)
+  const library = new LibraryStore(store)
+  try {
+    for (let i = 0; i < 20; i++) {
+      const staged = library.stage({
+        id: `frequency-${i}`,
+        title: '合成测试文件',
+        text: `第一条 规划用于合成测试。${i === 0 ? '养老用于合成测试。' : ''}`,
+      })
+      library.publish(staged.versionId, null)
+    }
+    const broad = await library.lexical('规划')
+    assert.equal(broad.length, 20, 'a common-only query still retrieves actual matches')
+    const specific = await library.lexical('规划 养老')
+    assert.equal(specific.length, 1)
+    assert.equal(library.passage(specific[0]).documentId, 'frequency-0')
+    assert.deepEqual(await library.lexical('规划 unmatchedsyntheticword'), broad)
+    const updated = library.stage({
+      id: 'frequency-0',
+      title: '合成测试文件',
+      text: '第一条 规划用于更新后的合成测试。',
+    })
+    library.publish(updated.versionId, library.current('frequency-0'))
+    assert.deepEqual(await library.lexical('养老'), [])
+    assert.equal((await library.lexical('规划 养老')).length, 20)
+  } finally {
+    store.close()
+    assert.ok(resolve(root).startsWith(resolve(tmpdir()) + sep))
+    assert.ok(basename(root).startsWith('gczy-rag-frequency-test-'))
+    await rm(root, { recursive: true })
+  }
+})
+
+test('common-term frequencies use the same unicode61 normalization as matching', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'gczy-rag-normalization-'))
+  const store = new Store(root)
+  const library = new LibraryStore(store)
+  try {
+    for (let i = 0; i < 4; i++) {
+      const staged = library.stage({
+        id: `normalized-${i}`,
+        title: 'Synthetic',
+        text: `café Σ ộ can't café_café 碳达峰 synthetic passage. ${i === 0 ? 'pension' : 'ordinary'}`,
+      })
+      library.publish(staged.versionId, null)
+    }
+    const specific = await library.lexical('pension')
+    assert.equal(specific.length, 1)
+    for (const term of ['cafe', 'café', 'CAFÉ', 'cafe\u0301', 'Σ', 'σ', 'ς', 'ộ']) {
+      assert.deepEqual(await library.lexical(`${term} pension`), specific, term)
+      assert.equal((await library.lexical(term)).length, 4, 'common-only queries stay broad')
+    }
+    assert.equal((await library.lexical('café unmatchedsyntheticword')).length, 4)
+    assert.equal((await library.lexical('unmatchedsyntheticword')).length, 0)
+    for (const phrase of ["can't", 'café_café', '碳达峰'])
+      assert.equal((await library.lexical(`${phrase} pension`)).length, 4, 'phrases stay intact')
+    assert.equal((await library.lexical('___')).length, 0)
+    assert.deepEqual(await library.lexical('café ___ pension'), specific)
+  } finally {
+    store.close()
+    assert.ok(basename(root).startsWith('gczy-rag-normalization-'))
+    await rm(root, { recursive: true })
+  }
+})
