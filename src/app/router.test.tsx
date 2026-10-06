@@ -257,6 +257,47 @@ it('删除唯一一条记录后，焦点交给“新建研究”', async () => {
   await waitFor(() => expect(screen.getByRole('link', { name: '新建研究' })).toHaveFocus())
 })
 
+it.each([
+  { key: 'Enter', isComposing: true, keyCode: 13 },
+  { key: 'Enter', isComposing: false, keyCode: 229 },
+  { key: 'Escape', isComposing: true, keyCode: 27 },
+  { key: 'Escape', isComposing: false, keyCode: 229 },
+])('重命名忽略输入法 $key（isComposing=$isComposing, keyCode=$keyCode）', async (event) => {
+  const user = userEvent.setup()
+  await open('/workspace/old')
+  const closePreview = vi.fn()
+  if (event.key === 'Escape') {
+    const { PreviewPane } = await import('@/features/workspace/file-preview')
+    vi.mocked(fetch).mockResolvedValueOnce(new Response('预览原文'))
+    render(
+      <PreviewPane
+        file={{ id: 'preview', sessionId: 'old', name: '原文.txt', format: 'txt', size: 12 }}
+        onClose={closePreview}
+      />,
+    )
+    await screen.findByText('预览原文')
+  }
+  const row = screen.getByRole('link', { name: '研究 old' }).closest('li')!
+  await user.click(within(row).getByRole('button', { name: '更多操作' }))
+  await user.click(await screen.findByRole('menuitem', { name: '重命名' }))
+  const input = screen.getByRole('textbox', { name: '重命名研究记录' })
+  fireEvent.change(input, { target: { value: 'zheng ce' } })
+  fireEvent.keyDown(input, event)
+  expect(input).toHaveFocus()
+  expect(input).toHaveValue('zheng ce')
+  expect(closePreview).not.toHaveBeenCalled()
+  expect(
+    vi.mocked(fetch).mock.calls.filter(([, options]) => options?.method === 'PATCH'),
+  ).toHaveLength(0)
+  vi.mocked(fetch).mockResolvedValueOnce(Response.json({ ...session('old'), title: '政策研究' }))
+  fireEvent.change(input, { target: { value: '政策研究' } })
+  fireEvent.keyDown(input, { key: 'Enter', keyCode: 13, isComposing: false })
+  expect(await screen.findByRole('link', { name: '政策研究' })).toHaveFocus()
+  const patches = vi.mocked(fetch).mock.calls.filter(([, options]) => options?.method === 'PATCH')
+  expect(patches).toHaveLength(1)
+  expect(JSON.parse(String(patches[0][1]?.body))).toEqual({ title: '政策研究' })
+})
+
 it('已有会话发送时也保留等待期间的新草稿', async () => {
   const pending = deferred()
   posts.push(pending.promise)
