@@ -67,6 +67,7 @@ export function Composer({ onSubmit, busy = false, onStop, children, autoFocus }
   const [images, setImages] = useState<File[]>([])
   const [notice, setNotice] = useState('')
   const [sending, setSending] = useState(false)
+  const editRevision = useRef(0)
   // 输入框最小高度：顶部把手拖动或方向键调整，作为界面偏好保存；内容更多时仍自动增高。
   const [height, setHeight] = useState(() => {
     const saved = Number(readPref(HEIGHT_KEY))
@@ -92,10 +93,12 @@ export function Composer({ onSubmit, busy = false, onStop, children, autoFocus }
     if (!canSubmit) return
     const draft = value
     const draftImages = images
+    const submittedRevision = editRevision.current
     setSending(true)
     try {
       if ((await onSubmit(draft.trim(), draftImages)) !== false) {
-        setValue((current) => (current === draft ? '' : current))
+        // 等待期间重新编辑过的文字属于新草稿，即使最后与已发送文字相同。
+        setValue((current) => (editRevision.current === submittedRevision ? '' : current))
         // 只移除这次发出的图片，等待期间新加的留给下一条
         setImages((current) => current.filter((file) => !draftImages.includes(file)))
         setNotice('')
@@ -200,7 +203,10 @@ export function Composer({ onSubmit, busy = false, onStop, children, autoFocus }
             rows={1}
             maxLength={8000}
             value={value}
-            onChange={(e) => setValue(e.target.value)}
+            onChange={(e) => {
+              editRevision.current++
+              setValue(e.target.value)
+            }}
             onKeyDown={onKeyDown}
             onPaste={(e) => {
               // 从 Word 等处复制时剪贴板同时带文字和整段截图，只在没有文字时取图片

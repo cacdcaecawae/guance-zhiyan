@@ -146,6 +146,42 @@ it('首次发送成功且没有新草稿时清空文字和图片', async () => {
   expect(screen.queryByRole('list', { name: '待发送图片' })).not.toBeInTheDocument()
 })
 
+it.each(['/workspace', '/workspace/old'])(
+  '%s 等待确认时重新输入相同问题，新文字和新附图仍属于下一条',
+  async (path) => {
+    const pending = deferred()
+    posts.push(pending.promise)
+    await open(path)
+    fireEvent.change(box(), { target: { value: '分析这张图' } })
+    attach('第一张.png')
+    send()
+    await waitFor(() => expect(postCount).toBe(1))
+    fireEvent.change(box(), { target: { value: '' } })
+    fireEvent.change(box(), { target: { value: '分析这张图' } })
+    attach('第二张.png')
+    await act(async () => pending.resolve(Response.json({})))
+    await waitFor(() =>
+      expect(window.location.pathname).toBe(path === '/workspace' ? '/workspace/created-1' : path),
+    )
+    expect(box()).toHaveValue('分析这张图')
+    expect(screen.queryByRole('img', { name: '第一张.png' })).not.toBeInTheDocument()
+    expect(screen.getByRole('img', { name: '第二张.png' })).toBeInTheDocument()
+    send()
+    await waitFor(() => expect(postCount).toBe(2))
+    const requests = vi
+      .mocked(fetch)
+      .mock.calls.filter(([url]) => String(url).endsWith('/messages'))
+      .map(([, options]) => JSON.parse(String(options?.body)))
+    expect(requests.map(({ question }) => question)).toEqual(['分析这张图', '分析这张图'])
+    expect(requests.map(({ images }) => images.map(({ name }: { name: string }) => name))).toEqual([
+      ['第一张.png'],
+      ['第二张.png'],
+    ])
+    await waitFor(() => expect(box()).toHaveValue(''))
+    expect(screen.queryByRole('list', { name: '待发送图片' })).not.toBeInTheDocument()
+  },
+)
+
 it('首次发送失败保留文字和图片，重试沿用已创建会话', async () => {
   posts.push(Promise.resolve(Response.json({ error: '发送测试失败' }, { status: 503 })))
   await open()
