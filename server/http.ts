@@ -1,5 +1,6 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
-import { readFile } from 'node:fs/promises'
+import { open, readFile } from 'node:fs/promises'
+import { pipeline } from 'node:stream/promises'
 import { resolve, sep, extname } from 'node:path'
 import { Store, HttpError } from './store.ts'
 import { Agents } from './agent.ts'
@@ -171,18 +172,27 @@ export function createApp(
       const file = /^\/api\/files\/([0-9a-f-]{36})$/.exec(path)
       if (file && request.method === 'GET') {
         const artifact = store.artifact(user.id, file[1])
-        const data = await readFile(agents.files.path(artifact.id))
-        // RFC 8187 filename* excludes these characters left unescaped by encodeURIComponent.
-        const filename = encodeURIComponent(artifact.name).replace(
-          /['()*]/g,
-          (char) => '%' + char.charCodeAt(0).toString(16).toUpperCase(),
-        )
-        response.writeHead(200, {
-          'Content-Type': MIME[artifact.format] ?? 'application/octet-stream',
-          'Content-Disposition': `attachment; filename="download.${artifact.format}"; filename*=UTF-8''${filename}`,
-          'Content-Length': data.length,
-        })
-        return response.end(data)
+        const handle = await open(agents.files.path(artifact.id), 'r')
+        try {
+          if (response.destroyed) return
+          const stat = await handle.stat()
+          if (!stat.isFile()) throw new Error('Stored artifact is not a regular file')
+          // RFC 8187 filename* excludes these characters left unescaped by encodeURIComponent.
+          const filename = encodeURIComponent(artifact.name).replace(
+            /['()*]/g,
+            (char) => '%' + char.charCodeAt(0).toString(16).toUpperCase(),
+          )
+          response.writeHead(200, {
+            'Content-Type': MIME[artifact.format] ?? 'application/octet-stream',
+            'Content-Disposition': `attachment; filename="download.${artifact.format}"; filename*=UTF-8''${filename}`,
+            'Content-Length': stat.size,
+          })
+          // Bound buffering to stream backpressure; a disconnected response destroys the reader.
+          await pipeline(handle.createReadStream(), response)
+        } finally {
+          await handle.close()
+        }
+        return
       }
       const match =
         /^\/api\/sessions\/([0-9a-f-]{36})(?:\/(messages|retry|stop|events)|\/images\/([^/]+))?$/.exec(
