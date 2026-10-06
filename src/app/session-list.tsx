@@ -300,7 +300,12 @@ function RenameInput({
       data-own-escape
       onFocus={(e) => e.currentTarget.select()}
       onKeyDown={(e) => {
-        if (e.key === 'Enter' && !e.nativeEvent.isComposing) {
+        // 输入法确认或取消候选不结束重命名；组合边界可能只保留 keyCode 229。
+        if (e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229) {
+          if (e.key === 'Escape') e.stopPropagation()
+          return
+        }
+        if (e.key === 'Enter') {
           e.preventDefault()
           settle(e.currentTarget.value, true)
         } else if (e.key === 'Escape') {
