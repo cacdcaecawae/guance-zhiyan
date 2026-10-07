@@ -88,12 +88,37 @@ PY`,
       assert.equal(await readFile(files.path(artifact.id), 'utf8'), 'native filesystem')
       await run(
         first,
-        "python3 - <<'PY'\nfrom docx import Document\nd = Document(); d.add_paragraph('Real sandbox report'); d.add_paragraph('Second paragraph'); d.save('/workspace/report.docx')\nPY",
+        `python3 - <<'PY'
+from docx import Document
+d = Document()
+d.add_paragraph('Real sandbox report')
+t = d.add_table(rows=3, cols=3)
+for cell, text in zip(t.rows[0].cells, ['对象', '年度补助', '备注']):
+    cell.text = text
+t.cell(1, 0).merge(t.cell(2, 0)).text = '城乡居民'
+t.cell(1, 1).text = '每人 1200 元'
+t.cell(2, 1).text = '每人 800 元'
+nested = t.cell(2, 2).add_table(rows=1, cols=1)
+nested.cell(0, 0).text = '嵌套说明'
+d.add_paragraph('Second paragraph')
+t = d.add_table(rows=1, cols=2)
+t.cell(0, 0).merge(t.cell(0, 1)).text = '合并标题'
+d.add_paragraph('报告结束')
+d.save('/workspace/report.docx')
+d = Document()
+d.add_table(rows=1, cols=1).cell(0, 0).text = '中' * 40000
+d.save('/workspace/long-table.docx')
+PY`,
       )
       const word = await first.exportFile('report.docx', files)
-      assert.match(
+      assert.equal(
         await files.read(alice.id, a.id, word.id, first),
-        /Real sandbox report\nSecond paragraph/,
+        'Real sandbox report\n对象\t年度补助\t备注\n城乡居民\t每人 1200 元\t\n\t每人 800 元\t\n嵌套说明\n\nSecond paragraph\n合并标题\t\n报告结束\n',
+      )
+      const longWord = await first.exportFile('long-table.docx', files)
+      assert.equal(
+        await files.read(alice.id, a.id, longWord.id, first),
+        '中'.repeat(32000) + '\n[内容已截断]\n',
       )
       await run(
         first,

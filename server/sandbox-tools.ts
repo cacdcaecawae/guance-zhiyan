@@ -213,7 +213,24 @@ export class SessionSandbox {
       const code = `import sys
 if sys.argv[2] == 'docx':
     from docx import Document
-    lines = (p.text for p in Document(sys.argv[1]).paragraphs)
+    from docx.text.paragraph import Paragraph
+    def word_lines(parent):
+        for block in parent.iter_inner_content():
+            if isinstance(block, Paragraph):
+                yield block.text
+            else:
+                seen = set()
+                for row in block.rows:
+                    cells = []
+                    for cell in row.cells:
+                        # A merged cell occupies multiple grid positions; read its XML only once.
+                        if cell._tc in seen:
+                            cells.append('')
+                        else:
+                            seen.add(cell._tc)
+                            cells.append('\\n'.join(word_lines(cell)))
+                    yield '\\t'.join(cells)
+    lines = word_lines(Document(sys.argv[1]))
 else:
     from openpyxl import load_workbook
     book = load_workbook(sys.argv[1], read_only=True, data_only=True)
