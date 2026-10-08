@@ -11,13 +11,14 @@ export type Library = Pick<KnowledgeLibrary, 'available' | 'retrieve' | 'neighbo
 /** Per tool result; a required passage stays whole even if its serialization exceeds this. */
 const MAX_CHARS = 6000
 
-const GUIDE = `共享文献库（管理员导入的政策、规划等文件）通过 library_search 按需检索。涉及政策、规划、法规、标准等资料的问题，先检索再回答，结果不足时换关键词再检索；陈述文献中的事实只依据检索返回的片段，并用 [原文](链接) 引用，链接只能使用工具返回的 link；需要某个片段的前后文时调用 library_open；标有 superseded 的片段已被新版本替代，不作为现行规定引用。检索不到或片段不足以回答时，明确说明未在文献库中找到，不凭记忆编造。闲聊和一般常识不必检索。联网资料与文献库证据分开说明。`
+const GUIDE = `共享文献库（管理员导入的政策、规划等文件）通过 library_search 按需检索。涉及政策、规划、法规、标准等资料的问题，先检索再回答，结果不足时换关键词再检索；陈述文献中的事实只依据检索返回的片段，并用 [原文](链接) 引用，链接只能使用工具返回的 link；需要写出文献编号（也可能被称为 planid 或文献 id）时，用片段所属文献的 documentId，不用片段 id 代替；需要某个片段的前后文时调用 library_open；标有 superseded 的片段已被新版本替代，不作为现行规定引用。检索不到或片段不足以回答时，明确说明未在文献库中找到，不凭记忆编造。闲聊和一般常识不必检索。联网资料与文献库证据分开说明。`
 
 function render(passages: Passage[], header: string, requiredId?: string) {
   const rendered = passages.map((passage) =>
     JSON.stringify({
       id: passage.id,
       link: `/api/library/passages/${passage.id}`,
+      documentId: passage.documentId,
       title: passage.title,
       heading: passage.heading,
       publishedAt: passage.publishedAt,
