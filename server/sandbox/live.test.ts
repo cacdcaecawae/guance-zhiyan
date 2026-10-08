@@ -108,6 +108,13 @@ d.save('/workspace/report.docx')
 d = Document()
 d.add_table(rows=1, cols=1).cell(0, 0).text = '中' * 40000
 d.save('/workspace/long-table.docx')
+d = Document()
+for i, row in enumerate(d.add_table(rows=1200, cols=2).rows):
+    first, value = row.cells
+    first.text = '类别' if i == 0 else ''
+    value.text = str(i)
+    first._tc.vMerge = 'continue' if i else 'restart'
+d.save('/workspace/tall-merge.docx')
 PY`,
       )
       const word = await first.exportFile('report.docx', files)
@@ -119,6 +126,11 @@ PY`,
       assert.equal(
         await files.read(alice.id, a.id, longWord.id, first),
         '中'.repeat(32000) + '\n[内容已截断]\n',
+      )
+      const tallWord = await first.exportFile('tall-merge.docx', files)
+      assert.equal(
+        await files.read(alice.id, a.id, tallWord.id, first),
+        '类别\t0\n' + Array.from({ length: 1199 }, (_, i) => `\t${i + 1}\n`).join(''),
       )
       await run(
         first,

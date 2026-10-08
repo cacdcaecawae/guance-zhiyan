@@ -213,22 +213,21 @@ export class SessionSandbox {
       const code = `import sys
 if sys.argv[2] == 'docx':
     from docx import Document
+    from docx.table import _Cell
     from docx.text.paragraph import Paragraph
     def word_lines(parent):
         for block in parent.iter_inner_content():
             if isinstance(block, Paragraph):
                 yield block.text
             else:
-                seen = set()
-                for row in block.rows:
+                # Walk w:tc directly: Row.cells resolves each vertical-merge continuation by walking
+                # up to its first row, which is quadratic and recurses past the limit on long spans.
+                for tr in block._tbl.tr_lst:
                     cells = []
-                    for cell in row.cells:
-                        # A merged cell occupies multiple grid positions; read its XML only once.
-                        if cell._tc in seen:
-                            cells.append('')
-                        else:
-                            seen.add(cell._tc)
-                            cells.append('\\n'.join(word_lines(cell)))
+                    for tc in tr.tc_lst:
+                        # Merged content stays in its first grid position; covered positions stay empty.
+                        text = '' if tc.vMerge == 'continue' else '\\n'.join(word_lines(_Cell(tc, block)))
+                        cells += [text] + [''] * (tc.grid_span - 1)
                     yield '\\t'.join(cells)
     lines = word_lines(Document(sys.argv[1]))
 else:
