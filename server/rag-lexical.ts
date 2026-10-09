@@ -2,9 +2,25 @@
 import { parentPort, workerData } from 'node:worker_threads'
 import { DatabaseSync } from 'node:sqlite'
 
-const { path, match, limit } = workerData as { path: string; match: string; limit: number }
+const { path, match, limit, documentIds } = workerData as {
+  path: string
+  match: string
+  limit: number
+  documentIds?: string[]
+}
 const db = new DatabaseSync(path, { readOnly: true, timeout: 5000 })
 try {
+  // A metadata filter keeps chunks of these documents only. Restricting FTS to their rowids
+  // (`rowid IN …`) took 8–80 s on the full library, so the ranked pool is widened instead.
+  // ponytail: a narrow filter (one county) may keep few lexical hits from the top 5000; dense
+  // retrieval is filtered exactly in Qdrant and carries recall there. Score the subset directly
+  // if evaluation shows lexical misses under narrow filters.
+  if (documentIds) {
+    db.exec('CREATE TEMP TABLE allowed(id TEXT PRIMARY KEY)')
+    db.prepare('INSERT INTO temp.allowed SELECT value FROM json_each(?)').run(
+      JSON.stringify(documentIds),
+    )
+  }
   // The vocab view lives only in this connection's temp database; the source index stays read-only.
   db.exec("CREATE VIRTUAL TABLE temp.rag_vocab USING fts5vocab(main, rag_fts, 'row')")
   // SQLite guarantees FTS3/5 unicode61 compatibility; use its tokenizer rather than JS folding.
@@ -34,11 +50,12 @@ try {
           FROM (SELECT c.id, c.version_id, f.rank AS score
             FROM (SELECT rowid, rank FROM rag_fts
               WHERE rag_fts MATCH ? AND rank MATCH 'bm25(5, 1)'
-              ORDER BY rank LIMIT ?) f JOIN rag_chunks c ON c.rowid=f.rowid)
+              ORDER BY rank LIMIT ?) f JOIN rag_chunks c ON c.rowid=f.rowid
+            ${documentIds ? 'JOIN rag_versions v ON v.id=c.version_id JOIN temp.allowed a ON a.id=v.document_id' : ''})
         ) WHERE n <= 5 ORDER BY score, id LIMIT ?`,
       )
       // ponytail: cap the ranked pool at 1000; widen it only if recall evaluation needs more.
-      .all(selected, 1000, limit)
+      .all(selected, documentIds ? 5000 : 1000, limit)
       .map((row) => row.id as string),
   )
 } finally {

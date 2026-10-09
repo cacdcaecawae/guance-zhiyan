@@ -31,8 +31,20 @@ test('Qdrant creates missing collections, verifies existing configuration and ha
   let conflict = false
   let config: unknown = collection()
   let puts = 0
+  let indexes = 0
   const url = await endpoint(t, async (request, response) => {
     assert.equal(request.headers['api-key'], 'test-only-key')
+    if (request.url?.startsWith('/proxy/collections/rag_test/index?')) {
+      const chunks: Buffer[] = []
+      for await (const chunk of request) chunks.push(chunk)
+      assert.deepEqual(JSON.parse(Buffer.concat(chunks).toString()), {
+        field_name: 'documentId',
+        field_schema: 'keyword',
+      })
+      indexes++
+      response.end(reply(completed))
+      return
+    }
     assert.equal(request.url?.split('?')[0], '/proxy/collections/rag_test')
     if (request.method === 'GET') {
       if (!exists) {
@@ -68,6 +80,7 @@ test('Qdrant creates missing collections, verifies existing configuration and ha
   assert.equal(await client.ensureCollection(undefined, invalidate), true)
   assert.equal(await client.ensureCollection(undefined, invalidate), false)
   assert.equal(puts, 1)
+  assert.equal(indexes, 1, 'a new collection gets the documentId filter index')
   assert.equal(invalidations, 1)
   exists = false
   conflict = true

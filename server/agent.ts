@@ -36,7 +36,13 @@ import * as WebFetch from '@deepseek-ai/dsh-web-fetch-http'
 import * as WebSearch from '@deepseek-ai/dsh-web-search-deepseek'
 import * as WebTools from '@deepseek-ai/dsh-tool-web'
 import type { ModelSelection, Session } from '../src/types/index.ts'
-import { connection, modelAdapter, modelCatalog, validateSelection } from './models.ts'
+import {
+  acceptsImages,
+  connection,
+  modelAdapter,
+  modelCatalog,
+  validateSelection,
+} from './models.ts'
 import { qianwenSearch } from './qianwen-search.ts'
 import { Store, HttpError } from './store.ts'
 import { Artifacts } from './artifacts.ts'
@@ -59,6 +65,17 @@ const PERSONA = `你是管策智研的政策研究助手。根据真实资料回
 多步骤任务简要说明进度；失败如实说明，不伪造成功。`
 /** 每人问题附图的累计上限：已存图片不会删除。 */
 const MAX_USER_IMAGE_BYTES = 200 * 2 ** 20
+/** 会话提问（含排队插入的提问）中出现过的图片 */
+const questionImages = (events: readonly SessionEvent[]) =>
+  events
+    .flatMap((event) =>
+      event.type === 'user/message'
+        ? [event.data]
+        : event.type === 'agent/inbox/spliced'
+          ? event.data.inserted
+          : [],
+    )
+    .flatMap((message) => imagesOf(message.content))
 
 /** DSH 本地附件存储，另加一种入库方式：一批图片全部规范化后先交给 count 按实际大小记账，通过才写入。 */
 class CountedAttachmentStore extends LocalAttachmentStore {
@@ -250,15 +267,7 @@ export class Agents {
   /** 本会话提问中出现过的图片；其他用户或会话的附件 id 一律视为不存在。 */
   async sessionImages(id: string) {
     // ponytail: 每次都扫描整段会话事件；会话很长、图片很多时再按会话缓存图片引用
-    return (await this.events(id))
-      .flatMap((event) =>
-        event.type === 'user/message'
-          ? [event.data]
-          : event.type === 'agent/inbox/spliced'
-            ? event.data.inserted
-            : [],
-      )
-      .flatMap((message) => imagesOf(message.content))
+    return questionImages(await this.events(id))
   }
   async image(userId: string, id: string, attachmentId: string) {
     this.store.session(userId, id)
@@ -346,6 +355,12 @@ export class Agents {
           question.source.kind === 'guance-retry' ? question.source.questionId : question.id
         retry = { answerId: answer.id, questionId, turn: lastTurn.data.turn + 1, question }
       }
+      // 纯文本模型的适配器遇到任何历史图片都会让整轮失败，先明确拒绝；已被省略成文字的历史图片也算在内，宁可偏严
+      if (!acceptsImages(selection.provider) && (images.length || questionImages(events).length))
+        throw new HttpError(
+          400,
+          `${config.name}暂不能读取图片，本次提问或本会话中含有图片；请改用其他供应商的模型。`,
+        )
       const store = this.ctx.attachments as CountedAttachmentStore
       const limits = store.imageLimits
       if (images.length > limits.maxImagesPerMessage)
@@ -457,12 +472,12 @@ export class Agents {
               scope.web.registerSearchProvider(qianwenSearch(selection.model))
             },
           })
-        else
+        else if (selection.provider !== 'campus')
           await web.plugin(WebSearch, {
             apiKeyEnv: config.key,
             model: selection.model,
           })
-        await web.plugin(WebTools, { fetch: true, search: true })
+        await web.plugin(WebTools, { fetch: true, search: selection.provider !== 'campus' })
         const sandbox = this.options.sandboxes
           ? new SessionSandbox(this.options.sandboxes, userId, id, agent.session.header.cwd)
           : undefined

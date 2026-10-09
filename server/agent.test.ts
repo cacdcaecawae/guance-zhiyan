@@ -17,7 +17,7 @@ import { TestModel, textChunks, toolChunks } from '../tests/support/model.ts'
 import { Store } from './store.ts'
 import { Agents } from './agent.ts'
 import { createApp } from './http.ts'
-import { modelAdapter } from './models.ts'
+import { campusFetch, connection, modelAdapter } from './models.ts'
 
 test('existing SQLite sessions migrate without losing ownership and keep model selection on reopen', async () => {
   const root = await mkdtemp(join(tmpdir(), 'gczy-migration-test-'))
@@ -597,17 +597,80 @@ test('native Messages streaming and search protocol with cited sources and expli
   }
 })
 
-test('all catalog models accept images; official Flash keeps in-history system updates', async () => {
+test('DeepSeek and Qianwen models accept images, campus models are text-only; official Flash keeps in-history system updates', async () => {
   for (const [provider, model] of [
     ['deepseek-official', 'deepseek-flash'],
     ['deepseek-official', 'deepseek-v4-pro'],
     ['qianwen', 'deepseek-v4.1-flash'],
     ['qianwen', 'deepseek-v4-pro-0813'],
+    ['campus', 'step-3.7-flash'],
+    ['campus', 'qwen3.8-27b'],
   ]) {
     const info = await modelAdapter(provider, () => undefined).resolveModel(provider, model)
-    assert.deepEqual(info.inputModalities, ['text', 'image'])
+    assert.deepEqual(info.inputModalities, provider === 'campus' ? ['text'] : ['text', 'image'])
+    if (provider === 'campus') assert.equal(info.defaultMaxTokens, 32768)
     assert.equal(info.systemPromptUpdate, model === 'deepseek-flash' ? 'in-history' : undefined)
   }
+})
+
+test('campus vLLM stream is normalized to standard Messages events; other endpoints pass through untouched', async () => {
+  const events = [
+    { type: 'content_block_start', index: 0, content_block: { type: 'thinking' } },
+    { type: 'content_block_delta', index: 0, delta: { type: 'thinking_delta', text: '思考' } },
+    { type: 'content_block_start', index: 1, content_block: { type: 'text' } },
+    { type: 'content_block_delta', index: 1, delta: { type: 'text_delta', text: '您好' } },
+    { type: 'content_block_stop', index: 1 },
+    { type: 'content_block_delta', index: 1, delta: { type: 'text_delta', text: '\n' } },
+    {
+      type: 'content_block_start',
+      index: 2,
+      content_block: { type: 'tool_use', id: 't1', name: 'library_search' },
+    },
+  ]
+  const raw = new TextEncoder().encode(
+    events.map((e) => `event: ${e.type}\ndata: ${JSON.stringify(e)}\n\n`).join(''),
+  )
+  const inner = (async () =>
+    new Response(
+      new ReadableStream({
+        start(controller) {
+          // 故意在 JSON 中间切块，验证跨块拼行
+          for (let at = 0; at < raw.length; at += 7) controller.enqueue(raw.slice(at, at + 7))
+          controller.close()
+        },
+      }),
+      { headers: { 'content-type': 'text/event-stream' } },
+    )) as typeof fetch
+  const base = connection({ provider: 'campus', model: '' }).baseURL
+  const text = await (await campusFetch(inner)(`${base}/v1/messages`)).text()
+  const lines = text.split('\n')
+  const fixed = lines
+    .filter((line) => line.startsWith('data:'))
+    .map((line) => JSON.parse(line.slice(5)))
+  // 每条 data 前的 event: 行与修正后的类型一致
+  assert.deepEqual(
+    lines.filter((line) => line.startsWith('event:')).map((line) => line.slice(6).trim()),
+    fixed.map((event) => event.type),
+  )
+  assert.deepEqual(fixed, [
+    { type: 'content_block_start', index: 0, content_block: { type: 'thinking', thinking: '' } },
+    { type: 'content_block_delta', index: 0, delta: { type: 'thinking_delta', thinking: '思考' } },
+    { type: 'content_block_start', index: 1, content_block: { type: 'text', text: '' } },
+    { type: 'content_block_delta', index: 1, delta: { type: 'text_delta', text: '您好' } },
+    { type: 'content_block_stop', index: 1 },
+    { type: 'ping' },
+    {
+      type: 'content_block_start',
+      index: 2,
+      content_block: { type: 'tool_use', id: 't1', name: 'library_search', input: {} },
+    },
+  ])
+  const untouched = await inner('https://api.deepseek.com/anthropic/v1/messages')
+  const other = (async () => untouched) as typeof fetch
+  assert.equal(
+    await campusFetch(other)('https://api.deepseek.com/anthropic/v1/messages'),
+    untouched,
+  )
 })
 
 test('HTTP: authentication, ownership, request boundaries and file download', async () => {
@@ -638,7 +701,7 @@ test('HTTP: authentication, ownership, request boundaries and file download', as
     }
     assert.deepEqual(
       catalog.providers.map((item) => item.id),
-      ['deepseek-official', 'qianwen'],
+      ['deepseek-official', 'qianwen', 'campus'],
     )
     const created = await fetch(base + '/api/sessions', { method: 'POST', headers })
     const { id } = (await created.json()) as { id: string }
@@ -1075,6 +1138,49 @@ test('question images count by their stored size and are never written past the 
     store.close()
     assert.ok(
       resolve(root).startsWith(resolve(tmpdir()) + sep) && root.includes('gczy-quota-test-'),
+    )
+    await rm(root, { recursive: true })
+  }
+})
+
+test('text-only campus models refuse image questions and sessions with images before a turn starts', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'gczy-campus-image-test-'))
+  const store = new Store(root)
+  const agents = await new Agents(store, {
+    adapter: new TestModel(() => textChunks('ok')),
+  }).init()
+  try {
+    const user = store.user('campus-image-test', 'Test')
+    const campus = { provider: 'campus', model: 'step-3.7-flash' }
+    const gif = {
+      mediaType: 'image/gif' as const,
+      data: 'R0lGODlhAQABAIAAAAAAAAAAACwAAAAAAQABAAACAkQBADs=',
+    }
+    const text = store.create(user.id)
+    await assert.rejects(agents.start(user.id, text.id, '看图', campus, [gif]), {
+      status: 400,
+      message: /校内模型暂不能读取图片/,
+    })
+    assert.equal(store.imageBytes(user.id), 0, 'a refused image is not stored')
+    await agents.start(user.id, text.id, '纯文本提问', campus)
+    await agents.active.get(text.id)?.done
+    const answer = (await agents.snapshot(user.id, text.id)).messages.at(-1)
+    assert.equal(answer?.role === 'assistant' && answer.status, 'done')
+
+    const pictured = store.create(user.id)
+    await agents.start(user.id, pictured.id, '看图', undefined, [gif])
+    await agents.active.get(pictured.id)?.done
+    await assert.rejects(agents.start(user.id, pictured.id, '换校内模型继续', campus), {
+      status: 400,
+    })
+    assert.equal(store.session(user.id, pictured.id).provider, 'deepseek-official')
+    await agents.start(user.id, pictured.id, '换回原模型继续')
+    await agents.active.get(pictured.id)?.done
+  } finally {
+    await agents.close()
+    store.close()
+    assert.ok(
+      resolve(root).startsWith(resolve(tmpdir()) + sep) && root.includes('gczy-campus-image-test-'),
     )
     await rm(root, { recursive: true })
   }

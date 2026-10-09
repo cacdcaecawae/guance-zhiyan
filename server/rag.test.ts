@@ -13,7 +13,7 @@ import { LibraryStore, type DocumentInput } from './rag-store.ts'
 import { KnowledgeLibrary, ragConfig, type RagConfig } from './rag.ts'
 import { Store } from './store.ts'
 
-type Operation = 'embed' | 'ensure' | 'create' | 'upsert' | 'delete' | 'query'
+type Operation = 'embed' | 'ensure' | 'create' | 'index' | 'upsert' | 'delete' | 'query'
 type Point = { id: string; vector: number[]; payload: { documentId: string; versionId: string } }
 const gate = (operation: Operation, after = 0) => ({
   operation,
@@ -47,19 +47,21 @@ async function backend(t: TestContext) {
     const buffers: Buffer[] = []
     for await (const buffer of request) buffers.push(buffer)
     const body = buffers.length ? JSON.parse(Buffer.concat(buffers).toString()) : {}
-    const match = /^(.*\/collections\/[^/]+)(\/points(?:\/(?:query|delete))?)?$/.exec(path)
+    const match = /^(.*\/collections\/[^/]+)(\/points(?:\/(?:query|delete))?|\/index)?$/.exec(path)
     const operation: Operation =
       path === '/embeddings'
         ? 'embed'
-        : match?.[2] === '/points/query'
-          ? 'query'
-          : match?.[2] === '/points/delete'
-            ? 'delete'
-            : match?.[2] === '/points'
-              ? 'upsert'
-              : request.method === 'GET'
-                ? 'ensure'
-                : 'create'
+        : match?.[2] === '/index'
+          ? 'index'
+          : match?.[2] === '/points/query'
+            ? 'query'
+            : match?.[2] === '/points/delete'
+              ? 'delete'
+              : match?.[2] === '/points'
+                ? 'upsert'
+                : request.method === 'GET'
+                  ? 'ensure'
+                  : 'create'
     calls.push({ operation, body, path })
     // Snapshot before a gate so a held response can contain the previous model's vector.
     const encoded =
@@ -102,8 +104,13 @@ async function backend(t: TestContext) {
       response.end()
       return
     }
+    // Mirrors Qdrant's documentId filter: only points of the listed documents are candidates.
+    const allowed: string[] | undefined = body.filter?.must?.[0]?.match?.any
+    const inScope = (id: string) =>
+      !allowed || allowed.includes(points.get(id)?.payload.documentId ?? '')
     if (operation === 'ensure')
       reply({ config: { params: { vectors: { size: 2, distance: 'Cosine' } } } })
+    else if (operation === 'index') reply({ status: 'completed' })
     else if (operation === 'upsert') {
       for (const point of body.points as Point[]) points.set(point.id, point)
       reply({ status: 'completed' })
@@ -126,6 +133,7 @@ async function backend(t: TestContext) {
                 .map((point) => point.id)
             : [...points.keys()])
         )
+          .filter(inScope)
           .slice(0, body.limit)
           .map((id, index) => ({ id, score: 1 / (index + 1) })),
       })
@@ -319,6 +327,92 @@ test('retrieval fuses lexical and dense rankings, filters stale versions, and ne
   await assert.rejects(pending, { name: 'AbortError' })
   waiting.release.resolve()
   control.gate = undefined
+})
+
+test('a metadata scope filters dense candidates in Qdrant and lexical candidates in SQLite', async (t) => {
+  const { library, documents, control, calls } = await backend(t)
+  for (const [id, title] of [
+    ['county', '裕安区养老规划'],
+    ['other', '其他地区养老规划'],
+  ])
+    await library.import({ id, title, text: `第一条 ${title}养老测试。` })
+  const inScope = documents.chunks(documents.current('county')!)[0].id
+  control.dense = [documents.chunks(documents.current('other')!)[0].id, inScope]
+  await assert.rejects(library.retrieve('养老', undefined, { area: '裕安区' }), {
+    code: 'RAG_NO_METADATA',
+  })
+  documents.saveMetadata([
+    {
+      id: 'county',
+      area: ['全国', '安徽', '六安市', '裕安区'],
+      level: '县',
+      period: '十四五',
+      year: null,
+      docType: '规划文件',
+      outline: false,
+    },
+    {
+      id: 'other',
+      area: ['全国', '海南'],
+      level: '省',
+      period: '十四五',
+      year: null,
+      docType: '规划文件',
+      outline: false,
+    },
+  ])
+  const results = await library.retrieve('养老', undefined, { area: '裕安区', period: '十四五' })
+  assert.deepEqual(
+    results.map((passage) => passage.documentId),
+    ['county'],
+    'neither dense nor lexical candidates leave the scope',
+  )
+  const query = calls.filter((call) => call.operation === 'query').at(-1)!
+  assert.deepEqual(query.body.filter, { must: [{ key: 'documentId', match: { any: ['county'] } }] })
+
+  const before = calls.length
+  assert.deepEqual(await library.retrieve('养老', undefined, { area: '西藏' }), [])
+  assert.equal(calls.length, before, 'an empty scope needs no embedding or vector query')
+  assert.equal(
+    (await library.retrieve('养老')).length,
+    2,
+    'unfiltered retrieval still covers the whole library',
+  )
+  assert.equal(library.list({ area: '安徽' }).total, 1)
+})
+
+test('the metadata CLI validates lines, stores rows and indexes documentId for existing collections', async (t) => {
+  const { library, store, config, calls } = await backend(t)
+  await library.import({ id: 'county', title: '裕安区规划', text: '第一条 自动化测试。' })
+  const file = join(store.root, 'metadata.jsonl')
+  const lines = [
+    JSON.stringify({
+      id: 'county',
+      area: ['全国', '安徽', '六安市', '裕安区'],
+      period: '十四五',
+    }),
+    '{"id": 1}',
+    '',
+  ].join('\n')
+  // Line 4 holds an invalid UTF-8 byte inside a string: still parseable once replaced, so it must be rejected.
+  const corrupt = Buffer.concat([
+    Buffer.from('{"id": "county", "period": "十四'),
+    Buffer.from([0xff]),
+    Buffer.from('五"}'),
+  ])
+  await writeFile(file, Buffer.concat([Buffer.from(lines + '\n'), corrupt, Buffer.from('\n')]))
+  const failed = await runCli(store.root, config, ['metadata', file])
+  assert.equal(failed.code, 1)
+  assert.match(failed.stderr, /第 2 行/)
+  assert.throws(() => library.scope({ area: '裕安区' }), { code: 'RAG_NO_METADATA' })
+  const indexes = () => calls.filter((call) => call.operation === 'index').length
+  const before = indexes()
+  const done = await runCli(store.root, config, ['metadata', file, '--skip-invalid'])
+  assert.equal(done.code, 0, done.stderr)
+  assert.match(done.stdout, /共 1 篇；另有 2 行无效数据被跳过/)
+  assert.match(done.stderr, /已跳过第 4 行/)
+  assert.equal(indexes(), before + 1)
+  assert.deepEqual(library.scope({ area: '裕安区', period: '十四五' }), ['county'])
 })
 
 test('a full page of unpublished vectors cannot hide the current source; the next successful version cleans failed drafts', async (t) => {

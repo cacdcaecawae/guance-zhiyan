@@ -5,7 +5,14 @@ import { once } from 'node:events'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { basename, join, resolve, sep } from 'node:path'
-import { documentInput, lexicalQuery, LibraryStore, type DocumentInput } from './rag-store.ts'
+import {
+  documentInput,
+  lexicalQuery,
+  LibraryStore,
+  metadataInput,
+  periodOf,
+  type DocumentInput,
+} from './rag-store.ts'
 import { Store } from './store.ts'
 
 test('a request write waits for an import process holding the SQLite write lock instead of failing', async () => {
@@ -290,6 +297,131 @@ test('single-character runs match as phrases, isolated characters are dropped, n
     store.close()
     assert.ok(resolve(root).startsWith(resolve(tmpdir()) + sep))
     assert.ok(basename(root).startsWith('gczy-rag-phrase-test-'))
+    await rm(root, { recursive: true })
+  }
+})
+
+test('metadata validates source exports, scopes current documents by area, period, type and year, and lists them in order', async () => {
+  assert.deepEqual(
+    metadataInput({
+      id: '33236',
+      title: '来源导出的其他字段被忽略',
+      area: ['全国', '安徽', '六安市', '裕安区'],
+      level: '县',
+      period: '十四五',
+      year: null,
+      doc_type: '规划文件',
+      outline: false,
+      tags: ['十四五'],
+    }),
+    {
+      id: '33236',
+      area: ['全国', '安徽', '六安市', '裕安区'],
+      level: '县',
+      period: '十四五',
+      year: null,
+      docType: '规划文件',
+      outline: false,
+    },
+  )
+  for (const invalid of [
+    null,
+    { area: [] },
+    { id: 'x', area: '安徽' },
+    { id: 'x', area: [''] },
+    { id: 'x', year: 2021.5 },
+    { id: 'x', year: 1800 },
+    { id: 'x', period: 'x'.repeat(65) },
+    { id: 'x', outline: 'yes' },
+  ])
+    assert.throws(() => metadataInput(invalid), { status: 400 }, JSON.stringify(invalid))
+  for (const [text, period] of [
+    ['十四五', '十四五'],
+    ['“十三五”时期', '十三五'],
+    ['第十个五年计划', '十五'],
+    ['第十四个五年规划', '十四五'],
+    ['第九个五年计划', '九五'],
+    ['第十五个五年规划', '十五五'],
+    ['2025年', undefined],
+  ])
+    assert.equal(periodOf(text!), period, text)
+  // Imported periods are stored in the form tools query; unrecognized labels are kept for display.
+  assert.equal(metadataInput({ id: 'x', period: '“十四五”时期' }).period, '十四五')
+  assert.equal(metadataInput({ id: 'x', period: '2021—2035年' }).period, '2021—2035年')
+
+  const root = await mkdtemp(join(tmpdir(), 'gczy-rag-metadata-test-'))
+  const store = new Store(root)
+  const library = new LibraryStore(store)
+  try {
+    const publish = (id: string, title: string) =>
+      library.publish(library.stage({ id, title, text: `第一条 ${title}正文。` }).versionId, null)
+    const meta = (id: string, area: string[], extra: Record<string, unknown> = {}) =>
+      metadataInput({ id, area: ['全国', ...area], level: '市', ...extra })
+    publish('county', '裕安区水利发展规划')
+    publish('city', '六安市综合规划')
+    publish('report', '六安市政府工作报告')
+    publish('province', '安徽省规划')
+    publish('nation', '国家规划纲要')
+    publish('jilin', '吉林市规划')
+    publish('old', '安徽省十二五规划')
+    publish('nation-plain', '未注明级别的国家规划')
+    library.saveMetadata([
+      meta('county', ['安徽', '六安市', '裕安区'], { period: '十四五', doc_type: '规划文件' }),
+      meta('city', ['安徽', '六安市'], { period: '十四五', doc_type: '规划文件' }),
+      meta('report', ['安徽', '六安市'], { doc_type: '政府工作报告', year: 2021 }),
+      meta('province', ['安徽'], { period: '十三五', doc_type: '规划文件' }),
+      meta('nation', [], { level: '国家', period: '十四五', doc_type: '规划文件' }),
+      meta('jilin', ['吉林', '吉林市'], { period: '十四五' }),
+      meta('old', ['安徽'], { period: '十二五' }),
+      // level is optional in the source export
+      metadataInput({ id: 'nation-plain', area: ['全国'] }),
+      // Metadata may arrive before its document; it stays out of scope until published.
+      meta('pending', ['安徽', '六安市'], { period: '十四五' }),
+    ])
+    const scope = (filter: Parameters<LibraryStore['documentIds']>[0]) =>
+      library.documentIds(filter).sort()
+    assert.deepEqual(scope({ area: '裕安区' }), ['county'])
+    assert.deepEqual(scope({ area: '六安市' }), ['city', 'county', 'report'])
+    assert.deepEqual(scope({ area: '六安' }), ['city', 'county', 'report'], 'prefix of a level')
+    assert.deepEqual(scope({ area: '安徽省' }), ['city', 'county', 'old', 'province', 'report'])
+    assert.deepEqual(scope({ area: '吉林' }), ['jilin'], 'an exact level wins over prefixes')
+    assert.deepEqual(
+      scope({ area: '全国' }),
+      ['nation', 'nation-plain'],
+      'national documents, not every path',
+    )
+    assert.deepEqual(scope({ area: '安徽', period: '十四五' }), ['city', 'county'])
+    assert.deepEqual(scope({ docType: '政府工作报告', year: 2021 }), ['report'])
+    assert.deepEqual(scope({ area: '海南' }), [])
+
+    const listed = library.listDocuments({ area: '六安市' })
+    assert.equal(listed.total, 3)
+    assert.deepEqual(listed.documents[0], {
+      documentId: 'report',
+      title: '六安市政府工作报告',
+      area: '安徽/六安市',
+      year: 2021,
+      docType: '政府工作报告',
+    })
+    assert.deepEqual(
+      library.listDocuments({ area: '安徽' }, '水利').documents.map((d) => d.documentId),
+      ['county'],
+    )
+    assert.equal(library.listDocuments({ area: '安徽' }, undefined, 2).documents.length, 2)
+    assert.deepEqual(
+      library.listDocuments({ area: '安徽' }).documents.map((d) => d.documentId),
+      ['report', 'old', 'province', 'city', 'county'],
+      'periods in time order (十二五 before 十三五), reports without a period first',
+    )
+
+    const scoped = await library.lexical('规划', 40, undefined, ['county', 'province'])
+    assert.ok(scoped.length > 0)
+    assert.ok(scoped.every((id) => ['county', 'province'].includes(library.passage(id).documentId)))
+    assert.deepEqual(await library.lexical('规划', 40, undefined, []), [])
+  } finally {
+    store.close()
+    assert.ok(resolve(root).startsWith(resolve(tmpdir()) + sep))
+    assert.ok(basename(root).startsWith('gczy-rag-metadata-test-'))
     await rm(root, { recursive: true })
   }
 })

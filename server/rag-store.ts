@@ -11,6 +11,22 @@ export interface DocumentInput {
   sourceUrl?: string
   publishedAt?: string
 }
+/** Filtering metadata imported separately (`pnpm rag metadata`); keys follow the source export. */
+export interface DocumentMetadata {
+  id: string
+  area: string[]
+  level: string | null
+  period: string | null
+  year: number | null
+  docType: string | null
+  outline: boolean
+}
+export interface LibraryFilter {
+  area?: string
+  period?: string
+  docType?: string
+  year?: number
+}
 export interface Passage {
   id: string
   versionId: string
@@ -109,6 +125,56 @@ export function documentInput(value: unknown): DocumentInput {
   }
 }
 
+/** 十四五 / “十四五”时期 / 第十四个五年规划 → 十四五; undefined when no plan period is named. */
+export function periodOf(text: string) {
+  const ordinal = /第(九|十[一二三四五]?)个五年/.exec(text)
+  if (ordinal) return ordinal[1] + '五'
+  return /九五|十[一二三四五]?五/.exec(text)?.[0]
+}
+/** Every period periodOf can name, oldest first; text order would put 十三五 before 十二五. */
+const PERIODS = ['九五', '十五', '十一五', '十二五', '十三五', '十四五', '十五五']
+
+export function metadataInput(value: unknown): DocumentMetadata {
+  if (!value || typeof value !== 'object') throw new HttpError(400, '元数据必须是 JSON 对象。')
+  const input = value as Record<string, unknown>
+  const label = (key: string) => {
+    const text = input[key]
+    if (text === undefined || text === null || text === '') return null
+    if (typeof text !== 'string' || text.length > 64 || !text.isWellFormed())
+      throw new HttpError(400, `元数据 ${key} 须为不超过 64 个字符的文本。`)
+    return text.trim() || null
+  }
+  const period = label('period')
+  const id = input.id
+  if (typeof id !== 'string' || !id.trim() || id.length > 256 || !id.isWellFormed())
+    throw new HttpError(400, '元数据 id 须为非空有效文本，最长 256 个字符。')
+  const area = input.area ?? []
+  if (
+    !Array.isArray(area) ||
+    area.length > 10 ||
+    area.some((part) => typeof part !== 'string' || !part.trim() || part.length > 64)
+  )
+    throw new HttpError(400, '元数据 area 须为不超过 10 级的地区名称数组。')
+  const year = input.year ?? null
+  if (
+    year !== null &&
+    (!Number.isSafeInteger(year) || (year as number) < 1900 || (year as number) > 2100)
+  )
+    throw new HttpError(400, '元数据 year 须为 1900–2100 的整数。')
+  if (input.outline !== undefined && typeof input.outline !== 'boolean')
+    throw new HttpError(400, '元数据 outline 须为布尔值。')
+  return {
+    id,
+    area: (area as string[]).map((part) => part.trim()),
+    level: label('level'),
+    // Tools query normalized periods; an unrecognized label is kept for display only.
+    period: period && (periodOf(period) ?? period),
+    year: year as number | null,
+    docType: label('doc_type'),
+    outline: input.outline === true,
+  }
+}
+
 const passageColumns = `c.id, c.version_id AS versionId, v.document_id AS documentId,
   v.title, v.source_url AS sourceUrl, v.published_at AS publishedAt,
   c.ordinal, c.start, c.end, c.heading, c.text`
@@ -134,7 +200,109 @@ export class LibraryStore {
         heading TEXT NOT NULL, text TEXT NOT NULL, UNIQUE(version_id, ordinal)
       );
       CREATE VIRTUAL TABLE IF NOT EXISTS rag_fts USING fts5(title, body, tokenize='unicode61');
+      CREATE TABLE IF NOT EXISTS rag_metadata(
+        document_id TEXT PRIMARY KEY, area TEXT NOT NULL, level TEXT, period TEXT, year INTEGER,
+        doc_type TEXT, outline INTEGER NOT NULL
+      );
     `)
+  }
+  saveMetadata(rows: DocumentMetadata[]) {
+    const db = this.store.db
+    const upsert = db.prepare(
+      `INSERT INTO rag_metadata VALUES(?, ?, ?, ?, ?, ?, ?) ON CONFLICT(document_id) DO UPDATE SET
+      area=excluded.area, level=excluded.level, period=excluded.period, year=excluded.year,
+      doc_type=excluded.doc_type, outline=excluded.outline`,
+    )
+    db.exec('BEGIN IMMEDIATE')
+    try {
+      for (const row of rows)
+        upsert.run(
+          row.id,
+          JSON.stringify(row.area),
+          row.level,
+          row.period,
+          row.year,
+          row.docType,
+          +row.outline,
+        )
+      db.exec('COMMIT')
+    } catch (error) {
+      db.exec('ROLLBACK')
+      throw error
+    }
+  }
+  /**
+   * Current documents matching every given field. An area matches any level of a document's area
+   * path, exactly when possible, otherwise by prefix either way (驻马店 ↔ 驻马店市, 安徽省 ↔ 安徽).
+   * ponytail: scans rag_metadata per query (~53k rows); index area parts if filters get slow.
+   */
+  documentIds(filter: LibraryFilter): string[] {
+    const where: string[] = []
+    const params: (string | number)[] = []
+    for (const [column, value] of [
+      ['m.period', filter.period],
+      ['m.doc_type', filter.docType],
+      ['m.year', filter.year],
+    ] as const)
+      if (value !== undefined) {
+        where.push(`${column}=?`)
+        params.push(value)
+      }
+    const run = (clause?: string, extra: string[] = []) =>
+      this.store.db
+        .prepare(
+          `SELECT m.document_id AS id FROM rag_metadata m JOIN rag_documents d ON d.id=m.document_id
+          WHERE ${[...where, ...(clause ? [clause] : [])].join(' AND ') || '1'}`,
+        )
+        .all(...params, ...extra)
+        .map((row) => row.id as string)
+    const area = filter.area
+    if (!area) return run()
+    // level is optional in the source export; a national-only area path also marks a national document.
+    if (/^(全国|国家|中央|中国)$/.test(area))
+      return run("(m.level='国家' OR m.area=?)", [JSON.stringify(['全国'])])
+    const exact = run('EXISTS(SELECT 1 FROM json_each(m.area) a WHERE a.value=?)', [area])
+    return exact.length
+      ? exact
+      : run(
+          `EXISTS(SELECT 1 FROM json_each(m.area) a WHERE a.value<>'全国' AND
+          (substr(a.value, 1, length(?))=? OR substr(?, 1, length(a.value))=a.value))`,
+          [area, area, area],
+        )
+  }
+  /** Documents in scope for library_list, ordered by period and year so a series reads in order. */
+  listDocuments(filter: LibraryFilter, title?: string, limit = 50) {
+    const ids = this.documentIds(filter)
+    const rows = this.store.db
+      .prepare(
+        `SELECT d.id AS documentId, v.title, m.area, m.period, m.year, m.doc_type AS docType,
+        m.outline FROM rag_documents d JOIN rag_versions v ON v.id=d.version_id
+        JOIN rag_metadata m ON m.document_id=d.id
+        WHERE d.id IN (SELECT value FROM json_each(?)) AND (? IS NULL OR instr(v.title, ?) > 0)
+        ORDER BY m.period, m.year, v.title, d.id`,
+      )
+      .all(JSON.stringify(ids), title ?? null, title ?? null)
+    // Stable sort keeping the SQL order within a period: none first (year-based reports), then
+    // periods in time order, unrecognized labels last.
+    const rank = (period: unknown) => {
+      const index = PERIODS.indexOf(period as string)
+      return period === null ? -1 : index < 0 ? PERIODS.length : index
+    }
+    rows.sort((a, b) => rank(a.period) - rank(b.period))
+    return {
+      total: rows.length,
+      documents: rows.slice(0, limit).map((row) => ({
+        documentId: row.documentId as string,
+        title: row.title as string,
+        area: (JSON.parse(row.area as string) as string[])
+          .filter((part) => part !== '全国')
+          .join('/'),
+        ...(row.period ? { period: row.period as string } : {}),
+        ...(row.year ? { year: row.year as number } : {}),
+        ...(row.docType ? { docType: row.docType as string } : {}),
+        ...(row.outline ? { outline: true } : {}),
+      })),
+    }
   }
   current(documentId: string): string | null {
     return (
@@ -256,13 +424,18 @@ export class LibraryStore {
     }
   }
   /** BM25 scores every match of a common word, so the query runs off the main thread. */
-  async lexical(query: string, limit = 40, signal?: AbortSignal): Promise<string[]> {
+  async lexical(
+    query: string,
+    limit = 40,
+    signal?: AbortSignal,
+    documentIds?: string[],
+  ): Promise<string[]> {
     const match = lexicalQuery(query)
     if (!match) return []
     // ponytail: one short-lived worker per query (~30 ms start, cold page cache); keep a
     // resident worker if full-library latency needs it.
     const worker = new Worker(new URL('./rag-lexical.ts', import.meta.url), {
-      workerData: { path: this.store.path, match, limit },
+      workerData: { path: this.store.path, match, limit, documentIds },
       // Process-level flags of the parent (e.g. under node --test) are invalid in a worker.
       execArgv: ['--disable-warning=ExperimentalWarning'],
     })

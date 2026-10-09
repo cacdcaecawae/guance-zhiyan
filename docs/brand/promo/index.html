@@ -1,0 +1,1208 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <title>管策智研 · 功能宣传片</title>
+    <!--
+  功能宣传片源页面：1920×1080、30 fps、约 40 秒。浏览器直接打开即可预览（自动播放）；
+  导出时由 render.mjs 调 window.renderFrame(i) 逐帧定格截图，再用 ffmpeg 合成 MP4。
+  配色取 src/styles/tokens.css 浅色值；画面中的问答、原文与文件均节选自系统实际运行记录（校内模型），不编造条文。
+-->
+    <script src="https://cdn.jsdelivr.net/npm/gsap@3.13.0/dist/gsap.min.js"></script>
+    <style>
+      :root {
+        --background: #efefec;
+        --sidebar: #f7f7f5;
+        --surface: #ffffff;
+        --card-border: #e3e3df;
+        --input-border: #c9c9c4;
+        --foreground: #1b1b1d;
+        --foreground-subtle: #4a4a4f;
+        --foreground-subtlest: #606066;
+        --foreground-faint: #737378;
+        --border: #e3e3df;
+        --selected: #e9e9e5;
+        --accent: #edf1f7;
+        --tag: #efefec;
+        --primary: #23395d;
+        --seal: #b0302a;
+        --find: #fbe8a2;
+        --trace-tool: #8a5522;
+      }
+      * {
+        box-sizing: border-box;
+        margin: 0;
+        padding: 0;
+      }
+      html,
+      body {
+        width: 1920px;
+        height: 1080px;
+        overflow: hidden;
+        background: var(--background);
+      }
+      body {
+        font-family: 'Microsoft YaHei', '微软雅黑', sans-serif;
+        color: var(--foreground);
+      }
+      #stage {
+        position: relative;
+        width: 1920px;
+        height: 1080px;
+        overflow: hidden;
+        background: var(--background);
+      }
+      .layer {
+        position: absolute;
+        inset: 0;
+      }
+
+      /* 竹简标志：几何同 src/app/logo.tsx 的 48×48 设计按 --u 缩放 */
+      .mark {
+        position: relative;
+        width: calc(48 * var(--u));
+        height: calc(48 * var(--u));
+      }
+      .mark i {
+        position: absolute;
+        top: calc(10 * var(--u));
+        width: calc(4 * var(--u));
+        height: calc(34 * var(--u));
+        border-radius: calc(0.8 * var(--u));
+        background: var(--foreground-subtlest);
+        overflow: hidden;
+      }
+      .mark i.on {
+        background: var(--seal);
+      }
+      .mark i b {
+        position: absolute;
+        left: 0;
+        right: 0;
+        top: 100%;
+        height: 60%;
+        opacity: 0;
+        background: linear-gradient(to top, transparent, rgb(255 255 255 / 0.75), transparent);
+      }
+
+      /* 1 开场 */
+      #intro {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 44px;
+      }
+      #intro .mark {
+        --u: 5px;
+      }
+      #intro .brand {
+        display: flex;
+        align-items: center;
+        gap: 40px;
+      }
+      #intro .brand img {
+        height: 112px;
+      }
+      #intro .slogan {
+        font-size: 34px;
+        letter-spacing: 6px;
+        color: var(--foreground-subtle);
+      }
+
+      /* 2 导入 */
+      #ingest .doc {
+        position: absolute;
+        width: 150px;
+        height: 190px;
+        border-radius: 14px;
+        background: var(--surface);
+        border: 2px solid var(--card-border);
+        box-shadow: 0 12px 30px rgb(0 0 0 / 0.08);
+      }
+      #ingest .doc span {
+        position: absolute;
+        left: 18px;
+        bottom: 18px;
+        font-size: 26px;
+        font-weight: 700;
+      }
+      #ingest .doc::before {
+        content: '';
+        position: absolute;
+        left: 18px;
+        right: 18px;
+        top: 24px;
+        height: 70px;
+        background: repeating-linear-gradient(to bottom, var(--border) 0 8px, transparent 8px 18px);
+      }
+      #ingest .row {
+        position: absolute;
+        left: 0;
+        right: 0;
+        top: 380px;
+        display: flex;
+        justify-content: center;
+        gap: 22px;
+      }
+      #ingest .slip {
+        position: relative;
+        width: 34px;
+        height: 300px;
+        border-radius: 6px;
+        background: var(--foreground-subtlest);
+      }
+      #ingest .slip.on {
+        background: var(--seal);
+      }
+      #ingest .tag {
+        position: absolute;
+        left: 50%;
+        top: -58px;
+        transform: translateX(-50%);
+        white-space: nowrap;
+        font-size: 20px;
+        padding: 6px 12px;
+        border-radius: 8px;
+        background: var(--surface);
+        border: 1px solid var(--card-border);
+        color: var(--foreground-subtle);
+      }
+
+      /* 3–6 产品界面（按 tokens 重画） */
+      #cam {
+        position: absolute;
+        left: 0;
+        top: 0;
+        width: 1920px;
+        height: 1080px;
+        transform-origin: 0 0;
+      }
+      #app {
+        position: absolute;
+        inset: 0;
+        display: flex;
+        background: var(--background);
+      }
+      #side {
+        width: 300px;
+        background: var(--sidebar);
+        border-right: 1px solid var(--border);
+        padding: 28px 20px;
+      }
+      #side .logo {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin-bottom: 6px;
+      }
+      #side .logo .mark {
+        --u: 0.75px;
+      }
+      #side .logo img {
+        height: 26px;
+      }
+      #side .school {
+        font-size: 13px;
+        color: var(--foreground-subtlest);
+        margin: 0 0 24px 46px;
+        letter-spacing: 1px;
+      }
+      #side .new {
+        height: 42px;
+        border-radius: 10px;
+        border: 1px solid var(--input-border);
+        background: var(--surface);
+        display: flex;
+        align-items: center;
+        padding: 0 14px;
+        font-size: 16px;
+        margin-bottom: 22px;
+      }
+      #side .label {
+        font-size: 13px;
+        color: var(--foreground-subtlest);
+        margin: 0 6px 10px;
+      }
+      #side .item {
+        height: 44px;
+        border-radius: 10px;
+        display: flex;
+        align-items: center;
+        padding: 0 14px;
+        font-size: 16px;
+        color: var(--foreground-subtle);
+        white-space: nowrap;
+        overflow: hidden;
+      }
+      #side .item.active {
+        background: var(--selected);
+        color: var(--foreground);
+      }
+      #main {
+        position: relative;
+        flex: 1;
+        background: var(--surface);
+      }
+      #main .head {
+        height: 60px;
+        border-bottom: 1px solid var(--border);
+        display: flex;
+        align-items: center;
+        padding: 0 32px;
+        font-size: 18px;
+        font-weight: 600;
+      }
+      .thread {
+        position: absolute;
+        left: 50%;
+        top: 60px;
+        width: 900px;
+        transform: translateX(-50%);
+        padding-top: 36px;
+      }
+      .bubble {
+        margin-left: auto;
+        max-width: 720px;
+        background: var(--tag);
+        border-radius: 16px;
+        padding: 16px 20px;
+        font-size: 18px;
+        line-height: 1.75;
+      }
+      .process {
+        margin-top: 26px;
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        padding: 14px 18px;
+      }
+      .process .title {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        font-size: 15px;
+        color: var(--foreground-faint);
+      }
+      .process .title .mark {
+        --u: 0.5px;
+      }
+      .step {
+        margin-top: 12px;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        font-size: 16px;
+        flex-wrap: wrap;
+      }
+      .step .tool {
+        color: var(--trace-tool);
+        font-weight: 600;
+      }
+      .step .q {
+        color: var(--foreground-subtle);
+      }
+      .chip {
+        display: inline-flex;
+        gap: 6px;
+        padding: 3px 10px;
+        border-radius: 999px;
+        background: var(--accent);
+        font-size: 14px;
+        color: var(--primary);
+      }
+      .chip em {
+        font-style: normal;
+        color: var(--foreground-subtlest);
+      }
+      .done {
+        color: #2f7a4a;
+        font-size: 14px;
+      }
+      .answer {
+        margin-top: 24px;
+        font-size: 18px;
+        line-height: 1.8;
+      }
+      .answer h4 {
+        margin: 18px 0 10px;
+        font-size: 19px;
+      }
+      .answer .rest {
+        color: transparent;
+      }
+      table.t {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 15px;
+        table-layout: fixed;
+      }
+      table.t th {
+        text-align: left;
+        font-weight: 600;
+        padding: 8px 10px;
+        border-bottom: 2px solid var(--foreground-subtlest);
+      }
+      table.t td {
+        padding: 9px 10px;
+        border-top: 1px solid var(--border);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        vertical-align: top;
+      }
+      .cite {
+        color: var(--primary);
+        text-decoration: underline;
+        text-underline-offset: 3px;
+      }
+      .composer {
+        position: absolute;
+        left: 50%;
+        bottom: 36px;
+        width: 900px;
+        transform: translateX(-50%);
+        border: 1px solid var(--input-border);
+        border-radius: 18px;
+        background: var(--surface);
+        padding: 16px 18px 58px;
+        min-height: 120px;
+        font-size: 18px;
+        line-height: 1.7;
+      }
+      .composer .ph {
+        color: var(--foreground-subtlest);
+      }
+      .composer .rest {
+        color: transparent;
+      }
+      .composer .model {
+        position: absolute;
+        left: 16px;
+        bottom: 14px;
+        font-size: 14px;
+        color: var(--foreground-subtle);
+        padding: 4px 12px;
+        border-radius: 999px;
+        background: var(--tag);
+      }
+      .composer .send {
+        position: absolute;
+        right: 14px;
+        bottom: 12px;
+        width: 38px;
+        height: 38px;
+        border-radius: 50%;
+        background: var(--primary);
+      }
+      .composer .send::after {
+        content: '';
+        position: absolute;
+        left: 13px;
+        top: 11px;
+        border: 7px solid transparent;
+        border-bottom: 11px solid #fff;
+        border-top: 0;
+      }
+      #panel {
+        position: absolute;
+        top: 0;
+        right: 0;
+        width: 680px;
+        height: 1080px;
+        background: var(--surface);
+        border-left: 1px solid var(--border);
+        box-shadow: -18px 0 40px rgb(0 0 0 / 0.06);
+        padding: 28px 30px;
+      }
+      #panel .tab {
+        display: inline-block;
+        font-size: 15px;
+        padding-bottom: 6px;
+        border-bottom: 2px solid var(--seal);
+        margin-bottom: 18px;
+      }
+      #panel h3 {
+        font-size: 22px;
+        margin-bottom: 8px;
+      }
+      #panel .meta {
+        font-size: 14px;
+        color: var(--foreground-subtlest);
+        margin-bottom: 18px;
+      }
+      #panel p {
+        font-size: 16px;
+        line-height: 1.8;
+        color: var(--foreground-subtle);
+        margin-bottom: 14px;
+      }
+      #panel .cap {
+        font-weight: 600;
+        color: var(--foreground);
+      }
+      #panel table.t td {
+        white-space: normal;
+      }
+      #panel tr.hit td {
+        background: var(--find);
+      }
+      #chat2 {
+        opacity: 0;
+      }
+      .files {
+        margin-top: 22px;
+        display: flex;
+        gap: 18px;
+      }
+      .file {
+        flex: 1;
+        display: flex;
+        gap: 14px;
+        align-items: center;
+        border: 1px solid var(--card-border);
+        border-radius: 14px;
+        padding: 16px;
+      }
+      .file .ic {
+        width: 46px;
+        height: 56px;
+        border-radius: 8px;
+        color: #fff;
+        font-size: 15px;
+        font-weight: 700;
+        display: grid;
+        place-items: center;
+        flex-shrink: 0;
+      }
+      .file .nm {
+        font-size: 15px;
+        line-height: 1.5;
+      }
+      .file .sz {
+        font-size: 13px;
+        color: var(--foreground-subtlest);
+      }
+      #preview {
+        position: absolute;
+        left: 50%;
+        top: 90px;
+        width: 820px;
+        height: 900px;
+        transform: translateX(-50%);
+        background: var(--surface);
+        border-radius: 16px;
+        border: 1px solid var(--card-border);
+        box-shadow: 0 30px 80px rgb(0 0 0 / 0.18);
+        padding: 54px 70px;
+        opacity: 0;
+      }
+      #preview h1 {
+        font-size: 26px;
+        text-align: center;
+        margin-bottom: 30px;
+      }
+      #preview .h2 {
+        font-size: 20px;
+        font-weight: 700;
+        margin: 18px 0 8px;
+      }
+      #preview .h3 {
+        font-size: 16px;
+        color: var(--foreground-subtle);
+        margin: 6px 0 6px 24px;
+      }
+
+      /* 鼠标与点击 */
+      #cursor {
+        position: absolute;
+        left: 0;
+        top: 0;
+        width: 34px;
+        height: 44px;
+        opacity: 0;
+      }
+      .ripple {
+        position: absolute;
+        width: 60px;
+        height: 60px;
+        margin: -30px 0 0 -30px;
+        border-radius: 50%;
+        border: 3px solid var(--primary);
+        opacity: 0;
+      }
+
+      /* 字幕 */
+      #caption {
+        position: absolute;
+        left: 50%;
+        bottom: 46px;
+        transform: translateX(-50%);
+        padding: 14px 34px;
+        border-radius: 999px;
+        background: rgb(27 27 29 / 0.82);
+        color: #fff;
+        font-size: 32px;
+        letter-spacing: 3px;
+        white-space: nowrap;
+        opacity: 0;
+      }
+      #note {
+        position: absolute;
+        left: 0;
+        right: 0;
+        bottom: 24px;
+        text-align: center;
+        font-size: 18px;
+        color: var(--foreground-subtlest);
+        opacity: 0;
+      }
+      #outro {
+        opacity: 0;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="stage">
+      <!-- 1 开场 / 7 结尾 共用的标志 -->
+      <div id="intro" class="layer">
+        <div class="brand">
+          <div class="mark" id="bigmark"></div>
+          <img src="wordmark.svg" alt="管策智研 LENS" id="bigword" />
+        </div>
+        <div class="slogan" id="slogan">面向人文社科研究者的政策文本研究工作台</div>
+      </div>
+
+      <!-- 2 导入文献库 -->
+      <div id="ingest" class="layer" style="opacity: 0">
+        <div class="doc" style="left: 120px; top: 440px">
+          <span style="color: #b3261e">PDF</span>
+        </div>
+        <div class="doc" style="left: 1650px; top: 300px">
+          <span style="color: #23395d">网页</span>
+        </div>
+        <div class="doc" style="left: 1650px; top: 620px">
+          <span style="color: #2b579a">Word</span>
+        </div>
+        <div class="row" id="slipsRow"></div>
+      </div>
+
+      <!-- 3–6 产品界面，整体放进相机 -->
+      <div id="cam" style="opacity: 0">
+        <div id="app">
+          <aside id="side">
+            <div class="logo">
+              <div class="mark" id="sidemark"></div>
+              <img src="wordmark.svg" alt="" />
+            </div>
+            <div class="school">中国社会科学院大学</div>
+            <div class="new">＋ 新对话</div>
+            <div class="label">最近</div>
+            <div class="item active" id="s1">裕安区水利规划要素整理</div>
+            <div class="item" id="s2">丽水市教育规划研析报告</div>
+          </aside>
+          <main id="main">
+            <div class="head" id="head">裕安区水利规划要素整理</div>
+            <div class="thread" id="chat1">
+              <div class="bubble" id="q1" style="opacity: 0"></div>
+              <div class="process" id="proc" style="opacity: 0">
+                <div class="title">
+                  <div class="mark" id="procmark"></div>
+                  <span id="procTitle">执行过程 · 进行中</span>
+                </div>
+                <div class="step" id="st1" style="opacity: 0">
+                  <span class="tool">检索文献库</span
+                  ><span class="q">六安市裕安区水利发展十四五规划 目标 任务</span>
+                  <span class="chip c" style="opacity: 0"><em>地区</em>六安市裕安区</span>
+                  <span class="chip c" style="opacity: 0"><em>规划期</em>十四五</span>
+                  <span class="chip c" style="opacity: 0"><em>文种</em>规划文件</span>
+                  <span class="done" style="opacity: 0">✓ 5 段原文</span>
+                </div>
+                <div class="step" id="st2" style="opacity: 0">
+                  <span class="tool">打开原文</span
+                  ><span class="q">文献 33236 · 主要指标表、投资表、保障措施</span
+                  ><span class="done">✓ 3 处</span>
+                </div>
+              </div>
+              <div class="answer" id="ans" style="opacity: 0">
+                <p id="ansIntro"></p>
+                <h4 id="ansH" style="opacity: 0">表一 · 量化目标</h4>
+                <table class="t" id="ansTable" style="opacity: 0">
+                  <colgroup>
+                    <col style="width: 30%" />
+                    <col style="width: 15%" />
+                    <col style="width: 30%" />
+                    <col style="width: 25%" />
+                  </colgroup>
+                  <thead>
+                    <tr>
+                      <th>要素项</th>
+                      <th>性质</th>
+                      <th>证据（原文 + 链接）</th>
+                      <th>经济学含义（分析）</th>
+                    </tr>
+                  </thead>
+                  <tbody id="ansRows"></tbody>
+                </table>
+              </div>
+            </div>
+            <div class="thread" id="chat2">
+              <div class="bubble">
+                作为教育经济学研究人员，请仅依据给定规划片段，整理并交付一份《丽水市教育事业“十四五”规划实施逻辑与保障机制研析报告（Word版）》及其配套《规划目标—投入基础—实施保障对照表（Excel表格）》。
+              </div>
+              <div class="process">
+                <div class="title"><span>执行过程 · 8 步 · 已完成</span></div>
+                <div class="step">
+                  <span class="tool">检索文献库</span><span class="q">× 4</span
+                  ><span class="tool">打开原文</span><span class="q">× 1</span
+                  ><span class="tool">生成文件</span><span class="q">× 2</span>
+                </div>
+              </div>
+              <div class="files" id="files">
+                <div class="file" id="fileWord">
+                  <div class="ic" style="background: #2b579a">DOCX</div>
+                  <div>
+                    <div class="nm">丽水市教育事业十四五规划实施逻辑与保障机制研析报告.docx</div>
+                    <div class="sz">Word · 14.7 KB</div>
+                  </div>
+                </div>
+                <div class="file" id="fileXls">
+                  <div class="ic" style="background: #217346">XLSX</div>
+                  <div>
+                    <div class="nm">规划目标—投入基础—实施保障对照表.xlsx</div>
+                    <div class="sz">Excel · 10.6 KB</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="composer" id="composer">
+              <span id="qtyped"></span><span class="rest" id="qrest"></span
+              ><span class="ph" id="ph">输入你的研究问题…</span>
+              <span class="model" id="model">校内模型 · Qwen3.8 27B</span>
+              <span class="send" id="send"></span>
+            </div>
+          </main>
+          <section id="panel" style="transform: translateX(700px)">
+            <div class="tab">原文</div>
+            <h3>六安市裕安区水利发展“十四五”规划</h3>
+            <div class="meta">文献编号 33236 · 规划文件 · 六安市裕安区 · 十四五</div>
+            <p>
+              要从重视水资源开发利用向重视水资源节约、保护和优化配置转变，着力提升水资源管理水平，提高节水意识。
+            </p>
+            <p class="cap">表3.6-1 六安市裕安区水利发展“十四五”规划主要指标表</p>
+            <table class="t">
+              <colgroup>
+                <col style="width: 22%" />
+                <col style="width: 9%" />
+                <col style="width: 41%" />
+                <col style="width: 13%" />
+                <col style="width: 15%" />
+              </colgroup>
+              <thead>
+                <tr>
+                  <th>目标领域</th>
+                  <th>序号</th>
+                  <th>主要指标</th>
+                  <th>规划目标</th>
+                  <th>备注</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>防洪减灾</td>
+                  <td>1</td>
+                  <td>江河堤防达标率（%）</td>
+                  <td>60</td>
+                  <td>预期性</td>
+                </tr>
+                <tr>
+                  <td>水资源节约集约利用</td>
+                  <td>2</td>
+                  <td>用水总量控制（亿m3）</td>
+                  <td>3.675</td>
+                  <td>约束性</td>
+                </tr>
+                <tr id="hitRow">
+                  <td></td>
+                  <td>3</td>
+                  <td>万元GDP用水量下降（%）</td>
+                  <td>15</td>
+                  <td>约束性</td>
+                </tr>
+                <tr>
+                  <td></td>
+                  <td></td>
+                  <td>其中万元工业增加值用水量下降（%）</td>
+                  <td>9</td>
+                  <td>约束性</td>
+                </tr>
+                <tr>
+                  <td></td>
+                  <td>4</td>
+                  <td>农田灌溉水有效利用系数</td>
+                  <td>0.55</td>
+                  <td>预期性</td>
+                </tr>
+                <tr>
+                  <td></td>
+                  <td>5</td>
+                  <td>水利工程新增年供水能力（亿m3）</td>
+                  <td></td>
+                  <td>预期性</td>
+                </tr>
+                <tr>
+                  <td></td>
+                  <td>6</td>
+                  <td>农村自来水普及率（%）</td>
+                  <td>93</td>
+                  <td>预期性</td>
+                </tr>
+                <tr>
+                  <td>水生态保护</td>
+                  <td>7</td>
+                  <td>水土保持率</td>
+                  <td>&gt;73</td>
+                  <td>预期性</td>
+                </tr>
+                <tr>
+                  <td>涉水事务监管</td>
+                  <td>8</td>
+                  <td>重要河湖水域岸线监管率</td>
+                  <td>&gt;80</td>
+                  <td>约束性</td>
+                </tr>
+              </tbody>
+            </table>
+          </section>
+          <div id="preview">
+            <h1>丽水市教育事业“十四五”规划实施逻辑与保障机制研析报告</h1>
+            <div class="h2">一、发展基础</div>
+            <div class="h3">（一）教育投入与设施建设基础</div>
+            <div class="h3">（二）教育普及与质量基础</div>
+            <div class="h3">（三）立德树人与信息化基础</div>
+            <div class="h2">二、总体目标与导向</div>
+            <div class="h3">（一）规划依据与定位</div>
+            <div class="h3">（二）主要任务框架</div>
+            <div class="h2">三、投入与保障机制</div>
+            <div class="h3">（一）党的领导（原文片段未展开）</div>
+            <div class="h3">（四）经济学风险与成本收益分析</div>
+            <div class="h2">四、实施监测机制</div>
+            <div class="h3">（一）监测评估的制度设计</div>
+            <div class="h3">（二）监测指标设计思路</div>
+            <div class="h2">五、结论与风险提示</div>
+            <div class="h3">（一）核心结论</div>
+            <div class="h3">（二）风险提示</div>
+          </div>
+        </div>
+        <svg id="cursor" viewBox="0 0 34 44">
+          <path
+            d="M2 2 L2 36 L11 28 L17 42 L23 39 L17 26 L30 26 Z"
+            fill="#1b1b1d"
+            stroke="#fff"
+            stroke-width="2.5"
+            stroke-linejoin="round"
+          />
+        </svg>
+        <div class="ripple" id="ripple"></div>
+      </div>
+
+      <div id="caption"></div>
+      <div id="note">示例问答节选自系统实际运行记录（校内模型）</div>
+    </div>
+
+    <script>
+      // ---- 真实内容（节选自运行记录） ----
+      const QUESTION =
+        '根据《六安市裕安区水利发展“十四五”规划》给定片段，抽取并结构化整理四类要素：量化目标、重点产业（若规划未直接出现产业表述，可识别为重点建设领域并注明）、政策工具、责任主体。要求形成四列表格，并对每项内容注明其性质属于“规划原文表述”或“政策意图推断”。'
+      const INTRO =
+        '已在共享文献库中定位到《六安市裕安区水利发展“十四五”规划》（文献编号 33236），并核对了主要指标表、投资表、工程清单与保障措施等关键片段。以下四类要素的抽取仅基于检索返回的原文片段，未使用片段外信息。'
+      const ROWS = [
+        [
+          '江河堤防达标率 60%（防洪减灾，预期性）',
+          '规划原文表述',
+          '“第2行：江河堤防达标率(%) 60 预期性”',
+          '预期性（软约束）目标，留有弹性',
+        ],
+        [
+          '用水总量控制 3.675 亿 m³（约束性）',
+          '规划原文表述',
+          '“第3行：用水总量控制(亿m3) 3.675 约束性”',
+          '数量型硬约束，设定水资源使用的“天花板”',
+        ],
+        [
+          '万元 GDP 用水量下降 15%（约束性）',
+          '规划原文表述',
+          '“第4行：万元GDP用水量下降(%) 15 约束性”',
+          '强度型硬约束，针对产出用水效率',
+        ],
+        [
+          '农田灌溉水有效利用系数 0.55（预期性）',
+          '规划原文表述',
+          '“第6行：农田灌溉水有效利用系数 0.55 预期性”',
+          '效率指标，反映农业用水转化率提升',
+        ],
+        [
+          '农村自来水普及率 93%（预期性）',
+          '规划原文表述',
+          '“第8行：农村自来水普及率(%) 93 预期性”',
+          '公共服务均等化指标',
+        ],
+      ]
+      const FPS = 30,
+        W = 1920,
+        H = 1080
+      const $ = (s) => document.querySelector(s)
+      const $$ = (s) => [...document.querySelectorAll(s)]
+
+      // ---- 搭建 DOM ----
+      const slips = (el) => {
+        for (let i = 0; i < 7; i++) {
+          const s = document.createElement('i')
+          s.style.left = `calc(${4 + i * 6} * var(--u))`
+          s.innerHTML = '<b></b>'
+          el.append(s)
+        }
+        return [...el.children]
+      }
+      const big = slips($('#bigmark')),
+        side = slips($('#sidemark')),
+        proc = slips($('#procmark'))
+      side[3].classList.add('on')
+      gsap.set(side[3], { y: -4.5 })
+      const TAGS = ['地区', '时期', '文种', '章节', '地区', '时期', '文种', '章节', '地区']
+      TAGS.forEach((t, i) => {
+        const s = document.createElement('div')
+        s.className = 'slip' + (i === 4 ? ' on' : '')
+        s.innerHTML = `<div class="tag">${t}</div>`
+        $('#slipsRow').append(s)
+      })
+      $('#ansIntro').innerHTML = `<span id="ait"></span><span class="rest" id="air">${INTRO}</span>`
+      $('#ansRows').innerHTML = ROWS.map(
+        (r, i) =>
+          `<tr style="opacity:0"><td>${r[0]}</td><td>${r[1]}</td><td><span class="cite"${i === 2 ? ' id="cite"' : ''}>原文</span> ${r[2]}</td><td>${r[3]}</td></tr>`,
+      ).join('')
+      $('#q1').textContent = QUESTION // 气泡在发送前透明，先填好文字，镜头和鼠标按最终版面测量
+
+      // 相机：把元素（或矩形）推到画面中心，scale 为放大倍数
+      const rectOf = (el) => {
+        const r = el.getBoundingClientRect()
+        return { x: r.left, y: r.top, w: r.width, h: r.height }
+      }
+      const camTo = (r, s) => ({
+        x: W / 2 - s * (r.x + r.w / 2),
+        y: H / 2 - s * (r.y + r.h / 2),
+        scale: s,
+      })
+      const center = (el, dx = 0, dy = 0) => {
+        const r = rectOf(el)
+        return { x: r.x + r.w / 2 + dx, y: r.y + r.h / 2 + dy }
+      }
+
+      const tl = gsap.timeline({ paused: true, defaults: { ease: 'power2.inOut' } })
+      const caption = (text, at, dur) => {
+        tl.call(
+          () => {
+            $('#caption').textContent = text
+          },
+          null,
+          at,
+        )
+          .fromTo(
+            '#caption',
+            { opacity: 0, y: 12 },
+            { opacity: 1, y: 0, duration: 0.4, ease: 'power2.out' },
+            at,
+          )
+          .to('#caption', { opacity: 0, duration: 0.3 }, at + dur - 0.3)
+      }
+      const type = (sel, restSel, text, at, dur) => {
+        const o = { n: 0 }
+        tl.to(
+          o,
+          {
+            n: text.length,
+            duration: dur,
+            ease: 'none',
+            onUpdate: () => {
+              const n = Math.round(o.n)
+              $(sel).textContent = text.slice(0, n)
+              $(restSel).textContent = text.slice(n)
+            },
+          },
+          at,
+        )
+      }
+      const text = (sel, value, at) =>
+        tl.call(
+          () => {
+            $(sel).textContent = value
+          },
+          null,
+          at,
+        )
+      const moveCursor = (p, at, dur = 0.7) =>
+        tl.to('#cursor', { x: p.x - 3, y: p.y - 3, duration: dur, ease: 'power3.inOut' }, at)
+      const click = (p, at) =>
+        tl
+          .set('#ripple', { left: p.x, top: p.y }, at)
+          .fromTo(
+            '#ripple',
+            { scale: 0.2, opacity: 0.9 },
+            { scale: 1.6, opacity: 0, duration: 0.5, ease: 'power2.out' },
+            at,
+          )
+          .to(
+            '#cursor',
+            { scale: 0.86, duration: 0.08, yoyo: true, repeat: 1, transformOrigin: '3px 3px' },
+            at,
+          )
+      // 标志出场（同 docs/brand/logo-readme.svg）：竹简自右向左依次生长，居中一枚上抽、转朱红、扫光一次，字标淡入轻推，标语随后
+      const reveal = (at) => {
+        tl.set(
+          big,
+          { scaleY: 0, y: 0, backgroundColor: '#606066', transformOrigin: '50% 100%' },
+          at,
+        ).set(['#bigword', '#slogan'], { opacity: 0 }, at)
+        big.forEach((el, i) =>
+          tl.to(el, { scaleY: 1, duration: 0.7, ease: 'expo.out' }, at + (6 - i) * 0.055),
+        )
+        tl.to(big[3], { y: -30, duration: 0.6, ease: 'back.out(2.2)' }, at + 0.6)
+          .to(big[3], { backgroundColor: '#b0302a', duration: 0.4, ease: 'power1.out' }, at + 0.62)
+          .fromTo(
+            big[3].firstChild,
+            { yPercent: 0, opacity: 1 },
+            { yPercent: -270, duration: 0.65, ease: 'power2.inOut', immediateRender: false },
+            at + 0.72,
+          )
+          .set(big[3].firstChild, { opacity: 0 }, at + 1.37)
+          .fromTo(
+            '#bigword',
+            { opacity: 0, x: -24 },
+            { opacity: 1, x: 0, duration: 0.8, ease: 'expo.out', immediateRender: false },
+            at + 0.4,
+          )
+          .fromTo(
+            '#slogan',
+            { opacity: 0, y: 16 },
+            { opacity: 1, y: 0, duration: 0.8, ease: 'expo.out', immediateRender: false },
+            at + 0.9,
+          )
+      }
+
+      function build() {
+        // 1 开场 0–4s（首帧为空白）
+        gsap.set(big, { scaleY: 0, transformOrigin: '50% 100%' })
+        gsap.set(['#bigword', '#slogan'], { opacity: 0 })
+        reveal(0.3)
+        tl.to('#intro', { opacity: 0, scale: 1.04, duration: 0.6 }, 3.6)
+
+        // 2 导入文献库 4–8s
+        const docs = $$('#ingest .doc'),
+          row = $$('#ingest .slip')
+        tl.to('#ingest', { opacity: 1, duration: 0.4 }, 4.0)
+          .fromTo(
+            docs,
+            { x: (i) => (i ? 260 : -260), opacity: 0 },
+            { x: 0, opacity: 1, duration: 0.6, stagger: 0.12, ease: 'power3.out' },
+            4.1,
+          )
+          .to(
+            docs,
+            {
+              left: 885,
+              top: 440,
+              scale: 0.3,
+              opacity: 0,
+              duration: 0.6,
+              stagger: 0.08,
+              ease: 'power2.in',
+            },
+            4.9,
+          )
+          .fromTo(
+            row,
+            { scaleY: 0, transformOrigin: '50% 100%' },
+            {
+              scaleY: 1,
+              duration: 0.5,
+              stagger: { each: 0.06, from: 'center' },
+              ease: 'back.out(1.6)',
+            },
+            5.3,
+          )
+          .fromTo(
+            '#ingest .tag',
+            { opacity: 0, y: 10 },
+            { opacity: 1, y: 0, duration: 0.3, stagger: 0.07 },
+            5.9,
+          )
+          .fromTo('#ingest', { scale: 1 }, { scale: 1.08, duration: 3.6, ease: 'none' }, 4.2)
+          .to('#ingest', { opacity: 0, duration: 0.5 }, 7.6)
+        caption('导入自有文献库，按章节切分、按元数据整理', 4.4, 3.4)
+
+        // 3 提问 8–14s。输入框按打完字的高度测量，镜头对准的是最终位置
+        $('#qrest').textContent = QUESTION
+        $('#ph').style.display = 'none'
+        const s1 = rectOf($('#composer')),
+          sendP = center($('#send'))
+        $('#qrest').textContent = ''
+        $('#ph').style.display = ''
+        const inputP = center($('#ph'))
+        tl.set('#cam', { x: 0, y: 0, scale: 1 }, 0)
+          .to('#cam', { opacity: 1, duration: 0.6 }, 8.0)
+          .set('#cursor', { x: 1500, y: 600 }, 8.0)
+          .to('#cursor', { opacity: 1, duration: 0.3 }, 8.4)
+        moveCursor(inputP, 8.6, 0.9)
+        click(inputP, 9.6)
+        tl.to('#cam', { ...camTo(s1, 1.75), duration: 0.8 }, 9.6).set(
+          '#ph',
+          { display: 'none' },
+          9.9,
+        )
+        type('#qtyped', '#qrest', QUESTION, 10.0, 2.4)
+        moveCursor(sendP, 12.0, 0.6)
+        click(sendP, 12.8)
+        tl.to('#cam', { x: 0, y: 0, scale: 1, duration: 0.8 }, 13.0)
+        caption('用自然语言提问', 8.8, 5.0)
+
+        // 4 检索 14–21s
+        text('#qtyped', '', 13.1)
+        text('#qrest', '', 13.1)
+        tl.set('#ph', { display: 'inline' }, 13.1)
+          .fromTo('#q1', { opacity: 0, y: 20 }, { opacity: 1, y: 0, duration: 0.4 }, 13.1)
+          .to('#proc', { opacity: 1, duration: 0.3 }, 13.7)
+        // 执行中的竹简扫动（同 globals.css 的 slip-scan）
+        proc.forEach((el, i) =>
+          tl.add(
+            gsap
+              .timeline({ repeat: 3 })
+              .to(el, { y: -1.5, backgroundColor: '#b0302a', duration: 0.12 }, (6 - i) * 0.15)
+              .to(el, { y: 0, backgroundColor: '#606066', duration: 0.18 }, (6 - i) * 0.15 + 0.24)
+              .to({}, { duration: 0 }, 1.5),
+            13.8,
+          ),
+        )
+        const step1 = rectOf($('#st1'))
+        tl.to('#st1', { opacity: 1, duration: 0.3 }, 14.2)
+          .to(
+            '#cam',
+            { ...camTo({ ...step1, x: step1.x - 40, w: step1.w + 80 }, 1.9), duration: 0.9 },
+            14.4,
+          )
+          .fromTo(
+            '#st1 .c',
+            { opacity: 0, scale: 0.7 },
+            { opacity: 1, scale: 1, duration: 0.35, stagger: 0.45, ease: 'back.out(2)' },
+            15.2,
+          )
+          .to('#st1 .done', { opacity: 1, duration: 0.3 }, 16.9)
+          .to('#cam', { x: 0, y: 0, scale: 1, duration: 0.8 }, 17.6)
+          .to('#st2', { opacity: 1, duration: 0.3 }, 18.0)
+        text('#procTitle', '执行过程 · 4 步 · 已完成', 19.6)
+        caption('按地区、规划期精准定位文献', 14.4, 5.4)
+
+        // 5 回答与原文 20–29s
+        tl.to('#ans', { opacity: 1, duration: 0.3 }, 19.8)
+        type('#ait', '#air', INTRO, 19.9, 1.6)
+        tl.to('#ansH', { opacity: 1, duration: 0.3 }, 21.5)
+          .to('#ansTable', { opacity: 1, duration: 0.3 }, 21.6)
+          .to('#ansRows tr', { opacity: 1, duration: 0.25, stagger: 0.28 }, 21.7)
+        const citeP = center($('#cite')),
+          cr = rectOf($('#cite'))
+        moveCursor(citeP, 23.4, 0.8)
+        tl.to(
+          '#cam',
+          { ...camTo({ x: cr.x - 380, y: cr.y - 120, w: 760, h: 240 }, 1.8), duration: 0.9 },
+          23.6,
+        )
+        click(citeP, 24.6)
+        tl.to('#cam', { x: 0, y: 0, scale: 1, duration: 0.7 }, 24.9).to(
+          '#panel',
+          { x: 0, duration: 0.6, ease: 'power3.out' },
+          25.0,
+        )
+        const hr = rectOf($('#hitRow')) // 测量时原文面板还在右侧画面外 700px
+        tl.to(
+          '#cam',
+          {
+            ...camTo({ x: hr.x - 700 - 40, y: hr.y - 160, w: hr.w + 80, h: 420 }, 1.6),
+            duration: 0.9,
+          },
+          25.8,
+        )
+          .fromTo(
+            '#hitRow td',
+            { backgroundColor: 'rgb(251 232 162 / 0)' },
+            { backgroundColor: 'rgb(251 232 162 / 1)', duration: 0.4 },
+            26.6,
+          )
+          .to('#cam', { x: 0, y: 0, scale: 1, duration: 0.8 }, 28.4)
+          .to('#panel', { x: 700, duration: 0.5, ease: 'power2.in' }, 28.9)
+        caption('每条结论都能追溯到原文', 21.0, 7.6)
+
+        // 6 交付文件 29–34s
+        const s2p = center($('#s2'))
+        moveCursor(s2p, 29.0, 0.7)
+        click(s2p, 29.8)
+        tl.call(
+          () => {
+            $('#s1').classList.remove('active')
+            $('#s2').classList.add('active')
+          },
+          null,
+          30.0,
+        )
+        text('#head', '丽水市教育规划研析报告', 30.0)
+        text('#model', '校内模型 · Step 3.7 Flash', 30.0)
+        tl.to('#chat1', { opacity: 0, duration: 0.2 }, 30.0)
+          .to('#chat2', { opacity: 1, duration: 0.3 }, 30.1)
+          .fromTo(
+            '.file',
+            { opacity: 0, y: 20, scale: 0.94 },
+            { opacity: 1, y: 0, scale: 1, duration: 0.4, stagger: 0.15, ease: 'back.out(1.8)' },
+            30.4,
+          )
+        const fw = center($('#fileWord'))
+        moveCursor(fw, 31.0, 0.7)
+        tl.to('#cam', { ...camTo(rectOf($('#files')), 1.5), duration: 0.8 }, 31.0)
+        click(fw, 31.9)
+        tl.to('#cam', { x: 0, y: 0, scale: 1, duration: 0.7 }, 32.1)
+          .fromTo(
+            '#preview',
+            { opacity: 0, y: 40 },
+            { opacity: 1, y: 0, duration: 0.5, ease: 'power3.out' },
+            32.2,
+          )
+          .to('#cursor', { opacity: 0, duration: 0.3 }, 32.4)
+        caption('一键交付研析报告（Word / Excel）', 29.4, 4.6)
+
+        // 7 结尾 34–40s
+        tl.to('#cam', { scale: 0.92, x: 77, y: 43, opacity: 0, duration: 0.8 }, 34.0)
+        text('#slogan', '私有部署，文献与数据留在本地', 34.6)
+        reveal(34.6)
+        tl.set('#intro', { opacity: 1, scale: 1 }, 34.6)
+          .to('#note', { opacity: 1, duration: 0.6 }, 36.2)
+          .to('#stage', { opacity: 1, duration: 3 }, 37.0) // 末尾留白至 40s
+      }
+
+      window.FRAMES = 40 * FPS
+      window.renderFrame = (i) => {
+        tl.seek(i / FPS, false)
+      }
+      window.ready = (async () => {
+        await document.fonts.ready
+        await Promise.all(
+          [...document.images].map((im) =>
+            im.complete
+              ? 0
+              : new Promise((r) => {
+                  im.onload = im.onerror = r
+                }),
+          ),
+        )
+        build()
+        tl.seek(0)
+        if (!navigator.webdriver) tl.play() // 直接打开时自动播放；导出时由 renderFrame 定格
+      })()
+    </script>
+  </body>
+</html>
