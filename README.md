@@ -4,10 +4,7 @@
 
 面向人文社科研究者的政策文本研究工作台。
 
-
 https://github.com/user-attachments/assets/bbc5a421-5e4e-428d-893f-53bd93df0b66
-
-
 
 ## 当前进度
 
