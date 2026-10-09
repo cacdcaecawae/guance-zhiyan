@@ -4,6 +4,11 @@
 
 面向人文社科研究者的政策文本研究工作台。
 
+
+https://github.com/user-attachments/assets/bbc5a421-5e4e-428d-893f-53bd93df0b66
+
+
+
 ## 当前进度
 
 已接入 Node.js / TypeScript 后端，直接复用 DeepSeek Harness 的 Agent Loop、模型适配器、会话持久化和联网工具。只有一个综合助手，支持多轮会话、Markdown 流式回答、停止生成、思考折叠、工具追踪，以及 Markdown / Word / Excel / CSV 文件生成与下载；Markdown、CSV 与纯文本文件可在右侧面板预览。提问可附带图片（选择、粘贴或拖入，PNG / JPEG / WebP / GIF），图片显示在问题上方并随问题发给模型；PDF 等其他文件附件敬请期待。原演示模式和虚构引用已移除。
