@@ -149,6 +149,8 @@ export function campusFetch(inner: typeof fetch): typeof fetch {
 }
 globalThis.fetch = campusFetch(globalThis.fetch)
 
+/** 校内模型的看图能力未验证，按纯文本接入；其他供应商的模型均按可看图声明。 */
+export const acceptsImages = (provider: string) => provider !== 'campus'
 export function modelAdapter(
   provider: string,
   attachments: DeepSeekAdapterOptions['resolveAttachments'],
@@ -165,7 +167,7 @@ export function modelAdapter(
         // DeepSeek 与千问按可看图声明，校内模型按纯文本；官方 Flash 沿用适配器默认表的 in-history 声明。
         models: config.models.map(({ id }) => ({
           id,
-          inputModalities: provider === 'campus' ? ['text'] : ['text', 'image'],
+          inputModalities: acceptsImages(provider) ? ['text', 'image'] : ['text'],
           // 校内模型上下文 262144；DSH 默认输出 256000 会与输入相加超限，输出（含思考）限 32768。
           ...(provider === 'campus' && { contextWindow: 262144, maxTokens: 32768 }),
           ...(id === 'deepseek-flash' && { systemPromptUpdate: 'in-history' as const }),

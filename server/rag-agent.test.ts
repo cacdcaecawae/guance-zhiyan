@@ -274,7 +274,17 @@ test('library_search passes a normalized scope, rejects an invalid one, and libr
       return plan.chunks
     },
     neighbors: (id: string, before: number, after: number) => sources.neighbors(id, before, after),
-    list: (filter: LibraryFilter, title?: string) => sources.listDocuments(filter, title),
+    list: (filter: LibraryFilter, title?: string) =>
+      title === '长标题'
+        ? {
+            total: 50,
+            documents: Array.from({ length: 50 }, (_, i) => ({
+              documentId: String(i),
+              title: '长'.repeat(500),
+              area: '安徽',
+            })),
+          }
+        : sources.listDocuments(filter, title),
   }
   const model = new TestModel((request) => {
     if (request.messages.at(-1)?.role === 'tool') return textChunks('已查看工具结果。')
@@ -283,6 +293,7 @@ test('library_search passes a normalized scope, rejects an invalid one, and libr
       return toolChunks('library_list', { area: '六安', period: '“十四五”时期' })
     if (input === 'invalid')
       return toolChunks('library_search', { query: '水利', period: '2025年' })
+    if (input === 'long') return toolChunks('library_list', { title: '长标题' })
     return toolChunks('library_search', {
       query: '水利',
       area: ' 裕安区 ',
@@ -311,6 +322,14 @@ test('library_search passes a normalized scope, rejects an invalid one, and libr
       period: '十四五',
       docType: '规划文件',
     })
+    // A long list stays within the same budget as the other library tools.
+    const [header, ...rows] = (await run('long')).split('\n')
+    assert.ok(rows.length > 0 && rows.length < 50)
+    assert.equal(
+      header,
+      `共 50 篇符合条件，以下列出前 ${rows.length} 篇（可加 title 关键词或更多条件缩小范围）：`,
+    )
+    assert.ok(rows.join('').length <= 6000)
   } finally {
     await agents.close()
     store.close()

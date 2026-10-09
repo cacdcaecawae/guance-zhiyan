@@ -62,17 +62,23 @@ function parse(data: Buffer, line: number): DocumentInput {
 /** Metadata lines replace earlier rows for the same id; documents not yet imported are kept for later. */
 export async function importMetadata(store: Store, path: string, skipInvalid = false) {
   // ponytail: reads the whole file (~19 MB for 53k documents); stream it if exports grow far larger.
-  const lines = (await readFile(path, 'utf8')).split('\n')
+  const data = await readFile(path)
+  // Fatal per line, as for documents: a replaced invalid byte could still parse and corrupt an id.
+  const decoder = new TextDecoder('utf-8', { fatal: true })
   const rows: DocumentMetadata[] = []
   let invalid = 0
-  for (const [index, line] of lines.entries()) {
-    if (!line.trim()) continue
+  for (let start = 0, line = 1; start < data.length; line++) {
+    let end = data.indexOf(10, start)
+    if (end < 0) end = data.length
+    const bytes = data.subarray(start, end)
+    start = end + 1
     try {
-      rows.push(metadataInput(JSON.parse(line)))
+      const text = decoder.decode(bytes)
+      if (text.trim()) rows.push(metadataInput(JSON.parse(text)))
     } catch {
-      if (!skipInvalid) throw new Error(`第 ${index + 1} 行不是有效的元数据 JSON，请核对字段。`)
+      if (!skipInvalid) throw new Error(`第 ${line} 行不是有效 UTF-8 元数据 JSON，请核对字段。`)
       invalid++
-      console.warn(`已跳过第 ${index + 1} 行无效元数据。`)
+      console.warn(`已跳过第 ${line} 行无效元数据。`)
     }
   }
   new LibraryStore(store).saveMetadata(rows)

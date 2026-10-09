@@ -131,6 +131,8 @@ export function periodOf(text: string) {
   if (ordinal) return ordinal[1] + '五'
   return /九五|十[一二三四五]?五/.exec(text)?.[0]
 }
+/** Every period periodOf can name, oldest first; text order would put 十三五 before 十二五. */
+const PERIODS = ['九五', '十五', '十一五', '十二五', '十三五', '十四五', '十五五']
 
 export function metadataInput(value: unknown): DocumentMetadata {
   if (!value || typeof value !== 'object') throw new HttpError(400, '元数据必须是 JSON 对象。')
@@ -142,6 +144,7 @@ export function metadataInput(value: unknown): DocumentMetadata {
       throw new HttpError(400, `元数据 ${key} 须为不超过 64 个字符的文本。`)
     return text.trim() || null
   }
+  const period = label('period')
   const id = input.id
   if (typeof id !== 'string' || !id.trim() || id.length > 256 || !id.isWellFormed())
     throw new HttpError(400, '元数据 id 须为非空有效文本，最长 256 个字符。')
@@ -164,7 +167,8 @@ export function metadataInput(value: unknown): DocumentMetadata {
     id,
     area: (area as string[]).map((part) => part.trim()),
     level: label('level'),
-    period: label('period'),
+    // Tools query normalized periods; an unrecognized label is kept for display only.
+    period: period && (periodOf(period) ?? period),
     year: year as number | null,
     docType: label('doc_type'),
     outline: input.outline === true,
@@ -254,7 +258,9 @@ export class LibraryStore {
         .map((row) => row.id as string)
     const area = filter.area
     if (!area) return run()
-    if (/^(全国|国家|中央|中国)$/.test(area)) return run("m.level='国家'")
+    // level is optional in the source export; a national-only area path also marks a national document.
+    if (/^(全国|国家|中央|中国)$/.test(area))
+      return run("(m.level='国家' OR m.area=?)", [JSON.stringify(['全国'])])
     const exact = run('EXISTS(SELECT 1 FROM json_each(m.area) a WHERE a.value=?)', [area])
     return exact.length
       ? exact
@@ -276,6 +282,13 @@ export class LibraryStore {
         ORDER BY m.period, m.year, v.title, d.id`,
       )
       .all(JSON.stringify(ids), title ?? null, title ?? null)
+    // Stable sort keeping the SQL order within a period: none first (year-based reports), then
+    // periods in time order, unrecognized labels last.
+    const rank = (period: unknown) => {
+      const index = PERIODS.indexOf(period as string)
+      return period === null ? -1 : index < 0 ? PERIODS.length : index
+    }
+    rows.sort((a, b) => rank(a.period) - rank(b.period))
     return {
       total: rows.length,
       documents: rows.slice(0, limit).map((row) => ({

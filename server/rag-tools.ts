@@ -154,12 +154,20 @@ export function registerLibrary(ctx: Context, library: Library) {
           const { total, documents } = library.list(filter ?? {}, title)
           if (!total)
             return '没有符合条件的文献。可放宽条件（例如改用上一级地区或去掉规划期）后再列出。'
+          // Same budget as the other library tools; at least one row is always listed.
+          const lines: string[] = []
+          let spent = 0
+          for (const line of documents.map((document) => JSON.stringify(document))) {
+            if (lines.length && spent + line.length > MAX_CHARS) break
+            lines.push(line)
+            spent += line.length
+          }
           return [
             `共 ${total} 篇符合条件` +
-              (total > documents.length
-                ? `，以下列出前 ${documents.length} 篇（可加 title 关键词或更多条件缩小范围）：`
+              (total > lines.length
+                ? `，以下列出前 ${lines.length} 篇（可加 title 关键词或更多条件缩小范围）：`
                 : '：'),
-            ...documents.map((document) => JSON.stringify(document)),
+            ...lines,
           ].join('\n')
         } catch (error) {
           failure(error, exec.signal)

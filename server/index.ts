@@ -7,6 +7,7 @@ import { configureNetwork } from './network.ts'
 import { sandboxConfig, Sandboxes } from './sandboxes.ts'
 import { LibraryStore } from './rag-store.ts'
 import { KnowledgeLibrary, ragConfig } from './rag.ts'
+import { modelCatalog } from './models.ts'
 
 const port = Number(process.env.PORT ?? 3001)
 const local = process.argv.includes('--local')
@@ -34,9 +35,9 @@ server.listen(port, local ? '127.0.0.1' : (process.env.HOST ?? '127.0.0.1'), () 
       ? `本机聊天已启动：${origin}（无需登录，仅供本机使用）。`
       : `后端已启动，端口 ${port}。学校身份认证尚未接入。`,
   )
-  if (!process.env.DEEPSEEK_API_KEY?.trim() && !process.env.QIANWEN_API_KEY?.trim())
+  if (!modelCatalog().providers.some((provider) => provider.configured))
     console.info(
-      '尚未配置供应商密钥，请在 server/.env 中填写 DEEPSEEK_API_KEY 或 QIANWEN_API_KEY 后重启。',
+      '尚未配置供应商密钥，请在 server/.env 中填写 DEEPSEEK_API_KEY、QIANWEN_API_KEY 或 CAMPUS_API_KEY 后重启。',
     )
 })
 let closing = false

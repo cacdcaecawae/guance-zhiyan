@@ -385,18 +385,22 @@ test('the metadata CLI validates lines, stores rows and indexes documentId for e
   const { library, store, config, calls } = await backend(t)
   await library.import({ id: 'county', title: '裕安区规划', text: '第一条 自动化测试。' })
   const file = join(store.root, 'metadata.jsonl')
-  await writeFile(
-    file,
-    [
-      JSON.stringify({
-        id: 'county',
-        area: ['全国', '安徽', '六安市', '裕安区'],
-        period: '十四五',
-      }),
-      '{"id": 1}',
-      '',
-    ].join('\n'),
-  )
+  const lines = [
+    JSON.stringify({
+      id: 'county',
+      area: ['全国', '安徽', '六安市', '裕安区'],
+      period: '十四五',
+    }),
+    '{"id": 1}',
+    '',
+  ].join('\n')
+  // Line 4 holds an invalid UTF-8 byte inside a string: still parseable once replaced, so it must be rejected.
+  const corrupt = Buffer.concat([
+    Buffer.from('{"id": "county", "period": "十四'),
+    Buffer.from([0xff]),
+    Buffer.from('五"}'),
+  ])
+  await writeFile(file, Buffer.concat([Buffer.from(lines + '\n'), corrupt, Buffer.from('\n')]))
   const failed = await runCli(store.root, config, ['metadata', file])
   assert.equal(failed.code, 1)
   assert.match(failed.stderr, /第 2 行/)
@@ -405,7 +409,8 @@ test('the metadata CLI validates lines, stores rows and indexes documentId for e
   const before = indexes()
   const done = await runCli(store.root, config, ['metadata', file, '--skip-invalid'])
   assert.equal(done.code, 0, done.stderr)
-  assert.match(done.stdout, /共 1 篇；另有 1 行无效数据被跳过/)
+  assert.match(done.stdout, /共 1 篇；另有 2 行无效数据被跳过/)
+  assert.match(done.stderr, /已跳过第 4 行/)
   assert.equal(indexes(), before + 1)
   assert.deepEqual(library.scope({ area: '裕安区', period: '十四五' }), ['county'])
 })

@@ -345,6 +345,9 @@ test('metadata validates source exports, scopes current documents by area, perio
     ['2025年', undefined],
   ])
     assert.equal(periodOf(text!), period, text)
+  // Imported periods are stored in the form tools query; unrecognized labels are kept for display.
+  assert.equal(metadataInput({ id: 'x', period: '“十四五”时期' }).period, '十四五')
+  assert.equal(metadataInput({ id: 'x', period: '2021—2035年' }).period, '2021—2035年')
 
   const root = await mkdtemp(join(tmpdir(), 'gczy-rag-metadata-test-'))
   const store = new Store(root)
@@ -360,6 +363,8 @@ test('metadata validates source exports, scopes current documents by area, perio
     publish('province', '安徽省规划')
     publish('nation', '国家规划纲要')
     publish('jilin', '吉林市规划')
+    publish('old', '安徽省十二五规划')
+    publish('nation-plain', '未注明级别的国家规划')
     library.saveMetadata([
       meta('county', ['安徽', '六安市', '裕安区'], { period: '十四五', doc_type: '规划文件' }),
       meta('city', ['安徽', '六安市'], { period: '十四五', doc_type: '规划文件' }),
@@ -367,6 +372,9 @@ test('metadata validates source exports, scopes current documents by area, perio
       meta('province', ['安徽'], { period: '十三五', doc_type: '规划文件' }),
       meta('nation', [], { level: '国家', period: '十四五', doc_type: '规划文件' }),
       meta('jilin', ['吉林', '吉林市'], { period: '十四五' }),
+      meta('old', ['安徽'], { period: '十二五' }),
+      // level is optional in the source export
+      metadataInput({ id: 'nation-plain', area: ['全国'] }),
       // Metadata may arrive before its document; it stays out of scope until published.
       meta('pending', ['安徽', '六安市'], { period: '十四五' }),
     ])
@@ -375,9 +383,13 @@ test('metadata validates source exports, scopes current documents by area, perio
     assert.deepEqual(scope({ area: '裕安区' }), ['county'])
     assert.deepEqual(scope({ area: '六安市' }), ['city', 'county', 'report'])
     assert.deepEqual(scope({ area: '六安' }), ['city', 'county', 'report'], 'prefix of a level')
-    assert.deepEqual(scope({ area: '安徽省' }), ['city', 'county', 'province', 'report'])
+    assert.deepEqual(scope({ area: '安徽省' }), ['city', 'county', 'old', 'province', 'report'])
     assert.deepEqual(scope({ area: '吉林' }), ['jilin'], 'an exact level wins over prefixes')
-    assert.deepEqual(scope({ area: '全国' }), ['nation'], 'national documents, not every path')
+    assert.deepEqual(
+      scope({ area: '全国' }),
+      ['nation', 'nation-plain'],
+      'national documents, not every path',
+    )
     assert.deepEqual(scope({ area: '安徽', period: '十四五' }), ['city', 'county'])
     assert.deepEqual(scope({ docType: '政府工作报告', year: 2021 }), ['report'])
     assert.deepEqual(scope({ area: '海南' }), [])
@@ -396,6 +408,11 @@ test('metadata validates source exports, scopes current documents by area, perio
       ['county'],
     )
     assert.equal(library.listDocuments({ area: '安徽' }, undefined, 2).documents.length, 2)
+    assert.deepEqual(
+      library.listDocuments({ area: '安徽' }).documents.map((d) => d.documentId),
+      ['report', 'old', 'province', 'city', 'county'],
+      'periods in time order (十二五 before 十三五), reports without a period first',
+    )
 
     const scoped = await library.lexical('规划', 40, undefined, ['county', 'province'])
     assert.ok(scoped.length > 0)
