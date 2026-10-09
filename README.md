@@ -1,5 +1,7 @@
 # 管策智研
 
+<img src="docs/brand/logo-readme.svg" alt="管策智研 LENS" height="64">
+
 面向人文社科研究者的政策文本研究工作台。
 
 ## 当前进度

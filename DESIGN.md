@@ -79,6 +79,7 @@
 - 这套点击与生成中动效是全站唯一的装饰动效；`prefers-reduced-motion` 时去掉过渡与动画，点击后直接到位，生成中静止
 - `Wordmark` 字标：衬线“管策智研”右接 LENS 铭牌（墨色实底、侧栏底色字），只用于侧栏顶部，与竹简横排，下方以衬线小字署名“中国社会科学院大学”
 - 宣传版（`docs/brand/logo-promo.svg` 浅底用、`logo-promo-dark.svg` 深底用）：竹简在上、“管策智研”在下，字标右上角挂放大镜方底角标，不带 LENS；用于答辩材料、海报等应用以外的场合
+- README 版（`docs/brand/logo-readme.svg`）：竹简与“管策智研 LENS”横排，竹简循环播放生成中的扫动动效，随浏览器深浅色换配色，`prefers-reduced-motion` 时静止为居中一枚抽出；用于仓库首页，改标志时同步
 - 字形取自 Noto Serif SC（SIL OFL 1.1），“管策智研”wght 600、“LENS”wght 700，转成路径（`logo-glyphs.ts`），不依赖用户字体；`public/favicon.svg` 是同一束竹简按 16px 像素网格画的版本，随浏览器深浅色换配色
 - 不使用或改动学校官方校徽；需要时按学校视觉识别规范原样放置并经学校同意。
 
