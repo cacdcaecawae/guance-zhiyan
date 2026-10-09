@@ -955,52 +955,45 @@
             { scale: 0.86, duration: 0.08, yoyo: true, repeat: 1, transformOrigin: '3px 3px' },
             at,
           )
-      // 竹简：弹起变红再落回；抽出并停住（回弹 + 光晕 + 扫光）
-      const pop = (el, at, lift) =>
-        tl
-          .to(el, { y: -lift, backgroundColor: '#b0302a', duration: 0.16, ease: 'power2.out' }, at)
-          .to(
-            el,
-            { y: 0, backgroundColor: '#606066', duration: 0.18, ease: 'power2.in' },
-            at + 0.24,
-          )
-      const pick = (el, at, lift, glow) =>
-        tl
-          .to(
-            el,
-            { y: -lift, backgroundColor: '#b0302a', duration: 0.55, ease: 'back.out(2.2)' },
-            at,
-          )
+      // 标志出场（同 docs/brand/logo-readme.svg）：竹简自右向左依次生长，居中一枚上抽、转朱红、扫光一次，字标淡入轻推，标语随后
+      const reveal = (at) => {
+        tl.set(
+          big,
+          { scaleY: 0, y: 0, backgroundColor: '#606066', transformOrigin: '50% 100%' },
+          at,
+        ).set(['#bigword', '#slogan'], { opacity: 0 }, at)
+        big.forEach((el, i) =>
+          tl.to(el, { scaleY: 1, duration: 0.7, ease: 'expo.out' }, at + (6 - i) * 0.055),
+        )
+        tl.to(big[3], { y: -30, duration: 0.6, ease: 'back.out(2.2)' }, at + 0.6)
+          .to(big[3], { backgroundColor: '#b0302a', duration: 0.4, ease: 'power1.out' }, at + 0.62)
           .fromTo(
-            el,
-            { boxShadow: '0 0 0 0 rgb(176 48 42 / 0)' },
-            {
-              boxShadow: `0 0 ${glow}px ${glow / 8}px rgb(176 48 42 / 0.55)`,
-              duration: 0.27,
-              ease: 'power1.out',
-            },
-            at,
-          )
-          .to(el, { boxShadow: '0 0 0 0 rgb(176 48 42 / 0)', duration: 0.6 }, at + 0.27)
-          .fromTo(
-            el.firstChild,
+            big[3].firstChild,
             { yPercent: 0, opacity: 1 },
-            { yPercent: -270, opacity: 1, duration: 0.65, ease: 'power2.inOut' },
-            at + 0.12,
+            { yPercent: -270, duration: 0.65, ease: 'power2.inOut', immediateRender: false },
+            at + 0.72,
           )
-          .set(el.firstChild, { opacity: 0 }, at + 0.78)
-      const converge = (marks, at, lift, glow) => {
-        ;[0, 6, 1, 5, 2, 4].forEach((i, k) => pop(marks[i], at + k * 0.18, lift))
-        pick(marks[3], at + 6 * 0.18 + 0.1, lift, glow)
+          .set(big[3].firstChild, { opacity: 0 }, at + 1.37)
+          .fromTo(
+            '#bigword',
+            { opacity: 0, x: -24 },
+            { opacity: 1, x: 0, duration: 0.8, ease: 'expo.out', immediateRender: false },
+            at + 0.4,
+          )
+          .fromTo(
+            '#slogan',
+            { opacity: 0, y: 16 },
+            { opacity: 1, y: 0, duration: 0.8, ease: 'expo.out', immediateRender: false },
+            at + 0.9,
+          )
       }
 
       function build() {
-        // 1 开场 0–4s
-        gsap.set(['#bigword', '#slogan'], { opacity: 0, y: 24 })
-        converge(big, 0.3, 30, 60)
-        tl.to('#bigword', { opacity: 1, y: 0, duration: 0.8, ease: 'power3.out' }, 1.7)
-          .to('#slogan', { opacity: 1, y: 0, duration: 0.8, ease: 'power3.out' }, 2.2)
-          .to('#intro', { opacity: 0, scale: 1.04, duration: 0.6 }, 3.6)
+        // 1 开场 0–4s（首帧为空白）
+        gsap.set(big, { scaleY: 0, transformOrigin: '50% 100%' })
+        gsap.set(['#bigword', '#slogan'], { opacity: 0 })
+        reveal(0.3)
+        tl.to('#intro', { opacity: 0, scale: 1.04, duration: 0.6 }, 3.6)
 
         // 2 导入文献库 4–8s
         const docs = $$('#ingest .doc'),
@@ -1184,19 +1177,10 @@
 
         // 7 结尾 34–40s
         tl.to('#cam', { scale: 0.92, x: 77, y: 43, opacity: 0, duration: 0.8 }, 34.0)
-        big.forEach((el) =>
-          tl.set(el, { y: 0, backgroundColor: '#606066', boxShadow: 'none' }, 34.0),
-        )
-        tl.set('#intro', { opacity: 1, scale: 1 }, 34.6).set(
-          ['#bigword', '#slogan'],
-          { opacity: 0, y: 24 },
-          34.6,
-        )
         text('#slogan', '私有部署，文献与数据留在本地', 34.6)
-        converge(big, 34.8, 30, 60)
-        tl.to('#bigword', { opacity: 1, y: 0, duration: 0.8, ease: 'power3.out' }, 35.9)
-          .to('#slogan', { opacity: 1, y: 0, duration: 0.8, ease: 'power3.out' }, 36.4)
-          .to('#note', { opacity: 1, duration: 0.6 }, 37.0)
+        reveal(34.6)
+        tl.set('#intro', { opacity: 1, scale: 1 }, 34.6)
+          .to('#note', { opacity: 1, duration: 0.6 }, 36.2)
           .to('#stage', { opacity: 1, duration: 3 }, 37.0) // 末尾留白至 40s
       }
 
