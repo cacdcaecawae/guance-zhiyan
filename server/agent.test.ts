@@ -17,7 +17,7 @@ import { TestModel, textChunks, toolChunks } from '../tests/support/model.ts'
 import { Store } from './store.ts'
 import { Agents } from './agent.ts'
 import { createApp } from './http.ts'
-import { modelAdapter } from './models.ts'
+import { campusFetch, connection, modelAdapter } from './models.ts'
 
 test('existing SQLite sessions migrate without losing ownership and keep model selection on reopen', async () => {
   const root = await mkdtemp(join(tmpdir(), 'gczy-migration-test-'))
@@ -597,17 +597,80 @@ test('native Messages streaming and search protocol with cited sources and expli
   }
 })
 
-test('all catalog models accept images; official Flash keeps in-history system updates', async () => {
+test('DeepSeek and Qianwen models accept images, campus models are text-only; official Flash keeps in-history system updates', async () => {
   for (const [provider, model] of [
     ['deepseek-official', 'deepseek-flash'],
     ['deepseek-official', 'deepseek-v4-pro'],
     ['qianwen', 'deepseek-v4.1-flash'],
     ['qianwen', 'deepseek-v4-pro-0813'],
+    ['campus', 'step-3.7-flash'],
+    ['campus', 'qwen3.8-27b'],
   ]) {
     const info = await modelAdapter(provider, () => undefined).resolveModel(provider, model)
-    assert.deepEqual(info.inputModalities, ['text', 'image'])
+    assert.deepEqual(info.inputModalities, provider === 'campus' ? ['text'] : ['text', 'image'])
+    if (provider === 'campus') assert.equal(info.defaultMaxTokens, 32768)
     assert.equal(info.systemPromptUpdate, model === 'deepseek-flash' ? 'in-history' : undefined)
   }
+})
+
+test('campus vLLM stream is normalized to standard Messages events; other endpoints pass through untouched', async () => {
+  const events = [
+    { type: 'content_block_start', index: 0, content_block: { type: 'thinking' } },
+    { type: 'content_block_delta', index: 0, delta: { type: 'thinking_delta', text: '思考' } },
+    { type: 'content_block_start', index: 1, content_block: { type: 'text' } },
+    { type: 'content_block_delta', index: 1, delta: { type: 'text_delta', text: '您好' } },
+    { type: 'content_block_stop', index: 1 },
+    { type: 'content_block_delta', index: 1, delta: { type: 'text_delta', text: '\n' } },
+    {
+      type: 'content_block_start',
+      index: 2,
+      content_block: { type: 'tool_use', id: 't1', name: 'library_search' },
+    },
+  ]
+  const raw = new TextEncoder().encode(
+    events.map((e) => `event: ${e.type}\ndata: ${JSON.stringify(e)}\n\n`).join(''),
+  )
+  const inner = (async () =>
+    new Response(
+      new ReadableStream({
+        start(controller) {
+          // 故意在 JSON 中间切块，验证跨块拼行
+          for (let at = 0; at < raw.length; at += 7) controller.enqueue(raw.slice(at, at + 7))
+          controller.close()
+        },
+      }),
+      { headers: { 'content-type': 'text/event-stream' } },
+    )) as typeof fetch
+  const base = connection({ provider: 'campus', model: '' }).baseURL
+  const text = await (await campusFetch(inner)(`${base}/v1/messages`)).text()
+  const lines = text.split('\n')
+  const fixed = lines
+    .filter((line) => line.startsWith('data:'))
+    .map((line) => JSON.parse(line.slice(5)))
+  // 每条 data 前的 event: 行与修正后的类型一致
+  assert.deepEqual(
+    lines.filter((line) => line.startsWith('event:')).map((line) => line.slice(6).trim()),
+    fixed.map((event) => event.type),
+  )
+  assert.deepEqual(fixed, [
+    { type: 'content_block_start', index: 0, content_block: { type: 'thinking', thinking: '' } },
+    { type: 'content_block_delta', index: 0, delta: { type: 'thinking_delta', thinking: '思考' } },
+    { type: 'content_block_start', index: 1, content_block: { type: 'text', text: '' } },
+    { type: 'content_block_delta', index: 1, delta: { type: 'text_delta', text: '您好' } },
+    { type: 'content_block_stop', index: 1 },
+    { type: 'ping' },
+    {
+      type: 'content_block_start',
+      index: 2,
+      content_block: { type: 'tool_use', id: 't1', name: 'library_search', input: {} },
+    },
+  ])
+  const untouched = await inner('https://api.deepseek.com/anthropic/v1/messages')
+  const other = (async () => untouched) as typeof fetch
+  assert.equal(
+    await campusFetch(other)('https://api.deepseek.com/anthropic/v1/messages'),
+    untouched,
+  )
 })
 
 test('HTTP: authentication, ownership, request boundaries and file download', async () => {
@@ -638,7 +701,7 @@ test('HTTP: authentication, ownership, request boundaries and file download', as
     }
     assert.deepEqual(
       catalog.providers.map((item) => item.id),
-      ['deepseek-official', 'qianwen'],
+      ['deepseek-official', 'qianwen', 'campus'],
     )
     const created = await fetch(base + '/api/sessions', { method: 'POST', headers })
     const { id } = (await created.json()) as { id: string }

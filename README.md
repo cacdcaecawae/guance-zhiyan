@@ -23,7 +23,7 @@ RAG 的配置、数据格式、导入、重建与备份见 [RAG 开发说明](do
 ```bash
 pnpm install
 pnpm exec playwright install chromium   # Linux 首次加 --with-deps
-# 复制 server/.env.example 为 server/.env，填写 DEEPSEEK_API_KEY 和/或 QIANWEN_API_KEY
+# 复制 server/.env.example 为 server/.env，填写 DEEPSEEK_API_KEY、QIANWEN_API_KEY、CAMPUS_API_KEY 中的至少一个
 # 可选：按 docs/RAG.md 配置 embedding、启动 Qdrant 并导入文献，启用共享文献库检索
 pnpm chat                              # 构建并启动本机聊天 http://127.0.0.1:3001
 ```
@@ -39,22 +39,27 @@ pnpm chat                              # 构建并启动本机聊天 http://127.
 | `DEEPSEEK_API_KEY`         | 仅后端使用的模型与搜索密钥                                 |
 | `QIANWEN_API_KEY`          | 千问 AI 平台按量付费密钥，用于该平台的 DeepSeek 对话与搜索 |
 | `QIANWEN_BASE_URL`         | 默认 `https://maas.qianwenaiapi.com/apps/anthropic`        |
+| `CAMPUS_API_KEY`           | 校内模型服务密钥（学校发放，仅校园网可达）                 |
+| `CAMPUS_BASE_URL`          | 默认 `http://10.27.66.12`，不含 `/v1`                      |
 | `DEEPSEEK_BASE_URL`        | 对话端点，默认 `https://api.deepseek.com/anthropic`        |
 | `DEEPSEEK_SEARCH_BASE_URL` | 独立搜索端点，默认 `https://api.deepseek.com/anthropic/v1` |
 | `APP_ORIGIN`               | 浏览器访问的准确来源，开发默认 `http://localhost:5173`     |
 | `HOST` / `PORT`            | 后端绑定地址与端口，默认 `127.0.0.1:3001`                  |
 | `DATA_DIR`                 | 私有数据目录，默认 `server/data`                           |
 
-全部模型都按可识别图片声明并发送图片；所选端点不支持图片时，由供应商返回的错误显示为回答失败，不改为纯文本重试。
+DeepSeek 与千问的模型按可识别图片声明并发送图片；所选端点不支持图片时，由供应商返回的错误显示为回答失败，不改为纯文本重试。校内模型的看图能力未验证，按纯文本声明。
 
 历史图片超过适配器的图片数量或字节预算时，复用 DSH 图片省略恢复：最早的图片引用改为明确的文字占位后重试，轨迹中显示“图片上下文调整”。该选择在后续请求和重启后保留；会话中的原图仍可查看，图片存储用量不变。需要模型再次查看已省略的图片时，重新附图提问；不删除原图，也不启用文本摘要压缩。
 
-网页在输入框右下方的同一个下拉中按平台选择模型，两家均运行 DeepSeek，不包含 Qwen 模型。发送成功后按会话保存选择，刷新和服务重启后恢复；生成期间禁止切换。切换供应商会将会话历史发送至所选平台，联网搜索也使用该平台与所选模型。密钥未配置时明确提示，不自动换供应商。模型由后端允许列表提供，不接受浏览器传入端点或密钥；原 `DEEPSEEK_MODEL` 配置已由网页选择替代。
+网页在输入框右下方的同一个下拉中按平台选择模型。发送成功后按会话保存选择，刷新和服务重启后恢复；生成期间禁止切换。切换供应商会将会话历史发送至所选平台，联网搜索也使用该平台与所选模型。密钥未配置时明确提示，不自动换供应商。模型由后端允许列表提供，不接受浏览器传入端点或密钥；原 `DEEPSEEK_MODEL` 配置已由网页选择替代。
 
 | 供应商        | Flash                    | Pro                    |
 | ------------- | ------------------------ | ---------------------- |
 | DeepSeek 官方 | `deepseek-flash`（V4.1） | `deepseek-v4-pro`      |
 | 千问 AI 平台  | `deepseek-v4.1-flash`    | `deepseek-v4-pro-0813` |
+| 校内模型      | `step-3.7-flash`         | `qwen3.8-27b`          |
+
+校内模型由学校 GPUStack（vLLM 0.28）提供，同一地址同时有 OpenAI 与 Anthropic 两种接口，本项目沿用 Anthropic Messages 适配器。该接口的流式事件与标准不完全一致（块起始缺字段、思考增量放在 `text` 字段、并行工具调用时在已结束的文本块上补发空白），`server/models.ts` 只对发往校内地址的流做最小修正后再交给 DSH；学校升级 vLLM 后删除。上下文为 262144，DSH 默认输出 256000 会与输入相加超限，校内模型输出（含思考）限 32768。校内模型没有联网搜索，网页抓取仍可用。不在校园网时可经 SSH 隧道转发，把 `CAMPUS_BASE_URL` 改为本机转发端口。
 
 模型名称和参数核对于 2026-09-24：[DeepSeek 模型列表](https://api-docs.deepseek.com/api/list-models/)、[官方 Anthropic 接口](https://api-docs.deepseek.com/guides/anthropic_api/)、[千问 Anthropic 接口](https://platform.qianwenai.com/docs/api-reference/chat/anthropic)。两家对话均复用 DSH `0.1.7-rc.1` 的 Anthropic Messages 适配器与流式协议，开启思考，`output_config.effort=high`，输出长度沿用 DSH 默认 `max_tokens=256000`（包含思考与正文），不发送 `budget_tokens` 或采样参数。模型列表按已核对文档维护，不能保证自动跟随将来的命名变化。
 

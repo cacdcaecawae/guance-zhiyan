@@ -457,12 +457,12 @@ export class Agents {
               scope.web.registerSearchProvider(qianwenSearch(selection.model))
             },
           })
-        else
+        else if (selection.provider !== 'campus')
           await web.plugin(WebSearch, {
             apiKeyEnv: config.key,
             model: selection.model,
           })
-        await web.plugin(WebTools, { fetch: true, search: true })
+        await web.plugin(WebTools, { fetch: true, search: selection.provider !== 'campus' })
         const sandbox = this.options.sandboxes
           ? new SessionSandbox(this.options.sandboxes, userId, id, agent.session.header.cwd)
           : undefined
