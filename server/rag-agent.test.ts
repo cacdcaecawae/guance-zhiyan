@@ -6,7 +6,7 @@ import { basename, join, resolve, sep } from 'node:path'
 import type { ContentBlock, GenerateOptions } from '@deepseek-ai/dsh-llm'
 import { Agents } from './agent.ts'
 import { Store } from './store.ts'
-import { LibraryStore, type Passage } from './rag-store.ts'
+import { LibraryStore, type LibraryFilter, type Passage } from './rag-store.ts'
 import { RagError, RAG_ERRORS } from './rag.ts'
 import { TestModel, textChunks, toolChunks } from '../tests/support/model.ts'
 
@@ -48,6 +48,7 @@ test('library tools are offered only with content; the model searches on demand 
       return query.includes('住房') ? housing.chunks : pension.chunks
     },
     neighbors: (id: string, before: number, after: number) => sources.neighbors(id, before, after),
+    list: (filter: LibraryFilter, title?: string) => sources.listDocuments(filter, title),
   }
   const cited = pension.chunks[0].id
   const model = new TestModel((request) => {
@@ -174,6 +175,7 @@ test('library_open retains the requested passage, budgets neighbors and preserve
       available: () => true,
       retrieve: async () => shortTail,
       neighbors: (id, before, after) => sources.neighbors(id, before, after),
+      list: () => ({ total: 0, documents: [] }),
     },
   }).init()
   try {
@@ -243,6 +245,81 @@ test('library_open retains the requested passage, budgets neighbors and preserve
   }
 })
 
+test('library_search passes a normalized scope, rejects an invalid one, and library_list names the scoped documents', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'gczy-rag-scope-test-'))
+  const store = new Store(root)
+  const sources = new LibraryStore(store)
+  const plan = sources.stage({
+    id: '33236',
+    title: '裕安区水利发展规划',
+    text: '第一条 自动化测试资料：水利。',
+  })
+  sources.publish(plan.versionId, null)
+  sources.saveMetadata([
+    {
+      id: '33236',
+      area: ['全国', '安徽', '六安市', '裕安区'],
+      level: '县',
+      period: '十四五',
+      year: null,
+      docType: '规划文件',
+      outline: false,
+    },
+  ])
+  const scopes: (LibraryFilter | undefined)[] = []
+  const library = {
+    available: () => true,
+    async retrieve(_query: string, _signal?: AbortSignal, filter?: LibraryFilter) {
+      scopes.push(filter)
+      return plan.chunks
+    },
+    neighbors: (id: string, before: number, after: number) => sources.neighbors(id, before, after),
+    list: (filter: LibraryFilter, title?: string) => sources.listDocuments(filter, title),
+  }
+  const model = new TestModel((request) => {
+    if (request.messages.at(-1)?.role === 'tool') return textChunks('已查看工具结果。')
+    const input = lastText(request)
+    if (input === 'list')
+      return toolChunks('library_list', { area: '六安', period: '“十四五”时期' })
+    if (input === 'invalid')
+      return toolChunks('library_search', { query: '水利', period: '2025年' })
+    return toolChunks('library_search', {
+      query: '水利',
+      area: ' 裕安区 ',
+      period: '第十四个五年规划',
+    })
+  })
+  const agents = await new Agents(store, { adapter: model, library }).init()
+  try {
+    const user = store.user('test-rag-scope', 'Test')
+    const run = async (input: string) => {
+      const session = store.create(user.id)
+      await agents.start(user.id, session.id, input)
+      await agents.active.get(session.id)?.done
+      return lastText(model.requests.at(-1)!)
+    }
+    await run('search')
+    assert.deepEqual(scopes, [{ area: '裕安区', period: '十四五' }])
+    assert.match(await run('invalid'), /筛选条件无效/)
+    assert.equal(scopes.length, 1, 'an invalid scope is reported, not silently dropped')
+    const listed = (await run('list')).split('\n')
+    assert.equal(listed[0], '共 1 篇符合条件：')
+    assert.deepEqual(JSON.parse(listed[1]), {
+      documentId: '33236',
+      title: '裕安区水利发展规划',
+      area: '安徽/六安市/裕安区',
+      period: '十四五',
+      docType: '规划文件',
+    })
+  } finally {
+    await agents.close()
+    store.close()
+    assert.ok(resolve(root).startsWith(resolve(tmpdir()) + sep))
+    assert.ok(basename(root).startsWith('gczy-rag-scope-test-'))
+    await rm(root, { recursive: true })
+  }
+})
+
 test('library search cancellation and failures stay tool-level, truthful and free of internal detail', async () => {
   const root = await mkdtemp(join(tmpdir(), 'gczy-rag-cancel-test-'))
   const store = new Store(root)
@@ -264,6 +341,9 @@ test('library search cancellation and failures stay tool-level, truthful and fre
       return []
     },
     neighbors(): Passage[] {
+      throw new Error('unused')
+    },
+    list() {
       throw new Error('unused')
     },
   }

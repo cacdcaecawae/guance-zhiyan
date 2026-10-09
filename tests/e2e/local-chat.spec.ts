@@ -77,6 +77,9 @@ for (const supplier of ['deepseek-official', 'qianwen']) {
         } else if (path.endsWith('/points')) {
           for (const point of body.points) pointIds.add(point.id)
           result = { status: 'completed', operation_id: 1 }
+        } else if (path.endsWith('/index')) {
+          expect(body.field_name).toBe('documentId')
+          result = { status: 'completed', operation_id: 1 }
         } else {
           expect(body.vectors).toEqual({ size: 2, distance: 'Cosine' })
           collectionExists = true

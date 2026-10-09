@@ -1,8 +1,14 @@
 import { createReadStream } from 'node:fs'
-import { open, unlink } from 'node:fs/promises'
+import { open, readFile, unlink } from 'node:fs/promises'
 import { resolve, join } from 'node:path'
 import { Store } from './store.ts'
-import { LibraryStore, documentInput, type DocumentInput } from './rag-store.ts'
+import {
+  LibraryStore,
+  documentInput,
+  metadataInput,
+  type DocumentInput,
+  type DocumentMetadata,
+} from './rag-store.ts'
 import { KnowledgeLibrary, ragConfig } from './rag.ts'
 import { configureNetwork } from './network.ts'
 
@@ -53,6 +59,26 @@ function parse(data: Buffer, line: number): DocumentInput {
   }
 }
 
+/** Metadata lines replace earlier rows for the same id; documents not yet imported are kept for later. */
+export async function importMetadata(store: Store, path: string, skipInvalid = false) {
+  // ponytail: reads the whole file (~19 MB for 53k documents); stream it if exports grow far larger.
+  const lines = (await readFile(path, 'utf8')).split('\n')
+  const rows: DocumentMetadata[] = []
+  let invalid = 0
+  for (const [index, line] of lines.entries()) {
+    if (!line.trim()) continue
+    try {
+      rows.push(metadataInput(JSON.parse(line)))
+    } catch {
+      if (!skipInvalid) throw new Error(`第 ${index + 1} 行不是有效的元数据 JSON，请核对字段。`)
+      invalid++
+      console.warn(`已跳过第 ${index + 1} 行无效元数据。`)
+    }
+  }
+  new LibraryStore(store).saveMetadata(rows)
+  return { saved: rows.length, invalid }
+}
+
 async function main() {
   const args = process.argv.slice(2)
   const skipInvalid = args.includes('--skip-invalid')
@@ -62,12 +88,37 @@ async function main() {
   )
   if (
     extra.length ||
-    (command !== 'import' && command !== 'reindex') ||
-    (command === 'import' ? !path || force : !!path || skipInvalid)
+    !['import', 'reindex', 'metadata'].includes(command) ||
+    (command === 'reindex' ? !!path || skipInvalid : !path || force)
   )
     throw new Error(
-      '用法：pnpm rag import <文献.jsonl> [--skip-invalid] 或 pnpm rag reindex [--force]',
+      '用法：pnpm rag import <文献.jsonl> [--skip-invalid]、pnpm rag reindex [--force] 或 pnpm rag metadata <元数据.jsonl> [--skip-invalid]',
     )
+  if (command === 'metadata') {
+    const store = new Store(resolve(process.env.DATA_DIR ?? 'server/data'))
+    try {
+      const { saved, invalid } = await importMetadata(store, resolve(path), skipInvalid)
+      const config = ragConfig()
+      if (config) {
+        // Existing collections predate the documentId index that metadata filtering relies on.
+        const disposeNetwork = await configureNetwork()
+        try {
+          const vectors = new KnowledgeLibrary(new LibraryStore(store), config).vectors!
+          await vectors.ensureCollection()
+          await vectors.ensureDocumentIndex()
+        } finally {
+          await disposeNetwork()
+        }
+      }
+      console.info(
+        `元数据导入完成，共 ${saved} 篇` +
+          (skipInvalid ? `；另有 ${invalid} 行无效数据被跳过。` : '。'),
+      )
+    } finally {
+      store.close()
+    }
+    return
+  }
   const config = ragConfig()
   if (!config) throw new Error('请先配置 EMBEDDING_URL、EMBEDDING_MODEL、EMBEDDING_DIMENSIONS。')
   const store = new Store(resolve(process.env.DATA_DIR ?? 'server/data'))

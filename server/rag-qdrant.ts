@@ -68,6 +68,7 @@ export class Qdrant {
       if (created !== true && created !== undefined) throw new Error('Qdrant 未确认集合创建成功。')
       // Concurrent initializers may create the collection first; verify its actual configuration.
       collection = await this.request('GET', '', undefined, signal)
+      await this.ensureDocumentIndex(signal)
     }
     const vectors = record(record(record(record(collection).config).params).vectors)
     if (vectors.size !== this.config.dimensions || vectors.distance !== 'Cosine')
@@ -106,10 +107,22 @@ export class Qdrant {
     }
   }
 
+  /** Filtering by documentId needs a payload index; without one a narrow filter scans every point. */
+  async ensureDocumentIndex(signal?: AbortSignal): Promise<void> {
+    const result = await this.request(
+      'PUT',
+      '/index?wait=true&timeout=25',
+      { field_name: 'documentId', field_schema: 'keyword' },
+      signal,
+    )
+    if (record(result).status !== 'completed') throw new Error('Qdrant 尚未完成文献编号索引。')
+  }
+
   async search(
     vector: number[],
     limit: number,
     signal?: AbortSignal,
+    documentIds?: string[],
   ): Promise<{ id: string; score: number }[]> {
     this.validateVector(vector)
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > 1000)
@@ -117,7 +130,15 @@ export class Qdrant {
     const result = await this.request(
       'POST',
       '/points/query?timeout=25',
-      { query: vector, limit, with_payload: false, with_vector: false },
+      {
+        query: vector,
+        limit,
+        with_payload: false,
+        with_vector: false,
+        ...(documentIds
+          ? { filter: { must: [{ key: 'documentId', match: { any: documentIds } }] } }
+          : {}),
+      },
       signal,
     )
     const points = record(result).points

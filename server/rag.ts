@@ -1,7 +1,13 @@
 import { Embeddings, type EmbeddingConfig } from './rag-embedding.ts'
 import { createHash, randomUUID } from 'node:crypto'
 import { Qdrant } from './rag-qdrant.ts'
-import { LibraryStore, documentInput, type DocumentInput, type Passage } from './rag-store.ts'
+import {
+  LibraryStore,
+  documentInput,
+  type DocumentInput,
+  type LibraryFilter,
+  type Passage,
+} from './rag-store.ts'
 
 export const RAG_ERRORS = {
   RAG_NOT_CONFIGURED: '后端尚未配置文献库向量服务，请联系管理员。',
@@ -9,7 +15,10 @@ export const RAG_ERRORS = {
   RAG_NOT_INDEXED: '文献索引尚未完成或在检索期间发生重建，请重试或联系管理员。',
   RAG_RETRIEVAL_FAILED: '文献库检索失败，请稍后重试或联系管理员。',
   RAG_INVALID_QUERY: '检索词须为 1–1000 个有效字符。',
+  RAG_INVALID_FILTER:
+    '筛选条件无效：至少给出一个条件；地区、标题关键词不超过 64 个字符，规划期写作“十四五”这类形式，年份为 1900–2100 的整数。',
   RAG_PASSAGE_NOT_FOUND: '没有找到该原文片段。',
+  RAG_NO_METADATA: '文献库尚未导入元数据，暂不能按地区、规划期或文种筛选；请去掉筛选条件后重试。',
 } as const
 
 export class RagError extends Error {
@@ -88,6 +97,22 @@ export class KnowledgeLibrary {
 
   neighbors(id: string, before: number, after: number) {
     return this.documents.neighbors(id, before, after)
+  }
+
+  private requireMetadata() {
+    if (!this.documents.store.db.prepare('SELECT 1 FROM rag_metadata LIMIT 1').get())
+      throw new RagError('RAG_NO_METADATA')
+  }
+
+  /** Current documents in a metadata scope; an empty scope is a valid answer, not an error. */
+  scope(filter: LibraryFilter) {
+    this.requireMetadata()
+    return this.documents.documentIds(filter)
+  }
+
+  list(filter: LibraryFilter, title?: string) {
+    this.requireMetadata()
+    return this.documents.listDocuments(filter, title)
   }
 
   /** Library tools are offered only when there is something configured to search. */
@@ -172,12 +197,14 @@ export class KnowledgeLibrary {
     return { versionId: staged.versionId, chunks: staged.chunks.length, skipped: false }
   }
 
-  async retrieve(query: string, signal?: AbortSignal): Promise<Passage[]> {
+  async retrieve(query: string, signal?: AbortSignal, filter?: LibraryFilter): Promise<Passage[]> {
     signal?.throwIfAborted()
     if (!query.trim() || query.length > 8000 || !query.isWellFormed())
       throw new Error('检索问题须为 1–8000 个有效字符。')
     const { embeddings, vectors } = this.configured()
     if (!this.documents.count()) throw new RagError('RAG_EMPTY')
+    const documentIds = filter ? this.scope(filter) : undefined
+    if (documentIds && !documentIds.length) return []
     // ponytail: anti-join over all current documents (~29 ms at 53k documents), run before and
     // after the search; record completion per fingerprint if library size makes this matter.
     const assertIndexed = (expected?: number) => {
@@ -210,7 +237,7 @@ export class KnowledgeLibrary {
       // Every query starts from the top: offset paging could skip current points while an
       // import's cleanup deletes stale points ranked ahead of them.
       for (const limit of [80, 1000]) {
-        const hits = await vectors.search(encoded, limit, signal)
+        const hits = await vectors.search(encoded, limit, signal, documentIds)
         assertGeneration()
         const active = new Set<string>()
         for (let offset = 0; offset < hits.length; offset += 256)
@@ -224,7 +251,7 @@ export class KnowledgeLibrary {
         if (limit === 1000) throw new Error('Too many stale candidates; finish import cleanup.')
       }
       signal?.throwIfAborted()
-      const lexical = await this.documents.lexical(query, 40, signal)
+      const lexical = await this.documents.lexical(query, 40, signal, documentIds)
       const scores = new Map<string, number>()
       for (const ranked of [dense.slice(0, 80), lexical])
         [...new Set(ranked)].forEach((id, rank) =>
