@@ -1,8 +1,8 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 8433 1000" role="img" aria-labelledby="t">
   <title id="t">管策智研 LENS</title>
-  <!-- README 用标志：静止时同 src/app/logo.tsx（居中一枚抽出为朱红），每 5 秒让这一枚落回再抽出，
-       抽出时的回弹、光晕、扫光与其余竹简的轻跳同 src/styles/globals.css 的点击动效；字标路径取自 src/app/logo-glyphs.ts。
-       配色取 tokens.css，随浏览器深浅色切换；减少动效时静止。改标志时同步本文件。 -->
+  <!-- README 用标志：静止时同 src/app/logo.tsx（居中一枚抽出为朱红）。每 6 秒一轮：居中一枚落回，
+       其余竹简左右交替弹起、向中间收拢，最后居中一枚回弹抽出，泛光、扫光，其余由近及远轻跳（同 globals.css 的点击动效）。
+       字标路径取自 src/app/logo-glyphs.ts；配色取 tokens.css，随浏览器深浅色切换；减少动效时静止。改标志时同步本文件。 -->
   <defs>
     <linearGradient id="glint" x1="0" y1="1" x2="0" y2="0">
       <stop offset="0" stop-color="#fff" stop-opacity="0"/>
@@ -19,45 +19,114 @@
     .slip { fill: var(--slip); }
     .ink { fill: var(--ink); }
     .lens { fill: var(--lens); }
-    .mid { transform: translateY(-6px); animation: pick 5000ms infinite; }
-    .on { fill: var(--seal); animation: tint 5000ms infinite, glow 5000ms infinite; }
-    .sweep { opacity: 0; animation: sweep 5000ms infinite; }
-    .w1 { animation: wave1 5000ms ease-in-out infinite; }
-    .w2 { animation: wave2 5000ms ease-in-out infinite; }
-    .w3 { animation: wave3 5000ms ease-in-out infinite; }
-    @keyframes pick {
-      0%, 50% { transform: translateY(-6px); animation-timing-function: ease-in; }
-      56%, 64% { transform: translateY(0); animation-timing-function: cubic-bezier(0.34, 1.56, 0.64, 1); }
-      75.00%, 100% { transform: translateY(-6px); }
+    .s0 { animation: s0 6000ms infinite; }
+    .s1 { animation: s1 6000ms infinite; }
+    .s2 { animation: s2 6000ms infinite; }
+    .s4 { animation: s4 6000ms infinite; }
+    .s5 { animation: s5 6000ms infinite; }
+    .s6 { animation: s6 6000ms infinite; }
+    .mid { transform: translateY(-6px); animation: s3 6000ms infinite; }
+    .on { fill: var(--seal); animation: tint 6000ms infinite, glow 6000ms infinite; }
+    .sweep { opacity: 0; animation: sweep 6000ms infinite; }
+    @keyframes s0 {
+      0.00% { transform: translateY(0px); fill: var(--slip); }
+      36.67% { transform: translateY(0px); fill: var(--slip); animation-timing-function: cubic-bezier(0.2, 0, 0, 1); }
+      39.33% { transform: translateY(-6px); fill: var(--seal); }
+      40.67% { transform: translateY(-6px); fill: var(--seal); animation-timing-function: ease-in; }
+      43.67% { transform: translateY(0px); fill: var(--slip); }
+      59.50% { transform: translateY(0px); fill: var(--slip); animation-timing-function: ease-in-out; }
+      62.30% { transform: translateY(-1.02px); fill: var(--slip); animation-timing-function: ease-in-out; }
+      66.50% { transform: translateY(0px); fill: var(--slip); }
+      100.00% { transform: translateY(0px); fill: var(--slip); }
+    }
+    @keyframes s1 {
+      0.00% { transform: translateY(0px); fill: var(--slip); }
+      42.67% { transform: translateY(0px); fill: var(--slip); animation-timing-function: cubic-bezier(0.2, 0, 0, 1); }
+      45.33% { transform: translateY(-6px); fill: var(--seal); }
+      46.67% { transform: translateY(-6px); fill: var(--seal); animation-timing-function: ease-in; }
+      49.67% { transform: translateY(0px); fill: var(--slip); }
+      58.67% { transform: translateY(0px); fill: var(--slip); animation-timing-function: ease-in-out; }
+      61.47% { transform: translateY(-1.7px); fill: var(--slip); animation-timing-function: ease-in-out; }
+      65.67% { transform: translateY(0px); fill: var(--slip); }
+      100.00% { transform: translateY(0px); fill: var(--slip); }
+    }
+    @keyframes s2 {
+      0.00% { transform: translateY(0px); fill: var(--slip); }
+      48.67% { transform: translateY(0px); fill: var(--slip); animation-timing-function: cubic-bezier(0.2, 0, 0, 1); }
+      51.33% { transform: translateY(-6px); fill: var(--seal); }
+      52.67% { transform: translateY(-6px); fill: var(--seal); animation-timing-function: ease-in; }
+      55.67% { transform: translateY(0px); fill: var(--slip); }
+      57.83% { transform: translateY(0px); fill: var(--slip); animation-timing-function: ease-in-out; }
+      60.63% { transform: translateY(-2.55px); fill: var(--slip); animation-timing-function: ease-in-out; }
+      64.83% { transform: translateY(0px); fill: var(--slip); }
+      100.00% { transform: translateY(0px); fill: var(--slip); }
+    }
+    @keyframes s4 {
+      0.00% { transform: translateY(0px); fill: var(--slip); }
+      51.67% { transform: translateY(0px); fill: var(--slip); animation-timing-function: cubic-bezier(0.2, 0, 0, 1); }
+      54.33% { transform: translateY(-6px); fill: var(--seal); }
+      55.67% { transform: translateY(-6px); fill: var(--seal); animation-timing-function: ease-in; }
+      58.67% { transform: translateY(0px); fill: var(--slip); }
+      57.83% { transform: translateY(0px); fill: var(--slip); animation-timing-function: ease-in-out; }
+      60.63% { transform: translateY(-2.55px); fill: var(--slip); animation-timing-function: ease-in-out; }
+      64.83% { transform: translateY(0px); fill: var(--slip); }
+      100.00% { transform: translateY(0px); fill: var(--slip); }
+    }
+    @keyframes s5 {
+      0.00% { transform: translateY(0px); fill: var(--slip); }
+      45.67% { transform: translateY(0px); fill: var(--slip); animation-timing-function: cubic-bezier(0.2, 0, 0, 1); }
+      48.33% { transform: translateY(-6px); fill: var(--seal); }
+      49.67% { transform: translateY(-6px); fill: var(--seal); animation-timing-function: ease-in; }
+      52.67% { transform: translateY(0px); fill: var(--slip); }
+      58.67% { transform: translateY(0px); fill: var(--slip); animation-timing-function: ease-in-out; }
+      61.47% { transform: translateY(-1.7px); fill: var(--slip); animation-timing-function: ease-in-out; }
+      65.67% { transform: translateY(0px); fill: var(--slip); }
+      100.00% { transform: translateY(0px); fill: var(--slip); }
+    }
+    @keyframes s6 {
+      0.00% { transform: translateY(0px); fill: var(--slip); }
+      39.67% { transform: translateY(0px); fill: var(--slip); animation-timing-function: cubic-bezier(0.2, 0, 0, 1); }
+      42.33% { transform: translateY(-6px); fill: var(--seal); }
+      43.67% { transform: translateY(-6px); fill: var(--seal); animation-timing-function: ease-in; }
+      46.67% { transform: translateY(0px); fill: var(--slip); }
+      59.50% { transform: translateY(0px); fill: var(--slip); animation-timing-function: ease-in-out; }
+      62.30% { transform: translateY(-1.02px); fill: var(--slip); animation-timing-function: ease-in-out; }
+      66.50% { transform: translateY(0px); fill: var(--slip); }
+      100.00% { transform: translateY(0px); fill: var(--slip); }
+    }
+    @keyframes s3 {
+      0.00% { transform: translateY(-6px); }
+      30.00% { transform: translateY(-6px); animation-timing-function: ease-in; }
+      35.00% { transform: translateY(0px); }
+      56.33% { transform: translateY(0px); animation-timing-function: cubic-bezier(0.34, 1.56, 0.64, 1); }
+      65.50% { transform: translateY(-6px); }
+      100.00% { transform: translateY(-6px); }
     }
     @keyframes tint {
-      0%, 50%, 70.00%, 100% { fill: var(--seal); }
-      56%, 64% { fill: var(--slip); }
+      0%, 30.00%, 61.33%, 100% { fill: var(--seal); }
+      35.00%, 56.33% { fill: var(--slip); }
     }
     @keyframes glow {
-      0%, 64%, 82.00%, 100% { filter: drop-shadow(0 0 0 transparent); }
-      69.40% { filter: drop-shadow(0 0 5px var(--glow)); }
+      0%, 56.33%, 71.33%, 100% { filter: drop-shadow(0 0 0 transparent); }
+      60.83% { filter: drop-shadow(0 0 5px var(--glow)); }
     }
     @keyframes sweep {
-      0%, 66.40% { opacity: 0; transform: translateY(0); }
-      66.42% { opacity: 1; transform: translateY(0); animation-timing-function: cubic-bezier(0.4, 0, 0.2, 1); }
-      79.40% { opacity: 1; transform: translateY(-55px); }
-      79.42%, 100% { opacity: 0; transform: translateY(-55px); }
+      0%, 58.33% { opacity: 0; transform: translateY(0); }
+      58.35% { opacity: 1; transform: translateY(0); animation-timing-function: cubic-bezier(0.4, 0, 0.2, 1); }
+      69.17% { opacity: 1; transform: translateY(-55px); }
+      69.18%, 100% { opacity: 0; transform: translateY(-55px); }
     }
-    @keyframes wave1 { 0%, 65.80%, 74.20%, 100% { transform: translateY(0); } 69.16% { transform: translateY(-2.55px); } }
-    @keyframes wave2 { 0%, 66.80%, 75.20%, 100% { transform: translateY(0); } 70.16% { transform: translateY(-1.70px); } }
-    @keyframes wave3 { 0%, 67.80%, 76.20%, 100% { transform: translateY(0); } 71.16% { transform: translateY(-1.02px); } }
     @media (prefers-reduced-motion: reduce) {
-      .mid, .on, .sweep, .w1, .w2, .w3 { animation: none; }
+      .slip, .mid, .on, .sweep { animation: none; }
     }
   </style>
   <g transform="scale(20.8333)">
-    <rect class="slip w3" x="4" y="10" width="4" height="34" rx="0.8"/>
-    <rect class="slip w2" x="10" y="10" width="4" height="34" rx="0.8"/>
-    <rect class="slip w1" x="16" y="10" width="4" height="34" rx="0.8"/>
-    <rect class="slip w1" x="28" y="10" width="4" height="34" rx="0.8"/>
-    <rect class="slip w2" x="34" y="10" width="4" height="34" rx="0.8"/>
-    <rect class="slip w3" x="40" y="10" width="4" height="34" rx="0.8"/>
+    <rect class="slip s0" x="4" y="10" width="4" height="34" rx="0.8"/>
+    <rect class="slip s1" x="10" y="10" width="4" height="34" rx="0.8"/>
+    <rect class="slip s2" x="16" y="10" width="4" height="34" rx="0.8"/>
+    <rect class="slip s4" x="28" y="10" width="4" height="34" rx="0.8"/>
+    <rect class="slip s5" x="34" y="10" width="4" height="34" rx="0.8"/>
+    <rect class="slip s6" x="40" y="10" width="4" height="34" rx="0.8"/>
     <g class="mid">
       <rect class="on" x="22" y="10" width="4" height="34" rx="0.8"/>
       <g clip-path="url(#mid)"><rect class="sweep" x="22" y="44" width="4" height="20.4" fill="url(#glint)"/></g>
