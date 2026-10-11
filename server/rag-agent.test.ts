@@ -188,13 +188,19 @@ test('library_open retains the requested passage, budgets neighbors and preserve
     }
     const check = (output: string, expected: Passage[], omitted: number) => {
       const lines = output.split('\n').filter((line) => line.startsWith('{'))
-      const returned = lines.map((line) => JSON.parse(line) as Passage & { link: string })
+      const returned = lines.map(
+        (line) => JSON.parse(line) as Passage & { link: string; cite: string },
+      )
       assert.deepEqual(
         returned.map((passage) => passage.id),
         expected.map((passage) => passage.id),
       )
       for (const [index, passage] of returned.entries()) {
         assert.equal(passage.link, `/api/library/passages/${expected[index].id}`)
+        assert.equal(
+          passage.cite,
+          `[原文](${passage.link})（planid ${expected[index].documentId}）`,
+        )
         assert.equal(passage.documentId, expected[index].documentId)
         assert.equal(passage.text, expected[index].text, 'passages remain whole')
         assert.equal(passage.title, expected[index].title)

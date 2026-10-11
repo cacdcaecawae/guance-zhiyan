@@ -12,17 +12,21 @@ export type Library = Pick<KnowledgeLibrary, 'available' | 'retrieve' | 'neighbo
 const MAX_CHARS = 6000
 
 const GUIDE = `共享文献库（管理员导入的政策、规划等文件）通过 library_search 按需检索。涉及政策、规划、法规、标准等资料的问题，先检索再回答，结果不足时换关键词再检索；需要某个片段的前后文时调用 library_open；标有 superseded 的片段已被新版本替代，不作为现行规定引用。问题指明地区、规划期、文种或年份时，给 library_search 加上 area、period、docType 或 year 筛选；问题点名某份文件或不确定库内有哪些相关文献时，先用 library_list 找到对应文献，再在其中检索。检索不到或片段不足以回答时，明确说明未在文献库中找到、查过哪些范围，不凭记忆编造，也不推测未收录文件的内容。闲聊和一般常识不必检索。联网资料与文献库证据分开说明。
-引用文献库时：
-- 陈述文献中的事实只依据检索返回的片段；每个要点在句末单独附 [原文](链接)（planid 文献编号），不同要点引用各自对应的片段，不要多个要点共用一条引用。链接只能使用工具返回的 link；文献编号（也称 planid、文献 id）用片段所属文献的 documentId，不用片段 id 代替。
-- 只引用与问题直接相关的文献：问题指定了地区、规划期、文件或片段时，只用这些文献作答，不拿其他地区、其他规划或片段之外的内容补充。
-- 放进引号的文字必须是片段中一字不差的连续原文，不加省略号、不拼接、不改字；做不到就不加引号，直接概括并附引用。数字、机构名和政策提法与所引片段保持一致。
-- 区分原文表述与分析：基于原文的推断、判断或建议单独成句，标明“（推断）”，不写成文献结论。`
+依据文献库作答时按以下格式：
+1. 开头一句写明依据的文献（标题与文献编号）。
+2. 正文按要点分条。每条只复述所引片段里明确写了的内容，条末原样复制该片段的 cite 字段作为引用；不同要点引用各自对应的片段，不要多个要点共用一条引用。片段没写的背景、意义、成效评价、数字换算和其他地区或年份的情况一律不写，宁缺不补。
+3. 只引用与问题直接相关的文献：问题指定了地区、规划期、文件或片段时，只用这些文献作答，不拿其他文献补充。
+4. 放进引号的文字必须是片段中一字不差的连续原文，不加省略号、不拼接、不改字；做不到就不加引号。数字、机构名和政策提法与所引片段保持一致。
+5. 题目要求分析、比较、判断或建议时，在要点之后另起“分析（推断）”一节，每条写明依据第几条要点；不要在结尾追加总结性发挥。
+文献编号（也称 planid、文献 id）是片段所属文献的 documentId，不是片段 id；链接只能使用工具返回的 link 或 cite。`
 
 function render(passages: Passage[], header: string, requiredId?: string) {
   const rendered = passages.map((passage) =>
     JSON.stringify({
       id: passage.id,
       link: `/api/library/passages/${passage.id}`,
+      // 现成的引用写法：模型原样复制，文献编号不再靠模型自己拼（迭代 1 中约四成回答漏写或写错）
+      cite: `[原文](/api/library/passages/${passage.id})（planid ${passage.documentId}）`,
       documentId: passage.documentId,
       title: passage.title,
       heading: passage.heading,
