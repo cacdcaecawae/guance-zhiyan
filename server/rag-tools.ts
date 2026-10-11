@@ -11,7 +11,12 @@ export type Library = Pick<KnowledgeLibrary, 'available' | 'retrieve' | 'neighbo
 /** Per tool result; a required passage stays whole even if its serialization exceeds this. */
 const MAX_CHARS = 6000
 
-const GUIDE = `共享文献库（管理员导入的政策、规划等文件）通过 library_search 按需检索。涉及政策、规划、法规、标准等资料的问题，先检索再回答，结果不足时换关键词再检索；陈述文献中的事实只依据检索返回的片段，并用 [原文](链接) 引用，链接只能使用工具返回的 link；需要写出文献编号（也可能被称为 planid 或文献 id）时，用片段所属文献的 documentId，不用片段 id 代替；需要某个片段的前后文时调用 library_open；标有 superseded 的片段已被新版本替代，不作为现行规定引用。问题指明地区、规划期、文种或年份时，给 library_search 加上 area、period、docType 或 year 筛选；不确定库内有哪些相关文献时，先用 library_list 列出再选。检索不到或片段不足以回答时，明确说明未在文献库中找到，不凭记忆编造。闲聊和一般常识不必检索。联网资料与文献库证据分开说明。`
+const GUIDE = `共享文献库（管理员导入的政策、规划等文件）通过 library_search 按需检索。涉及政策、规划、法规、标准等资料的问题，先检索再回答，结果不足时换关键词再检索；需要某个片段的前后文时调用 library_open；标有 superseded 的片段已被新版本替代，不作为现行规定引用。问题指明地区、规划期、文种或年份时，给 library_search 加上 area、period、docType 或 year 筛选；问题点名某份文件或不确定库内有哪些相关文献时，先用 library_list 找到对应文献，再在其中检索。检索不到或片段不足以回答时，明确说明未在文献库中找到、查过哪些范围，不凭记忆编造，也不推测未收录文件的内容。闲聊和一般常识不必检索。联网资料与文献库证据分开说明。
+引用文献库时：
+- 陈述文献中的事实只依据检索返回的片段；每个要点在句末单独附 [原文](链接)（planid 文献编号），不同要点引用各自对应的片段，不要多个要点共用一条引用。链接只能使用工具返回的 link；文献编号（也称 planid、文献 id）用片段所属文献的 documentId，不用片段 id 代替。
+- 只引用与问题直接相关的文献：问题指定了地区、规划期、文件或片段时，只用这些文献作答，不拿其他地区、其他规划或片段之外的内容补充。
+- 放进引号的文字必须是片段中一字不差的连续原文，不加省略号、不拼接、不改字；做不到就不加引号，直接概括并附引用。数字、机构名和政策提法与所引片段保持一致。
+- 区分原文表述与分析：基于原文的推断、判断或建议单独成句，标明“（推断）”，不写成文献结论。`
 
 function render(passages: Passage[], header: string, requiredId?: string) {
   const rendered = passages.map((passage) =>
