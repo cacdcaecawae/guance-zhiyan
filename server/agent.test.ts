@@ -605,6 +605,7 @@ test('DeepSeek and Qianwen models accept images, campus models are text-only; of
     ['qianwen', 'deepseek-v4-pro-0813'],
     ['campus', 'step-3.7-flash'],
     ['campus', 'qwen3.8-27b'],
+    ['campus', 'deepseek-v4-flash-0731-w8a8'],
   ]) {
     const info = await modelAdapter(provider, () => undefined).resolveModel(provider, model)
     assert.deepEqual(info.inputModalities, provider === 'campus' ? ['text'] : ['text', 'image'])
