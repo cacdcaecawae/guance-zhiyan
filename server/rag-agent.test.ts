@@ -197,10 +197,7 @@ test('library_open retains the requested passage, budgets neighbors and preserve
       )
       for (const [index, passage] of returned.entries()) {
         assert.equal(passage.link, `/api/library/passages/${expected[index].id}`)
-        assert.equal(
-          passage.cite,
-          `[原文](${passage.link})（planid ${expected[index].documentId}）`,
-        )
+        assert.equal(passage.cite, `[planid ${expected[index].documentId}·原文](${passage.link})`)
         assert.equal(passage.documentId, expected[index].documentId)
         assert.equal(passage.text, expected[index].text, 'passages remain whole')
         assert.equal(passage.title, expected[index].title)
