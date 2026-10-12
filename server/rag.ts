@@ -29,9 +29,12 @@ export class RagError extends Error {
   }
 }
 
+export type RerankConfig = { url: string; model: string; apiKey?: string }
+
 export type RagConfig = {
   embedding: EmbeddingConfig
   qdrant: { url: string; apiKey?: string }
+  rerank?: RerankConfig
 }
 
 export function ragConfig(env: NodeJS.ProcessEnv = process.env): RagConfig | undefined {
@@ -51,7 +54,63 @@ export function ragConfig(env: NodeJS.ProcessEnv = process.env): RagConfig | und
       url: env.QDRANT_URL?.trim() || 'http://127.0.0.1:6333',
       apiKey: env.QDRANT_API_KEY?.trim() || undefined,
     },
+    rerank: rerankConfig(env),
   }
+}
+
+function rerankConfig(env: NodeJS.ProcessEnv): RerankConfig | undefined {
+  const url = env.RERANK_URL?.trim()
+  const model = env.RERANK_MODEL?.trim()
+  if (!url && !model) return undefined
+  if (!url || !model) throw new Error('须同时配置 RERANK_URL 和 RERANK_MODEL。')
+  let parsed: URL
+  try {
+    parsed = new URL(url)
+  } catch {
+    throw new Error('重排服务地址无效。')
+  }
+  if (!['http:', 'https:'].includes(parsed.protocol) || parsed.username || parsed.password)
+    throw new Error('重排服务地址必须是无内嵌凭据的 HTTP 或 HTTPS 地址。')
+  return { url: parsed.href, model, apiKey: env.RERANK_API_KEY?.trim() || undefined }
+}
+
+/** Fused candidates sent to the reranker; the best 8 of them reach the model. */
+const RERANK_CANDIDATES = 30
+
+/**
+ * Orders items by a cross-encoder rerank service (`/v1/rerank`: query + documents → scores).
+ * Scores only order the candidates; there is still no relevance floor.
+ */
+export async function rerank<T extends { text: string }>(
+  config: RerankConfig,
+  query: string,
+  items: T[],
+  signal?: AbortSignal,
+): Promise<T[]> {
+  const timeout = AbortSignal.timeout(20_000)
+  const response = await fetch(config.url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(config.apiKey ? { Authorization: `Bearer ${config.apiKey}` } : {}),
+    },
+    body: JSON.stringify({ model: config.model, query, documents: items.map((item) => item.text) }),
+    signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
+  })
+  if (!response.ok) throw new Error(`重排服务返回 ${response.status}`)
+  const { results } = (await response.json()) as {
+    results?: { index: number; relevance_score: number }[]
+  }
+  if (
+    !Array.isArray(results) ||
+    results.length !== items.length ||
+    new Set(results.map((result) => result.index)).size !== items.length ||
+    results.some((result) => !items[result.index] || !Number.isFinite(result.relevance_score))
+  )
+    throw new Error('重排服务返回格式无效')
+  return results
+    .toSorted((a, b) => b.relevance_score - a.relevance_score)
+    .map((result) => items[result.index]!)
 }
 
 const digest = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex')
@@ -60,6 +119,7 @@ const digest = (value: unknown) => createHash('sha256').update(JSON.stringify(va
 export class KnowledgeLibrary {
   readonly documents: LibraryStore
   readonly embeddings?: Embeddings
+  private readonly reranker?: RerankConfig
   readonly vectors?: Qdrant
   readonly indexFingerprint?: string
   constructor(documents: LibraryStore, config?: RagConfig) {
@@ -79,6 +139,7 @@ export class KnowledgeLibrary {
       db.prepare('INSERT OR IGNORE INTO rag_library VALUES(1, ?)').run(randomUUID())
       const library = db.prepare('SELECT id FROM rag_library').get()!.id
       this.embeddings = new Embeddings(config.embedding)
+      this.reranker = config.rerank
       const collection = `rag_v1_${digest([library, this.embeddings.fingerprint])}`
       this.vectors = new Qdrant({
         ...config.qdrant,
@@ -197,6 +258,18 @@ export class KnowledgeLibrary {
     return { versionId: staged.versionId, chunks: staged.chunks.length, skipped: false }
   }
 
+  /** Reranks the fused candidates when a reranker is configured; on its failure keeps fused order. */
+  private async reorder(query: string, fused: Passage[], signal?: AbortSignal) {
+    if (!this.reranker || fused.length < 2) return fused
+    try {
+      return await rerank(this.reranker, query, fused.slice(0, RERANK_CANDIDATES), signal)
+    } catch (error) {
+      signal?.throwIfAborted()
+      console.warn('重排失败，按融合排序返回：', error instanceof Error ? error.message : error)
+      return fused
+    }
+  }
+
   async retrieve(query: string, signal?: AbortSignal, filter?: LibraryFilter): Promise<Passage[]> {
     signal?.throwIfAborted()
     if (!query.trim() || query.length > 8000 || !query.isWellFormed())
@@ -258,9 +331,10 @@ export class KnowledgeLibrary {
           scores.set(id, (scores.get(id) ?? 0) + 1 / (60 + rank + 1)),
         )
       const passages = this.documents.activePassages([...scores.keys()])
-      const results = passages
-        .sort((a, b) => scores.get(b.id)! - scores.get(a.id)! || a.id.localeCompare(b.id))
-        .slice(0, 8)
+      const fused = passages.sort(
+        (a, b) => scores.get(b.id)! - scores.get(a.id)! || a.id.localeCompare(b.id),
+      )
+      const results = (await this.reorder(query, fused, signal)).slice(0, 8)
       assertIndexed(generation)
       return results
     } catch (error) {
