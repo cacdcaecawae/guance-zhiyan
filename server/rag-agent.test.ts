@@ -8,6 +8,9 @@ import { Agents } from './agent.ts'
 import { Store } from './store.ts'
 import { LibraryStore, type LibraryFilter, type Passage } from './rag-store.ts'
 import { RagError, RAG_ERRORS } from './rag.ts'
+import { registerLibrary, type Library } from './rag-tools.ts'
+import type { Context } from '@deepseek-ai/cordis'
+import type { ToolDefinition, ToolRunContext } from '@deepseek-ai/dsh-tools'
 import { TestModel, textChunks, toolChunks } from '../tests/support/model.ts'
 
 const textOf = (content: readonly ContentBlock[]) =>
@@ -426,4 +429,26 @@ test('library search cancellation and failures stay tool-level, truthful and fre
     assert.ok(basename(root).startsWith('gczy-rag-cancel-test-'))
     await rm(root, { recursive: true })
   }
+})
+
+test('library tools stop searching once the question passes its deadline', async () => {
+  const tools = new Map<string, ToolDefinition>()
+  const ctx = {
+    systemPrompt: { section() {} },
+    tools: { register: (tool: ToolDefinition) => tools.set(tool.name, tool) },
+  } as unknown as Context
+  let searched = 0
+  const library = {
+    retrieve: async () => (searched++, []),
+    list: () => (searched++, { total: 0, documents: [] }),
+  } as unknown as Library
+  registerLibrary(ctx, library, Date.now() - 1)
+  const exec = { signal: new AbortController().signal } as ToolRunContext
+  for (const [name, args] of [
+    ['library_search', { query: '水利' }],
+    ['library_list', { area: '裕安区' }],
+    ['library_open', { id: INVENTED }],
+  ] as const)
+    assert.match(String(await tools.get(name)!.execute(args, exec)), /超过时限/, name)
+  assert.equal(searched, 0)
 })

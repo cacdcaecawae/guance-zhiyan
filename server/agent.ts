@@ -118,6 +118,8 @@ export interface AgentOptions {
   library?: Library
 }
 
+// ponytail: 固定 60 秒检索时限（单次问答目标 120 秒，留一半给作答）；需要按题型区分时再改成按问题估算。
+const SEARCH_BUDGET_MS = 60_000
 export class Agents {
   ctx = new Context()
   active = new Map<string, ActiveRun>()
@@ -447,7 +449,8 @@ export class Agents {
           })
         }
         // Offered only when the library has content; otherwise chat and web search work as usual.
-        if (this.options.library?.available()) registerLibrary(ctx, this.options.library)
+        if (this.options.library?.available())
+          registerLibrary(ctx, this.options.library, Date.now() + SEARCH_BUDGET_MS)
         else
           ctx.systemPrompt.section({
             name: 'shared-library',
