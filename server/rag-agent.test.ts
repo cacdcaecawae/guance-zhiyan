@@ -51,19 +51,13 @@ test('library tools are offered only with content; the model searches on demand 
     list: (filter: LibraryFilter, title?: string) => sources.listDocuments(filter, title),
   }
   const cited = pension.chunks[0].id
-  const isCheck = (request: GenerateOptions) => !!request.system?.includes('核对员')
   const model = new TestModel((request) => {
-    // 答后核对：去掉一句无依据的话；回答里没有的句子必须被忽略
-    if (isCheck(request))
-      return textChunks(
-        JSON.stringify({ remove: ['补充一句无依据的背景。', '回答里没有这一句。'] }),
-      )
     const question = textOf(
       request.messages.findLast((message) => message.role === 'user')!.content,
     )
     if (request.messages.at(-1)?.role === 'tool')
       return textChunks(
-        `依据文献作答。[原文](/api/library/passages/${cited}) 另一处[原文](/api/library/passages/${INVENTED}) 补充一句无依据的背景。`,
+        `依据文献作答。[原文](/api/library/passages/${cited}) 另一处[原文](/api/library/passages/${INVENTED})`,
       )
     if (!toolNames(request).includes('library_search')) return textChunks('当前没有文献库。')
     if (question.includes('上下文')) return toolChunks('library_open', { id: cited })
@@ -79,13 +73,8 @@ test('library tools are offered only with content; the model searches on demand 
     await agents.start(alice.id, session.id, '养老服务有哪些政策？')
     await agents.active.get(session.id)?.done
     assert.deepEqual(queries, ['养老服务'], 'the model writes the query and searches once')
-    assert.equal(model.requests.length, 3)
-    const [first, second, check] = model.requests
-    assert.ok(
-      isCheck(check) && !check.tools?.length,
-      'the answer check is a separate tool-free call',
-    )
-    assert.ok(lastText(check).includes(pension.chunks[0].text), 'the check sees the cited passage')
+    assert.equal(model.requests.length, 2)
+    const [first, second] = model.requests
     assert.ok(toolNames(first).includes('library_search'))
     assert.ok(toolNames(first).includes('library_open'))
     assert.match(systemOf(first), /library_search/)
@@ -107,8 +96,6 @@ test('library tools are offered only with content; the model searches on demand 
     assert.ok(text?.type === 'text')
     assert.ok(text.text.includes(`[原文](/api/library/passages/${cited})`))
     assert.ok(!text.text.includes(INVENTED), 'an unreturned passage link is reduced to its label')
-    assert.ok(!text.text.includes('补充一句无依据的背景'), 'the checked-out sentence is not shown')
-    assert.ok(text.text.includes('依据文献作答。'))
     const before = await agents.snapshot(alice.id, session.id)
     await agents.close()
     agents = await new Agents(store, { adapter: model, library }).init()
@@ -116,7 +103,7 @@ test('library tools are offered only with content; the model searches on demand 
 
     await agents.start(alice.id, session.id, '看看这段的上下文')
     await agents.active.get(session.id)?.done
-    const opened = lastText(model.requests.findLast((request) => !isCheck(request))!)
+    const opened = lastText(model.requests.at(-1)!)
     assert.ok(opened.includes(JSON.stringify(pension.chunks[0].text)))
 
     const parallel = store.create(bob.id)
