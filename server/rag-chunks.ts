@@ -37,6 +37,27 @@ function splitsSurrogate(text: string, offset: number) {
 }
 
 /**
+ * Header row of the Markdown table a chunk starts inside, when that row lies before the chunk.
+ * A long table splits between rows; later chunks carry the header in their heading so their
+ * cells keep their column names, while the chunk text stays an exact slice of the source.
+ */
+function tableHeader(text: string, start: number) {
+  const row = (from: number) => /^[ \t]*\|/.test(text.slice(from, from + 64))
+  let line = text.lastIndexOf('\n', start - 1) + 1
+  if (!row(line)) return undefined
+  while (line > 0) {
+    const previous = text.lastIndexOf('\n', line - 2) + 1
+    if (previous === line || !row(previous)) break
+    line = previous
+  }
+  if (line >= start) return undefined
+  const next = text.indexOf('\n', line)
+  const separator = next < 0 ? '' : text.slice(next + 1, next + 65)
+  if (!/^[ \t]*\|?[ \t]*:?-{3,}/.test(separator)) return undefined
+  return text.slice(line, next).trim().slice(0, 300)
+}
+
+/**
  * Offsets are UTF-16 indices for text.slice(start, end); ordinals start at zero. A heading line
  * never forms a chunk by itself, and a chunk's heading is the path its merged sections share.
  */
@@ -59,7 +80,14 @@ export function chunkText(text: string): Chunk[] {
         if (text[end - 1] === '\r' && text[end] === '\n') end--
         if (splitsSurrogate(text, end)) end--
       }
-      chunks.push({ ordinal: chunks.length, start, end, heading, text: text.slice(start, end) })
+      const header = tableHeader(text, start)
+      chunks.push({
+        ordinal: chunks.length,
+        start,
+        end,
+        heading: header ? [heading, `表头 ${header}`].filter(Boolean).join(' / ') : heading,
+        text: text.slice(start, end),
+      })
       if (end === to) break
       start = end - OVERLAP
       if (splitsSurrogate(text, start)) start++
