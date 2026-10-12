@@ -55,6 +55,7 @@ export class Store {
       CREATE INDEX IF NOT EXISTS artifacts_session ON artifacts(session_id);
       CREATE TABLE IF NOT EXISTS images(user_id TEXT NOT NULL REFERENCES users(id), id TEXT NOT NULL, bytes INTEGER NOT NULL, PRIMARY KEY(user_id, id));
       CREATE TABLE IF NOT EXISTS sandboxes(session_id TEXT PRIMARY KEY REFERENCES sessions(id), remote_id TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS answer_checks(session_id TEXT NOT NULL REFERENCES sessions(id), answer_id TEXT NOT NULL, removed TEXT NOT NULL, PRIMARY KEY(session_id, answer_id));
     `)
     const columns = this.db.prepare('PRAGMA table_info(sessions)').all()
     if (!columns.some((column) => column.name === 'provider')) {
@@ -167,12 +168,33 @@ export class Store {
           'DELETE FROM artifacts WHERE session_id=? AND EXISTS (SELECT 1 FROM sessions WHERE id=? AND deleted=1)',
         )
         .run(id, id)
+      this.db
+        .prepare(
+          'DELETE FROM answer_checks WHERE session_id=? AND EXISTS (SELECT 1 FROM sessions WHERE id=? AND deleted=1)',
+        )
+        .run(id, id)
       this.db.prepare('DELETE FROM sessions WHERE id=? AND deleted=1').run(id)
       this.db.exec('COMMIT')
     } catch (error) {
       this.db.exec('ROLLBACK')
       throw error
     }
+  }
+  /** 答后核对去掉的句子，按回答（重试时为该次尝试）记录；会话日志里的原回答不改。 */
+  saveCheck(sessionId: string, answerId: string, removed: readonly string[]) {
+    this.db
+      .prepare(
+        'INSERT INTO answer_checks VALUES(?, ?, ?) ON CONFLICT(session_id, answer_id) DO UPDATE SET removed=excluded.removed',
+      )
+      .run(sessionId, answerId, JSON.stringify(removed))
+  }
+  checks(sessionId: string): Map<string, string[]> {
+    return new Map(
+      this.db
+        .prepare('SELECT answer_id, removed FROM answer_checks WHERE session_id=?')
+        .all(sessionId)
+        .map((row) => [String(row.answer_id), JSON.parse(String(row.removed)) as string[]]),
+    )
   }
   selectModel(userId: string, id: string, selection: ModelSelection) {
     this.session(userId, id)
