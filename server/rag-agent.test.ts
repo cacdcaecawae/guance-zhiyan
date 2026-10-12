@@ -286,6 +286,8 @@ test('library_search passes a normalized scope, rejects an invalid one, and libr
       return toolChunks('library_list', { area: '六安', period: '“十四五”时期' })
     if (input === 'invalid')
       return toolChunks('library_search', { query: '水利', period: '2025年' })
+    if (input === 'document')
+      return toolChunks('library_search', { query: '水利', documentIds: [' 33236 ', ''] })
     return toolChunks('library_search', {
       query: '水利',
       area: ' 裕安区 ',
@@ -305,6 +307,8 @@ test('library_search passes a normalized scope, rejects an invalid one, and libr
     assert.deepEqual(scopes, [{ area: '裕安区', period: '十四五' }])
     assert.match(await run('invalid'), /筛选条件无效/)
     assert.equal(scopes.length, 1, 'an invalid scope is reported, not silently dropped')
+    await run('document')
+    assert.deepEqual(scopes[1], { documentIds: ['33236'] })
     const listed = (await run('list')).split('\n')
     assert.equal(listed[0], '共 1 篇符合条件：')
     assert.deepEqual(JSON.parse(listed[1]), {

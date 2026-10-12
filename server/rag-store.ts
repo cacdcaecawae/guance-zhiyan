@@ -26,6 +26,8 @@ export interface LibraryFilter {
   period?: string
   docType?: string
   year?: number
+  /** Restrict to these documents, e.g. ones chosen from library_list. */
+  documentIds?: string[]
 }
 export interface Passage {
   id: string
@@ -244,6 +246,10 @@ export class LibraryStore {
         where.push(`${column}=?`)
         params.push(value)
       }
+    if (filter.documentIds) {
+      where.push('m.document_id IN (SELECT value FROM json_each(?))')
+      params.push(JSON.stringify(filter.documentIds))
+    }
     const run = (clause?: string, extra: string[] = []) =>
       this.store.db
         .prepare(
