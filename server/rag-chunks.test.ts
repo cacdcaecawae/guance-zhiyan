@@ -113,3 +113,24 @@ test('Markdown and numbered headings create boundaries; repeated sections are no
   )
   assert.ok(chunks[0].text.endsWith('（一）事项\n##### 小标题\n'))
 })
+
+test('a long Markdown table splits between rows; later chunks carry its header row', () => {
+  const header = '| 指标 | 单位 | 2020年 | 2025年 |'
+  const rows = Array.from(
+    { length: 80 },
+    (_, i) => `| 第${i + 1}项指标名称较长以便分块 | % | ${i} | ${i + 5} |`,
+  )
+  const text = `## 主要指标\n\n${header}\n| --- | --- | --- | --- |\n${rows.join('\n')}\n\n其后正文。`
+  const chunks = chunkText(text)
+  verifySource(text, chunks)
+  assert.ok(chunks.length > 1)
+  assert.equal(chunks[0].heading, '## 主要指标', 'the first chunk holds the header itself')
+  for (const chunk of chunks.slice(1)) {
+    assert.match(chunk.text, /\|\n\| 第/, 'rows stay whole after the overlap')
+    assert.equal(chunk.heading, `## 主要指标 / 表头 ${header}`)
+  }
+  // A pipe-led line without a separator row is not a table header.
+  assert.ok(
+    chunkText(`| 甲\n${'乙'.repeat(3000)}`).every((chunk) => !chunk.heading.includes('表头')),
+  )
+})

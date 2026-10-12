@@ -346,7 +346,7 @@ export class LibraryStore {
     input = documentInput(input)
     const versionId = uuid(
       JSON.stringify([
-        'chunks-v2',
+        'chunks-v3',
         input.id,
         input.title,
         input.text,
