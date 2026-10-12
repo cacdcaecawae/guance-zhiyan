@@ -70,7 +70,10 @@ const SCOPE = {
     type: 'string',
     description: '地区名称，省、市、区县均可（如 安徽、六安市、裕安区）；国家级文件填“全国”',
   },
-  period: { type: 'string', description: '规划期，如 十三五、十四五' },
+  period: {
+    type: 'string',
+    description: '规划期，如 十五、十三五、十四五；“十五”是第十个五年计划（2001—2005），不是十四五',
+  },
   docType: { type: 'string', enum: ['规划文件', '政府工作报告'] },
   year: { type: 'integer', description: '年份，政府工作报告按年份区分' },
 } as const
