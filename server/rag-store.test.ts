@@ -393,6 +393,7 @@ test('metadata validates source exports, scopes current documents by area, perio
     assert.deepEqual(scope({ area: '安徽', period: '十四五' }), ['city', 'county'])
     assert.deepEqual(scope({ docType: '政府工作报告', year: 2021 }), ['report'])
     assert.deepEqual(scope({ area: '海南' }), [])
+    assert.deepEqual(scope({ area: '六安市', documentIds: ['county', 'jilin'] }), ['county'])
 
     const listed = library.listDocuments({ area: '六安市' })
     assert.equal(listed.total, 3)
