@@ -344,6 +344,7 @@ test('a metadata scope filters dense candidates in Qdrant and lexical candidates
   documents.saveMetadata([
     {
       id: 'county',
+      title: null,
       area: ['全国', '安徽', '六安市', '裕安区'],
       level: '县',
       period: '十四五',
@@ -353,6 +354,7 @@ test('a metadata scope filters dense candidates in Qdrant and lexical candidates
     },
     {
       id: 'other',
+      title: null,
       area: ['全国', '海南'],
       level: '省',
       period: '十四五',
