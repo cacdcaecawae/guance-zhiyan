@@ -14,6 +14,8 @@ export interface DocumentInput {
 /** Filtering metadata imported separately (`pnpm rag metadata`); keys follow the source export. */
 export interface DocumentMetadata {
   id: string
+  /** Catalogue title; lets library_list name documents that have no imported text. */
+  title: string | null
   area: string[]
   level: string | null
   period: string | null
@@ -165,8 +167,12 @@ export function metadataInput(value: unknown): DocumentMetadata {
     throw new HttpError(400, '元数据 year 须为 1900–2100 的整数。')
   if (input.outline !== undefined && typeof input.outline !== 'boolean')
     throw new HttpError(400, '元数据 outline 须为布尔值。')
+  const title = input.title ?? null
+  if (title !== null && (typeof title !== 'string' || title.length > 1000 || !title.isWellFormed()))
+    throw new HttpError(400, '元数据 title 须为不超过 1000 个字符的文本。')
   return {
     id,
+    title: (title as string | null)?.trim() || null,
     area: (area as string[]).map((part) => part.trim()),
     level: label('level'),
     // Tools query normalized periods; an unrecognized label is kept for display only.
@@ -204,16 +210,21 @@ export class LibraryStore {
       CREATE VIRTUAL TABLE IF NOT EXISTS rag_fts USING fts5(title, body, tokenize='unicode61');
       CREATE TABLE IF NOT EXISTS rag_metadata(
         document_id TEXT PRIMARY KEY, area TEXT NOT NULL, level TEXT, period TEXT, year INTEGER,
-        doc_type TEXT, outline INTEGER NOT NULL
+        doc_type TEXT, outline INTEGER NOT NULL, title TEXT
       );
     `)
+    // Libraries created before metadata titles: add the column in place.
+    const columns = this.store.db.prepare('PRAGMA table_info(rag_metadata)').all()
+    if (!columns.some((column) => column.name === 'title'))
+      this.store.db.exec('ALTER TABLE rag_metadata ADD COLUMN title TEXT')
   }
   saveMetadata(rows: DocumentMetadata[]) {
     const db = this.store.db
     const upsert = db.prepare(
-      `INSERT INTO rag_metadata VALUES(?, ?, ?, ?, ?, ?, ?) ON CONFLICT(document_id) DO UPDATE SET
+      `INSERT INTO rag_metadata(document_id, area, level, period, year, doc_type, outline, title)
+      VALUES(?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(document_id) DO UPDATE SET
       area=excluded.area, level=excluded.level, period=excluded.period, year=excluded.year,
-      doc_type=excluded.doc_type, outline=excluded.outline`,
+      doc_type=excluded.doc_type, outline=excluded.outline, title=excluded.title`,
     )
     db.exec('BEGIN IMMEDIATE')
     try {
@@ -226,6 +237,7 @@ export class LibraryStore {
           row.year,
           row.docType,
           +row.outline,
+          row.title,
         )
       db.exec('COMMIT')
     } catch (error) {
@@ -238,7 +250,7 @@ export class LibraryStore {
    * path, exactly when possible, otherwise by prefix either way (驻马店 ↔ 驻马店市, 安徽省 ↔ 安徽).
    * ponytail: scans rag_metadata per query (~53k rows); index area parts if filters get slow.
    */
-  documentIds(filter: LibraryFilter): string[] {
+  documentIds(filter: LibraryFilter, withoutText = false): string[] {
     const where: string[] = []
     const params: (string | number)[] = []
     for (const [column, value] of [
@@ -250,16 +262,21 @@ export class LibraryStore {
         where.push(`${column}=?`)
         params.push(value)
       }
+    // withoutText (library_list only) reads metadata rows, so documents without imported text are
+    // listed too; otherwise LEFT JOIN from documents: document ids alone also select documents
+    // without metadata, and any metadata condition still excludes them, since it never matches NULL.
+    const id = withoutText ? 'm.document_id' : 'd.id'
     if (filter.documentIds) {
-      where.push('d.id IN (SELECT value FROM json_each(?))')
+      where.push(`${id} IN (SELECT value FROM json_each(?))`)
       params.push(JSON.stringify(filter.documentIds))
     }
-    // LEFT JOIN: document ids alone also select documents without metadata; any metadata condition
-    // still excludes them, since it never matches NULL.
+    const from = withoutText
+      ? 'rag_metadata m'
+      : 'rag_documents d LEFT JOIN rag_metadata m ON m.document_id=d.id'
     const run = (clause?: string, extra: string[] = []) =>
       this.store.db
         .prepare(
-          `SELECT d.id FROM rag_documents d LEFT JOIN rag_metadata m ON m.document_id=d.id
+          `SELECT ${id} AS id FROM ${from}
           WHERE ${[...where, ...(clause ? [clause] : [])].join(' AND ') || '1'}`,
         )
         .all(...params, ...extra)
@@ -278,16 +295,22 @@ export class LibraryStore {
           [area, area, area],
         )
   }
-  /** Documents in scope for library_list, ordered by period and year so a series reads in order. */
+  /**
+   * Documents in scope for library_list, ordered by period and year so a series reads in order.
+   * Catalogue entries without imported text are listed too, flagged `noText`, so the model can
+   * say a document exists but has no usable text instead of claiming it is missing.
+   */
   listDocuments(filter: LibraryFilter, title?: string, limit = 50) {
-    const ids = this.documentIds(filter)
+    const ids = this.documentIds(filter, true)
     const rows = this.store.db
       .prepare(
-        `SELECT d.id AS documentId, v.title, m.area, m.period, m.year, m.doc_type AS docType,
-        m.outline FROM rag_documents d JOIN rag_versions v ON v.id=d.version_id
-        JOIN rag_metadata m ON m.document_id=d.id
-        WHERE d.id IN (SELECT value FROM json_each(?)) AND (? IS NULL OR instr(v.title, ?) > 0)
-        ORDER BY m.period, m.year, v.title, d.id`,
+        `SELECT m.document_id AS documentId, COALESCE(v.title, m.title, '') AS title, m.area,
+        m.period, m.year, m.doc_type AS docType, m.outline, d.id IS NULL AS noText
+        FROM rag_metadata m LEFT JOIN rag_documents d ON d.id=m.document_id
+        LEFT JOIN rag_versions v ON v.id=d.version_id
+        WHERE m.document_id IN (SELECT value FROM json_each(?))
+        AND (? IS NULL OR instr(COALESCE(v.title, m.title, ''), ?) > 0)
+        ORDER BY m.period, m.year, title, m.document_id`,
       )
       .all(JSON.stringify(ids), title ?? null, title ?? null)
     // Stable sort keeping the SQL order within a period: none first (year-based reports), then
@@ -309,6 +332,7 @@ export class LibraryStore {
         ...(row.year ? { year: row.year as number } : {}),
         ...(row.docType ? { docType: row.docType as string } : {}),
         ...(row.outline ? { outline: true } : {}),
+        ...(row.noText ? { noText: true } : {}),
       })),
     }
   }

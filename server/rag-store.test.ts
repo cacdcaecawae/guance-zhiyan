@@ -305,17 +305,18 @@ test('metadata validates source exports, scopes current documents by area, perio
   assert.deepEqual(
     metadataInput({
       id: '33236',
-      title: '来源导出的其他字段被忽略',
+      title: ' 裕安区水利发展规划 ',
       area: ['全国', '安徽', '六安市', '裕安区'],
       level: '县',
       period: '十四五',
       year: null,
       doc_type: '规划文件',
       outline: false,
-      tags: ['十四五'],
+      tags: ['来源导出的其他字段被忽略'],
     }),
     {
       id: '33236',
+      title: '裕安区水利发展规划',
       area: ['全国', '安徽', '六安市', '裕安区'],
       level: '县',
       period: '十四五',
@@ -333,6 +334,7 @@ test('metadata validates source exports, scopes current documents by area, perio
     { id: 'x', year: 1800 },
     { id: 'x', period: 'x'.repeat(65) },
     { id: 'x', outline: 'yes' },
+    { id: 'x', title: 3 },
   ])
     assert.throws(() => metadataInput(invalid), { status: 400 }, JSON.stringify(invalid))
   for (const [text, period] of [
@@ -376,8 +378,9 @@ test('metadata validates source exports, scopes current documents by area, perio
       meta('old', ['安徽'], { period: '十二五' }),
       // level is optional in the source export
       metadataInput({ id: 'nation-plain', area: ['全国'] }),
-      // Metadata may arrive before its document; it stays out of scope until published.
-      meta('pending', ['安徽', '六安市'], { period: '十四五' }),
+      // Metadata without imported text (or arriving before it) stays out of search scope;
+      // library_list still names it, flagged noText, so the model can say it has no usable text.
+      meta('pending', ['安徽', '六安市'], { period: '十四五', title: '六安市未收录正文的规划' }),
     ])
     const scope = (filter: Parameters<LibraryStore['documentIds']>[0]) =>
       library.documentIds(filter).sort()
@@ -400,7 +403,17 @@ test('metadata validates source exports, scopes current documents by area, perio
     assert.deepEqual(scope({ area: '六安市', documentIds: ['county', 'jilin'] }), ['county'])
 
     const listed = library.listDocuments({ area: '六安市' })
-    assert.equal(listed.total, 3)
+    assert.equal(listed.total, 4)
+    assert.deepEqual(
+      listed.documents.find((d) => d.documentId === 'pending'),
+      {
+        documentId: 'pending',
+        title: '六安市未收录正文的规划',
+        area: '安徽/六安市',
+        period: '十四五',
+        noText: true,
+      },
+    )
     assert.deepEqual(listed.documents[0], {
       documentId: 'report',
       title: '六安市政府工作报告',
@@ -415,7 +428,7 @@ test('metadata validates source exports, scopes current documents by area, perio
     assert.equal(library.listDocuments({ area: '安徽' }, undefined, 2).documents.length, 2)
     assert.deepEqual(
       library.listDocuments({ area: '安徽' }).documents.map((d) => d.documentId),
-      ['report', 'old', 'province', 'city', 'county'],
+      ['report', 'old', 'province', 'pending', 'city', 'county'],
       'periods in time order (十二五 before 十三五), reports without a period first',
     )
 
