@@ -10,7 +10,7 @@ import { test, type TestContext } from 'node:test'
 import { fileURLToPath } from 'node:url'
 import { readDocuments } from './rag-import.ts'
 import { LibraryStore, type DocumentInput } from './rag-store.ts'
-import { KnowledgeLibrary, ragConfig, type RagConfig } from './rag.ts'
+import { KnowledgeLibrary, ragConfig, rerank, type RagConfig } from './rag.ts'
 import { Store } from './store.ts'
 
 type Operation = 'embed' | 'ensure' | 'create' | 'index' | 'upsert' | 'delete' | 'query'
@@ -869,4 +869,45 @@ test('JSONL keeps UTF-8 text across stream boundaries and identifies invalid dat
   await writeFile(path, ' \t\r\n\n')
   assert.deepEqual(await collect(), [])
   await assert.rejects(collect(AbortSignal.abort()), { name: 'AbortError' })
+})
+
+test('rerank orders candidates by the service score and rejects malformed replies', async (t) => {
+  const server = createServer(async (request, response) => {
+    const buffers: Buffer[] = []
+    for await (const buffer of request) buffers.push(buffer)
+    const { query, documents } = JSON.parse(Buffer.concat(buffers).toString())
+    assert.equal(request.headers.authorization, 'Bearer test-key')
+    const results = (documents as string[]).map((text, index) => ({
+      index,
+      relevance_score: text.includes(query) ? 0.9 : 0.1 * index,
+    }))
+    response.end(JSON.stringify({ results: query === '残缺' ? results.slice(1) : results }))
+  })
+  server.listen(0, '127.0.0.1')
+  await once(server, 'listening')
+  t.after(() => server.close())
+  const { port } = server.address() as { port: number }
+  const config = { url: `http://127.0.0.1:${port}/v1/rerank`, model: 'test', apiKey: 'test-key' }
+  const items = [
+    { id: 'a', text: '交通' },
+    { id: 'b', text: '用水总量控制' },
+    { id: 'c', text: '教育' },
+  ]
+  assert.deepEqual(
+    (await rerank(config, '用水', items)).map((item) => item.id),
+    ['b', 'c', 'a'],
+  )
+  await assert.rejects(rerank(config, '残缺', items), /格式无效/)
+  const embedding = {
+    EMBEDDING_URL: 'http://localhost/embeddings',
+    EMBEDDING_MODEL: 'm',
+    EMBEDDING_DIMENSIONS: '2',
+  }
+  assert.equal(ragConfig(embedding)?.rerank, undefined)
+  assert.throws(() => ragConfig({ ...embedding, RERANK_URL: 'http://localhost/rerank' }), /RERANK/)
+  assert.equal(
+    ragConfig({ ...embedding, RERANK_URL: 'http://localhost/rerank', RERANK_MODEL: 'r' })?.rerank
+      ?.model,
+    'r',
+  )
 })
