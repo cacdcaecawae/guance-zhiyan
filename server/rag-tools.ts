@@ -10,6 +10,8 @@ export type Library = Pick<KnowledgeLibrary, 'available' | 'retrieve' | 'neighbo
 
 /** Per tool result; a required passage stays whole even if its serialization exceeds this. */
 const MAX_CHARS = 6000
+// 迭代 13：检索返回前 16 条、约 12000 字；前 8 条、6000 字时要点原文片段召回只有约 29%（506 库检索层评测）
+const SEARCH_CHARS = 12000
 
 const GUIDE = `共享文献库（管理员导入的政策、规划等文件）通过 library_search 按需检索。涉及政策、规划、法规、标准等资料的问题，先检索再回答；需要某个片段的前后文时调用 library_open；标有 superseded 的片段已被新版本替代，不作为现行规定引用。闲聊和一般常识不必检索。联网资料与文献库证据分开说明。
 检索步骤：
@@ -25,7 +27,7 @@ const GUIDE = `共享文献库（管理员导入的政策、规划等文件）�
 6. 写完后逐条核对：每条要点里的内容（包括数字、名称、范围、时间）都能在它所附的片段中找到；找不到的删除，或移入“分析（推断）”并写明是推断。
 文献编号（也称 planid、文献 id）是片段所属文献的 documentId，不是片段 id；链接只能使用工具返回的 link 或 cite。`
 
-function render(passages: Passage[], header: string, requiredId?: string) {
+function render(passages: Passage[], header: string, budget: number, requiredId?: string) {
   const rendered = passages.map((passage) =>
     JSON.stringify({
       id: passage.id,
@@ -49,7 +51,7 @@ function render(passages: Passage[], header: string, requiredId?: string) {
   let spent = required < 0 ? 0 : rendered[required].length
   for (const [index, line] of rendered.entries()) {
     if (index !== required) {
-      if (spent > 0 && spent + line.length > MAX_CHARS) {
+      if (spent > 0 && spent + line.length > budget) {
         if (required < 0) break // Search keeps the highest-ranked prefix.
         continue
       }
@@ -155,6 +157,7 @@ export function registerLibrary(ctx: Context, library: Library, deadline = Infin
                 passages,
                 // Retrieval has no relevance floor yet: it always returns the nearest passages.
                 '共享文献库检索结果（按相关度从高到低，每行一个片段；排在前面也未必相关，先判断能否支撑回答）：',
+                SEARCH_CHARS,
               )
             : filter
               ? '所选范围内没有找到相关片段。可换关键词，或用 library_list 确认该范围内有哪些文献、放宽筛选条件后再检索；仍无结果时如实告诉用户。'
@@ -177,7 +180,12 @@ export function registerLibrary(ctx: Context, library: Library, deadline = Infin
           const id = args.id.trim().toLowerCase()
           if (!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(id))
             throw reject('RAG_PASSAGE_NOT_FOUND')
-          return render(library.neighbors(id, 1, 1), '原文片段及相邻内容（每行一个片段）：', id)
+          return render(
+            library.neighbors(id, 1, 1),
+            '原文片段及相邻内容（每行一个片段）：',
+            MAX_CHARS,
+            id,
+          )
         } catch (error) {
           failure(error, exec.signal)
         }
