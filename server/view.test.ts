@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import type { Message } from '../src/types/index.ts'
-import { checkCitations } from './view.ts'
+import { checkCitations, trimAnswers } from './view.ts'
 
 const returned = '01234567-89ab-5def-a123-456789abcdef'
 const invented = '00000000-0000-5000-a000-000000000000'
@@ -140,4 +140,63 @@ test('incremental citation checks reuse validated text but retain ordered histor
   for (const part of prefix.parts) Object.freeze(part)
   checkCitations(messages, 2)
   assert.deepEqual(messages, expected)
+})
+
+test('completed library answers drop free commentary after the citations', () => {
+  const passage = '实施行业扶贫10大类137个项目，规划总投资526亿元，项目覆盖贫困户2.1万户6.34万人。'
+  const tool = {
+    id: 't1',
+    type: 'tool' as const,
+    name: 'library_search',
+    input: '{"query":"扶贫"}',
+    output: [
+      '共享文献库检索结果：',
+      JSON.stringify({ id: returned, link: path(returned), text: passage }),
+    ].join('\n'),
+    status: 'done' as const,
+  }
+  const cite = `[planid 5116·原文](${path(returned)})`
+  const answer = [
+    '依据《城固县“十三五”规划纲要》（planid 5116），文献库中只有这一篇城固县文件。',
+    '## 一、行业扶贫',
+    `- **项目**：“实施行业扶贫10大类137个项目” ${cite}`,
+    '| 工程 | 原文 | 出处 |',
+    '|---|---|---|',
+    `| 行业扶贫 | “规划总投资526亿元” | ${cite} |`,
+    '项目覆盖贫困户2.1万户6.34万人。',
+    '**口径说明**：上述内容反映了当时主流扶贫方式，次年还部署了社区教育示范区。',
+    '## 分析（推断）',
+    '1. 基础设施是投入重心。',
+  ]
+  const make = (question: string, text: string): Message => ({
+    id: 'turn-1',
+    role: 'assistant',
+    question,
+    status: 'done',
+    parts: [tool, { id: 'x1', type: 'text', step: 1, text }],
+  })
+  const textOf = (message: Message) =>
+    message.role === 'assistant' ? (message.parts.at(-1) as { text: string }).text : ''
+
+  const facts = [make('城固县扶贫有哪些项目？', answer.join('\n'))]
+  trimAnswers(facts)
+  assert.deepEqual(
+    textOf(facts[0]).split('\n'),
+    answer.slice(0, 7),
+    'keeps the opening, cited lines, cited tables, short headings and passage text; drops commentary and unrequested analysis',
+  )
+
+  const analysis = [make('分析城固县扶贫的投入重心。', answer.join('\n'))]
+  trimAnswers(analysis)
+  assert.ok(
+    textOf(analysis[0]).endsWith('## 分析（推断）\n1. 基础设施是投入重心。'),
+    'requested analysis stays',
+  )
+
+  const refusal = `库中没有“十五五”规划，无法列出。\n仅供参考：${cite}`
+  const loading = { ...make('问题', answer.join('\n')), status: 'loading' as const }
+  const untouched = [make('“十五五”有哪些产业？', refusal), loading]
+  trimAnswers(untouched)
+  assert.equal(textOf(untouched[0]), refusal, 'fewer than two cited lines are left whole')
+  assert.equal(textOf(untouched[1]), answer.join('\n'), 'answers still streaming are not trimmed')
 })

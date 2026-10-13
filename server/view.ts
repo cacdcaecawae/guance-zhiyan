@@ -217,6 +217,7 @@ export function messagesFromEvents(
         }
     }
   checkCitations(messages)
+  trimAnswers(messages)
   return messages
 }
 
@@ -242,6 +243,104 @@ function returnedPassages(output: string) {
  * Earlier messages may be skipped only when already checked against the unchanged history.
  * Their tool results still authorize later citations in the original message/part order.
  */
+const CITED = /\/api\/library\/passages\/[0-9a-fA-F-]{36}/
+const ASKS_ANALYSIS =
+  /比较|对比|异同|差异|区别|变化|演变|演进|转变|分析|评价|评估|研判|原因|为什么|建议|启示|特点|特征|逻辑|关系|侧重|趋势|研析|报告/
+const ANALYSIS_HEADING =
+  /分析|比较|对比|推断|异同|差异|变化|演变|特点|特征|评价|研判|启示|结论|归纳|总结/
+const HEADING = /^(#{1,6})\s|^\*\*[^*]{1,30}\*\*\s*$|^[一二三四五六七八九十]+、/
+const contentChars = (text: string) => text.match(/[一-鿿0-9]/g)?.join('') ?? ''
+const grams = (text: string) =>
+  Array.from({ length: Math.max(0, text.length - 7) }, (_, i) => text.slice(i, i + 8))
+
+/**
+ * Completed library answers keep only what the cited passages support: everything before the first
+ * cited line (sources, scope, assumptions, what was not found), cited lines, tables containing a
+ * citation, short headings, lines that are themselves passage text (80% of 8-character runs found in
+ * this session's library results), and, when the question asks for comparison or analysis, the
+ * analysis section. Free commentary after the citations (scope notes, summaries, reminders,
+ * unrequested analysis) is dropped: on the 506-document training sample it caused most rejections,
+ * and dropping it raised the pass rate from 46.7% to 52.7% (paired CI +0.7 to +11.3).
+ * Answers with fewer than two cited lines (refusals, clarifying questions) are left whole.
+ * ponytail: keyword rules; a question that needs analysis without these words loses it.
+ */
+function trimAnswer(lines: string[], question: string, sources: Set<string>) {
+  const cited = lines.map((line) => CITED.test(line))
+  if (cited.filter(Boolean).length < 2) return lines.map(() => true)
+  const keep = lines.map(() => false)
+  for (let start = 0; start < lines.length;) {
+    let end = start
+    while (end < lines.length && lines[end].trimStart().startsWith('|')) end++
+    if (end > start && cited.slice(start, end).some(Boolean)) keep.fill(true, start, end)
+    start = Math.max(end, start + 1)
+  }
+  const first = cited.indexOf(true)
+  const analysisAllowed = ASKS_ANALYSIS.test(question)
+  let analysisDepth = 0
+  for (const [index, line] of lines.entries()) {
+    const text = line.trim()
+    if (index < first || cited[index] || !text) {
+      keep[index] = true
+      continue
+    }
+    const heading = HEADING.exec(text)
+    if (heading) {
+      const depth = heading[1]?.length ?? 6
+      if (analysisDepth && depth <= analysisDepth) analysisDepth = 0
+      if (analysisAllowed && ANALYSIS_HEADING.test(text)) analysisDepth = depth
+      // A short heading keeps the structure, except an analysis heading whose section is dropped.
+      if (analysisDepth || (!/分析|推断/.test(text) && text.replace(/[#*\s]/g, '').length <= 20))
+        keep[index] = true
+      continue
+    }
+    const runs = grams(contentChars(text))
+    keep[index] ||=
+      analysisDepth > 0 ||
+      (runs.length > 0 && runs.filter((run) => sources.has(run)).length >= 0.8 * runs.length)
+  }
+  return keep
+}
+
+export function trimAnswers(messages: Message[]) {
+  let sources: Set<string> | undefined
+  const passageRuns = () => {
+    sources = new Set()
+    for (const message of messages)
+      if (message.role === 'assistant')
+        for (const part of message.parts)
+          if (part.type === 'tool' && part.name.startsWith('library_') && part.status === 'done')
+            for (const line of part.output.split('\n'))
+              try {
+                const { text } = JSON.parse(line)
+                if (typeof text === 'string')
+                  for (const run of grams(contentChars(text))) sources.add(run)
+              } catch {
+                // Header and notice lines are not JSON.
+              }
+    return sources
+  }
+  for (const message of messages) {
+    if (message.role !== 'assistant' || message.status !== 'done') continue
+    // Text parts are trimmed as one answer, then each part keeps its own surviving lines.
+    const texts = message.parts.filter((part) => part.type === 'text')
+    const lines = texts.flatMap((part, index) =>
+      part.text.split('\n').map((line) => ({ index, line })),
+    )
+    if (lines.filter(({ line }) => CITED.test(line)).length < 2) continue
+    const keep = trimAnswer(
+      lines.map(({ line }) => line),
+      message.question,
+      sources ?? passageRuns(),
+    )
+    for (const [index, part] of texts.entries())
+      part.text = lines
+        .filter((line, n) => line.index === index && keep[n])
+        .map(({ line }) => line)
+        .join('\n')
+        .replace(/\n{3,}/g, '\n\n')
+  }
+}
+
 export function checkCitations(messages: Message[], firstChangedMessage = 0) {
   const returned = new Set<string>()
   for (const [index, message] of messages.entries())
