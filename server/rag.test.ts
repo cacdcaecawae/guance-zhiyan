@@ -405,6 +405,7 @@ test('the metadata CLI validates lines, stores rows and indexes documentId for e
   assert.equal(failed.code, 1)
   assert.match(failed.stderr, /第 2 行/)
   assert.throws(() => library.scope({ area: '裕安区' }), { code: 'RAG_NO_METADATA' })
+  assert.deepEqual(library.scope({ documentIds: ['county'] }), ['county'], 'ids need no metadata')
   const indexes = () => calls.filter((call) => call.operation === 'index').length
   const before = indexes()
   const done = await runCli(store.root, config, ['metadata', file, '--skip-invalid'])

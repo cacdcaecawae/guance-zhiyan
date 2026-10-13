@@ -365,6 +365,7 @@ test('metadata validates source exports, scopes current documents by area, perio
     publish('jilin', '吉林市规划')
     publish('old', '安徽省十二五规划')
     publish('nation-plain', '未注明级别的国家规划')
+    publish('bare', '未导入元数据的文献')
     library.saveMetadata([
       meta('county', ['安徽', '六安市', '裕安区'], { period: '十四五', doc_type: '规划文件' }),
       meta('city', ['安徽', '六安市'], { period: '十四五', doc_type: '规划文件' }),
@@ -393,6 +394,9 @@ test('metadata validates source exports, scopes current documents by area, perio
     assert.deepEqual(scope({ area: '安徽', period: '十四五' }), ['city', 'county'])
     assert.deepEqual(scope({ docType: '政府工作报告', year: 2021 }), ['report'])
     assert.deepEqual(scope({ area: '海南' }), [])
+    // Document ids select current documents with or without metadata; metadata fields still apply.
+    assert.deepEqual(scope({ documentIds: ['bare', 'county', 'missing'] }), ['bare', 'county'])
+    assert.deepEqual(scope({ documentIds: ['bare', 'county'], period: '十四五' }), ['county'])
     assert.deepEqual(scope({ area: '六安市', documentIds: ['county', 'jilin'] }), ['county'])
 
     const listed = library.listDocuments({ area: '六安市' })

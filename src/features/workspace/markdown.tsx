@@ -38,6 +38,11 @@ export function Markdown({ text, citations }: { text: string; citations?: readon
               const number = (citations ?? []).indexOf(passage[1].toLowerCase()) + 1
               // A passage path not written literally in the text (e.g. entity-encoded) is not linked.
               if (!number) return <span>{children}</span>
+              // “原文”“原文 3”及检索结果 cite 的“planid 文献编号·原文”只显示编号，文献编号放进悬停提示
+              const label =
+                typeof children === 'string'
+                  ? /^(?:planid\s*(\S+?)\s*·\s*)?原文\s*\d*$/.exec(children.trim())
+                  : null
               const badge = (
                 <>
                   {WORD_JOINER}
@@ -46,15 +51,15 @@ export function Markdown({ text, citations }: { text: string; citations?: readon
                     target="_blank"
                     rel="noopener noreferrer"
                     aria-label={`原文 ${number}`}
-                    title="在新标签页打开原文"
+                    title={`${label?.[1] ? `文献编号 ${label[1]}，` : ''}在新标签页打开原文`}
                     className="mx-0.5 rounded-sm bg-tag px-1.5 py-0.5 align-super text-ui-xs leading-none font-medium text-brand no-underline outline-none transition-colors hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring"
                   >
                     {number}
                   </a>
                 </>
               )
-              // “原文”“原文 3” become just the number; a descriptive label stays as text.
-              return typeof children === 'string' && /^原文\s*\d*$/.test(children.trim()) ? (
+              // A descriptive label stays as text before the number.
+              return label ? (
                 badge
               ) : (
                 <>

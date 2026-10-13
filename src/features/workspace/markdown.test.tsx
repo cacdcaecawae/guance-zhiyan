@@ -73,6 +73,15 @@ it('描述性标签保留为文字并附编号；未在正文中出现的片段�
   expect(screen.getByRole('link', { name: '原文 1' })).toHaveAttribute('href', path)
 })
 
+it('检索结果 cite 的“planid 文献编号·原文”只显示编号，悬停提示文献编号', () => {
+  const path = '/api/library/passages/01234567-89ab-5def-a123-456789abcdef'
+  render(checked(`养老服务：“原文摘录”[planid 33236·原文](${path})`))
+  const link = screen.getByRole('link', { name: '原文 1' })
+  expect(link).toHaveTextContent(/^1$/)
+  expect(link).toHaveAttribute('title', '文献编号 33236，在新标签页打开原文')
+  expect(screen.queryByText(/planid/)).toBeNull()
+})
+
 it('未经服务端核对的内容（如文件预览）不渲染原文角标', () => {
   const path = '/api/library/passages/01234567-89ab-5def-a123-456789abcdef'
   render(<Markdown text={`文件里的[原文](${path})和[网页](https://example.org/policy)`} />)

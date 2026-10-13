@@ -16,7 +16,7 @@ export const RAG_ERRORS = {
   RAG_RETRIEVAL_FAILED: '文献库检索失败，请稍后重试或联系管理员。',
   RAG_INVALID_QUERY: '检索词须为 1–1000 个有效字符。',
   RAG_INVALID_FILTER:
-    '筛选条件无效：至少给出一个条件；地区、标题关键词不超过 64 个字符，规划期写作“十四五”这类形式，年份为 1900–2100 的整数。',
+    '筛选条件无效：至少给出一个条件；地区、标题关键词不超过 64 个字符，规划期写作“十四五”这类形式，年份为 1900–2100 的整数，documentIds 最多 20 个。',
   RAG_PASSAGE_NOT_FOUND: '没有找到该原文片段。',
   RAG_NO_METADATA: '文献库尚未导入元数据，暂不能按地区、规划期或文种筛选；请去掉筛选条件后重试。',
 } as const
@@ -106,7 +106,8 @@ export class KnowledgeLibrary {
 
   /** Current documents in a metadata scope; an empty scope is a valid answer, not an error. */
   scope(filter: LibraryFilter) {
-    this.requireMetadata()
+    // Document ids name documents directly; only the metadata fields need imported metadata.
+    if (Object.keys(filter).some((key) => key !== 'documentIds')) this.requireMetadata()
     return this.documents.documentIds(filter)
   }
 

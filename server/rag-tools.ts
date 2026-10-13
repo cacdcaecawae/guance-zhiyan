@@ -94,7 +94,7 @@ function scopeOf(args: {
   if (args.year !== undefined && (args.year < 1900 || args.year > 2100))
     throw reject('RAG_INVALID_FILTER')
   const ids = args.documentIds?.map((id) => id.trim()).filter(Boolean)
-  if (ids && (ids.length > 20 || ids.some((id) => id.length > 64 || !id.isWellFormed())))
+  if (ids && (ids.length > 20 || ids.some((id) => id.length > 256 || !id.isWellFormed())))
     throw reject('RAG_INVALID_FILTER')
   const filter: LibraryFilter = {
     ...(area ? { area } : {}),
