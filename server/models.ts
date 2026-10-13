@@ -180,6 +180,10 @@ export function modelAdapter(
       return key
     },
     resolveUserId: () => anonymous,
-    prepareExtensions: async () => ({ fields: {}, accept: async () => {} }),
+    // 校内模型降低采样温度（vLLM 默认取模型推荐值约 0.6），减少回答里超出原文的发挥。
+    prepareExtensions: async () => ({
+      fields: provider === 'campus' ? { temperature: 0.2 } : {},
+      accept: async () => {},
+    }),
   })
 }
