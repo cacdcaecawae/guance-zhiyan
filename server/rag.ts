@@ -260,7 +260,7 @@ export class KnowledgeLibrary {
       const passages = this.documents.activePassages([...scores.keys()])
       const results = passages
         .sort((a, b) => scores.get(b.id)! - scores.get(a.id)! || a.id.localeCompare(b.id))
-        .slice(0, 16)
+        .slice(0, 8)
       assertIndexed(generation)
       return results
     } catch (error) {

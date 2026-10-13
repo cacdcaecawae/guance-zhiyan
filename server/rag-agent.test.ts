@@ -232,7 +232,7 @@ test('library_open retains the requested passage, budgets neighbors and preserve
 
     // Search still returns a relevance-ranked prefix, not smaller lower-ranked passages.
     const { output: search } = await run('search')
-    check(search, shortTail.slice(0, 3), shortTail.length - 3)
+    check(search, [shortTail[0]], shortTail.length - 1)
 
     const { session, output: missing } = await run(INVENTED)
     assert.match(missing, /没有找到该原文片段/)
