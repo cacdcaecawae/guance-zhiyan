@@ -85,7 +85,11 @@ export class Artifacts {
       })
       bytes = await Packer.toBuffer(new Document({ sections: [{ children }] }))
     } else if (format === 'xlsx' || format === 'csv') {
-      const rows: unknown = JSON.parse(content)
+      // 内容不是 JSON（常见为 Markdown 表格）时也给出下面的格式说明，而不是笼统的“工具执行失败”
+      let rows: unknown
+      try {
+        rows = JSON.parse(content)
+      } catch {}
       if (
         !Array.isArray(rows) ||
         rows.length > 2000 ||

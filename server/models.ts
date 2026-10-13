@@ -40,6 +40,7 @@ const providers = [
     models: [
       { id: 'step-3.7-flash', name: 'Step 3.7 Flash' },
       { id: 'qwen3.8-27b', name: 'Qwen3.8 27B' },
+      { id: 'deepseek-v4-flash-0731-w8a8', name: 'DeepSeek V4 Flash（校内 W8A8）' },
     ],
   },
 ]

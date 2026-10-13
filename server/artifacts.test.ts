@@ -144,6 +144,13 @@ test('Excel rejects characters that cannot form valid XML; CSV keeps them', asyn
     }
     assert.equal(store.artifacts(user.id, session.id).length, 0)
     assert.match(toolError('FILE_INVALID_XLSX_CONTENT'), /Excel.*字符/)
+    // 模型常把 Markdown 表格当作 xlsx 内容：须返回格式说明，而不是笼统的工具失败
+    await assert.rejects(
+      files.create(user.id, session.id, '表格', 'xlsx', '| 指标 |\n|---|\n| 1 |'),
+      {
+        code: 'FILE_INVALID_TABLE',
+      },
+    )
     const csv = await files.create(user.id, session.id, '表格', 'csv', '[["前\uffff后"]]')
     assert.match(await files.read(user.id, session.id, csv.id), /前\uffff后/)
     assert.deepEqual(await readdir(join(root, 'artifacts')), [csv.id])

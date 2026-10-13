@@ -136,7 +136,7 @@ test('真实文件工具、执行追踪和 Word 下载；其他用户不能访�
   const trace = page.getByRole('tabpanel', { name: '轨迹', exact: true })
   await expect(trace.getByLabel('执行时间分布')).toBeVisible()
   await expect(trace.locator('summary', { hasText: /第 1 轮/ })).toBeVisible()
-  const tool = trace.locator('summary', { hasText: /工具.*生成文件/ })
+  const tool = trace.locator('summary', { hasText: /^\s*工具\s*生成文件/ })
   await tool.click()
   await expect(trace.getByText('调用参数', { exact: true })).toBeVisible()
   await trace.getByRole('button', { name: '调用', exact: true }).click()

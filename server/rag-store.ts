@@ -26,6 +26,8 @@ export interface LibraryFilter {
   period?: string
   docType?: string
   year?: number
+  /** Restrict to these documents, e.g. ones chosen from library_list. */
+  documentIds?: string[]
 }
 export interface Passage {
   id: string
@@ -248,10 +250,16 @@ export class LibraryStore {
         where.push(`${column}=?`)
         params.push(value)
       }
+    if (filter.documentIds) {
+      where.push('d.id IN (SELECT value FROM json_each(?))')
+      params.push(JSON.stringify(filter.documentIds))
+    }
+    // LEFT JOIN: document ids alone also select documents without metadata; any metadata condition
+    // still excludes them, since it never matches NULL.
     const run = (clause?: string, extra: string[] = []) =>
       this.store.db
         .prepare(
-          `SELECT m.document_id AS id FROM rag_metadata m JOIN rag_documents d ON d.id=m.document_id
+          `SELECT d.id FROM rag_documents d LEFT JOIN rag_metadata m ON m.document_id=d.id
           WHERE ${[...where, ...(clause ? [clause] : [])].join(' AND ') || '1'}`,
         )
         .all(...params, ...extra)
