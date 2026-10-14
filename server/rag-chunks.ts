@@ -36,6 +36,54 @@ function splitsSurrogate(text: string, offset: number) {
   return before >= 0xd800 && before <= 0xdbff && after >= 0xdc00 && after <= 0xdfff
 }
 
+const lineAt = (text: string, from: number) => {
+  const end = text.indexOf('\n', from)
+  return text.slice(from, end < 0 ? undefined : end)
+}
+
+/** First line of the run of lines matching `test` that holds `start`, or undefined. */
+function blockStart(text: string, start: number, test: (line: string) => boolean) {
+  let line = text.lastIndexOf('\n', start - 1) + 1
+  if (!test(lineAt(text, line))) return undefined
+  while (line > 0) {
+    const previous = text.lastIndexOf('\n', line - 2) + 1
+    if (previous === line || !test(lineAt(text, previous))) break
+    line = previous
+  }
+  return line
+}
+
+/**
+ * Header row of the Markdown table a chunk starts inside, when that row lies before the chunk.
+ * A long table splits between rows; later chunks carry the header in their heading so their
+ * cells keep their column names, while the chunk text stays an exact slice of the source.
+ * Rows are lines with a cell separator; the outer pipes are optional (`指标 | 单位`).
+ * ponytail: a header over 300 code units keeps its leading whole columns and ends with “…”, which
+ * bounds every chunk heading; the later column names are dropped.
+ */
+function tableHeader(text: string, start: number) {
+  const line = blockStart(text, start, (row) => row.includes('|'))
+  if (line === undefined || line >= start) return undefined
+  const header = lineAt(text, line).trim()
+  const separator = lineAt(text, line + lineAt(text, line).length + 1)
+  if (!/^[ \t]*\|?[ \t]*:?-{3,}/.test(separator)) return undefined
+  if (header.length <= 300) return header
+  const cut = header.lastIndexOf('|', 300)
+  return cut > 0 ? `${header.slice(0, cut + 1)} …` : undefined
+}
+
+/** Written by the import pipeline as the first line of a `>` quote holding image OCR text. */
+const IMAGE_TEXT = '〔图片文字，OCR 识别，非原文正文〕'
+/**
+ * Whether a chunk starts inside an image-text quote whose marker line lies before the chunk.
+ * Later chunks of a long OCR block carry the note in their heading, so their text is never
+ * taken for the document body.
+ */
+function inImageText(text: string, start: number) {
+  const line = blockStart(text, start, (quote) => /^[ \t]*>/.test(quote))
+  return line !== undefined && line < start && lineAt(text, line).includes(IMAGE_TEXT)
+}
+
 /**
  * Offsets are UTF-16 indices for text.slice(start, end); ordinals start at zero. A heading line
  * never forms a chunk by itself, and a chunk's heading is the path its merged sections share.
@@ -59,7 +107,20 @@ export function chunkText(text: string): Chunk[] {
         if (text[end - 1] === '\r' && text[end] === '\n') end--
         if (splitsSurrogate(text, end)) end--
       }
-      chunks.push({ ordinal: chunks.length, start, end, heading, text: text.slice(start, end) })
+      const header = tableHeader(text, start)
+      chunks.push({
+        ordinal: chunks.length,
+        start,
+        end,
+        heading: [
+          heading,
+          header && `表头 ${header}`,
+          inImageText(text, start) && '图片文字续（以 > 开头的行为 OCR 识别，非原文正文）',
+        ]
+          .filter(Boolean)
+          .join(' / '),
+        text: text.slice(start, end),
+      })
       if (end === to) break
       start = end - OVERLAP
       if (splitsSurrogate(text, start)) start++
