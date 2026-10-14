@@ -134,3 +134,35 @@ test('a long Markdown table splits between rows; later chunks carry its header r
     chunkText(`| 甲\n${'乙'.repeat(3000)}`).every((chunk) => !chunk.heading.includes('表头')),
   )
 })
+
+test('tables without outer pipes keep their header; a wide header keeps whole leading columns', () => {
+  const rows = (prefix: string, count: number) =>
+    Array.from({ length: count }, (_, i) => `${prefix}第${i + 1}项指标名称较长以便分块 | % | ${i}`)
+  const bare = `指标 | 单位 | 数值\n--- | --- | ---\n${rows('', 120).join('\n')}`
+  const chunks = chunkText(bare)
+  verifySource(bare, chunks)
+  assert.ok(chunks.length > 1)
+  for (const chunk of chunks.slice(1)) assert.equal(chunk.heading, '表头 指标 | 单位 | 数值')
+
+  const columns = Array.from({ length: 40 }, (_, i) => `第${i + 1}列名称`)
+  const header = `| ${columns.join(' | ')} |`
+  const wide = `${header}\n|${' --- |'.repeat(40)}\n${rows('| ', 120).join(' |\n')} |`
+  const heading = chunkText(wide).at(-1)!.heading
+  assert.ok(header.length > 300 && heading.length <= '表头 '.length + 302, heading)
+  assert.ok(heading.endsWith('| …'), 'cut after a whole column, marked as shortened')
+  assert.ok(header.startsWith(heading.slice('表头 '.length, -2)))
+})
+
+test('later chunks of a long OCR quote block are marked as image text', () => {
+  const ocr = Array.from({ length: 150 }, (_, i) => `> 图中第${i + 1}行识别出的文字较长以便分块。`)
+  const text = `第一条 正文。\n\n![图1](media/image1.png)\n\n> 〔图片文字，OCR 识别，非原文正文〕\n${ocr.join('\n')}\n\n其后正文。`
+  const chunks = chunkText(text)
+  verifySource(text, chunks)
+  assert.ok(chunks.length > 1)
+  assert.ok(!chunks[0].heading.includes('图片文字续'), 'the first chunk shows the marker itself')
+  // Every later chunk starts inside the quote, even mid-line after the overlap.
+  for (const chunk of chunks.slice(1)) assert.match(chunk.heading, /图片文字续/)
+  // A quote without the marker is ordinary text.
+  const quote = `> ${'引文较长以便分块。'.repeat(400)}`
+  assert.ok(chunkText(quote).every((chunk) => !chunk.heading.includes('图片文字续')))
+})

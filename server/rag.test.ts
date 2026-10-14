@@ -883,6 +883,7 @@ test('rerank orders candidates by the service score and rejects malformed replie
       index,
       relevance_score: text.includes(query) ? 0.9 : 0.1 * index,
     }))
+    if (query === '过大') return response.end('{"results":[' + ' '.repeat(2 * 1024 * 1024) + ']}')
     response.end(JSON.stringify({ results: query === '残缺' ? results.slice(1) : results }))
   })
   server.listen(0, '127.0.0.1')
@@ -900,6 +901,7 @@ test('rerank orders candidates by the service score and rejects malformed replie
     ['b', 'c', 'a'],
   )
   await assert.rejects(rerank(config, '残缺', items), /格式无效/)
+  await assert.rejects(rerank(config, '过大', items), /过大/)
   const embedding = {
     EMBEDDING_URL: 'http://localhost/embeddings',
     EMBEDDING_MODEL: 'm',

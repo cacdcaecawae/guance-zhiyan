@@ -76,6 +76,8 @@ function rerankConfig(env: NodeJS.ProcessEnv): RerankConfig | undefined {
 
 /** Fused candidates sent to the reranker; the best 8 of them reach the model. */
 const RERANK_CANDIDATES = 30
+/** Scores for 30 candidates take a few KiB; bounded like embedding replies so one cannot fill the heap. */
+const MAX_RERANK_BYTES = 1024 * 1024
 
 /**
  * Orders items by a cross-encoder rerank service (`/v1/rerank`: query + documents → scores).
@@ -97,8 +99,23 @@ export async function rerank<T extends { text: string }>(
     body: JSON.stringify({ model: config.model, query, documents: items.map((item) => item.text) }),
     signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
   })
-  if (!response.ok) throw new Error(`重排服务返回 ${response.status}`)
-  const { results } = (await response.json()) as {
+  if (!response.ok) {
+    await response.body?.cancel().catch(() => {})
+    throw new Error(`重排服务返回 ${response.status}`)
+  }
+  const reader = response.body?.getReader()
+  if (!reader) throw new Error('重排服务返回空响应')
+  const chunks: Uint8Array[] = []
+  let bytes = 0
+  for (let part = await reader.read(); !part.done; part = await reader.read()) {
+    bytes += part.value.byteLength
+    if (bytes > MAX_RERANK_BYTES) {
+      await reader.cancel()
+      throw new Error('重排服务响应过大')
+    }
+    chunks.push(part.value)
+  }
+  const { results } = JSON.parse(Buffer.concat(chunks).toString('utf8')) as {
     results?: { index: number; relevance_score: number }[]
   }
   if (
