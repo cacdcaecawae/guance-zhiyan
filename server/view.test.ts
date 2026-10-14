@@ -158,12 +158,13 @@ test('completed library answers drop free commentary after the citations', () =>
   const cite = `[planid 5116·原文](${path(returned)})`
   const answer = [
     '依据《城固县“十三五”规划纲要》（planid 5116），文献库中只有这一篇城固县文件。',
-    '## 一、行业扶贫',
+    '## 一、城固县（含各镇）行业扶贫与基础设施配套项目',
     `- **项目**：“实施行业扶贫10大类137个项目” ${cite}`,
     '| 工程 | 原文 | 出处 |',
     '|---|---|---|',
     `| 行业扶贫 | “规划总投资526亿元” | ${cite} |`,
-    '项目覆盖贫困户2.1万户6.34万人。',
+    '**2. 产业项目**（十三五纲要）',
+    '**贫困人口覆盖**：“项目覆盖贫困户2.1万户6.34万人。”',
     '**口径说明**：上述内容反映了当时主流扶贫方式，次年还部署了社区教育示范区。',
     '## 分析（推断）',
     '1. 基础设施是投入重心。',
@@ -182,15 +183,16 @@ test('completed library answers drop free commentary after the citations', () =>
   trimAnswers(facts)
   assert.deepEqual(
     textOf(facts[0]).split('\n'),
-    answer.slice(0, 7),
-    'keeps the opening, cited lines, cited tables, short headings and passage text; drops commentary and unrequested analysis',
+    answer.slice(0, 8),
+    'keeps the opening, cited lines, cited tables, headings (with a source note) and labelled passage text; drops commentary and unrequested analysis',
   )
 
   const analysis = [make('分析城固县扶贫的投入重心。', answer.join('\n'))]
   trimAnswers(analysis)
-  assert.ok(
-    textOf(analysis[0]).endsWith('## 分析（推断）\n1. 基础设施是投入重心。'),
-    'requested analysis stays',
+  assert.equal(
+    textOf(analysis[0]),
+    answer.join('\n'),
+    'questions asking for analysis are left whole',
   )
 
   const refusal = `库中没有“十五五”规划，无法列出。\n仅供参考：${cite}`
