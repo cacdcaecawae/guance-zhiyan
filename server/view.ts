@@ -245,11 +245,14 @@ function returnedPassages(output: string) {
  */
 const CITED = /\/api\/library\/passages\/[0-9a-fA-F-]{36}/
 const ASKS_ANALYSIS =
-  /比较|对比|异同|差异|区别|变化|演变|演进|转变|分析|评价|评估|研判|原因|为什么|建议|启示|特点|特征|逻辑|关系|侧重|趋势|研析|报告/
+  /比较|对比|异同|差异|区别|变化|演变|演进|转变|分析|评价|评估|研判|原因|为什么|建议|启示|特点|特征|逻辑|关系|侧重|趋势|研析|(?<!工作)报告/
 const HEADING =
   /^(#{1,6})\s|^\*\*[^*]{1,30}\*\*\s*(（[^）]{1,20}）)?\s*$|^[一二三四五六七八九十]+、/
 /** A short "label:" in front of an excerpt, such as "**消除碘缺乏病**：", which is not passage text. */
 const LABEL = /^(?:[-*+]\s*|\d+[.、]\s*)?(?:\*\*[^*]{1,30}\*\*|[^：:「“"]{1,20})[：:]/
+/** Says what the library did not have; kept so a trimmed answer never hides a gap. */
+const ABSENT =
+  /未能?(检索到|找到|查到|收录|涉及)|没有(检索到|找到|收录)|暂未(检索到|收录|找到)|暂无|无正文|没有可用正文/
 const contentChars = (text: string) => text.match(/[一-鿿0-9]/g)?.join('') ?? ''
 const grams = (text: string) =>
   Array.from({ length: Math.max(0, text.length - 7) }, (_, i) => text.slice(i, i + 8))
@@ -257,14 +260,15 @@ const grams = (text: string) =>
 /**
  * Completed answers to factual library questions keep only what the cited passages support:
  * everything before the first cited line (sources, scope, assumptions, what was not found), cited
- * lines, tables containing a citation, headings (optionally with a source note), and lines that are
- * themselves passage text once a leading "label:" is removed (80% of 8-character runs found in this
- * session's library results). Free commentary after the citations (scope notes, summaries, reminders,
- * unrequested analysis sections) is dropped: it caused most rejections of factual answers. Replayed on
- * four rounds of answers to the 506-document training sample, the pass rate rose from 49.2% to 54.3%
- * (paired CI +1.8 to +7.5; category A 48.8% -> 57.7%, no category worse). Questions asking for
- * comparison or analysis, and answers with fewer than two cited lines (refusals, clarifying
- * questions), are left whole.
+ * lines, tables containing a citation, headings (optionally with a source note), notes on what was
+ * not found, and lines that are themselves passage text once a leading "label:" is removed (80% of
+ * 8-character runs found in this session's library results). Free commentary after the citations
+ * (scope notes, summaries, reminders, unrequested analysis sections) is dropped: it caused most
+ * rejections of factual answers. Replayed on existing answers, the pass rate rose from 49.2% to 54.8%
+ * on the 506-document training sample (four rounds, paired CI +2.5 to +8.5) and from 36.3% to 40.0% on
+ * the full library (two rounds, CI +1.7 to +6.7), with no category worse. Questions asking for
+ * comparison or analysis (a government work report alone does not count), and answers with fewer
+ * than two cited lines (refusals, clarifying questions), are left whole.
  * ponytail: keyword rules; an analysis question without these words is trimmed like a factual one.
  */
 function trimAnswer(lines: string[], question: string, sources: Set<string>) {
@@ -288,6 +292,10 @@ function trimAnswer(lines: string[], question: string, sources: Set<string>) {
     if (HEADING.test(text)) {
       unrequested = /分析|推断/.test(text)
       keep[index] = !unrequested
+      continue
+    }
+    if (ABSENT.test(text)) {
+      keep[index] = true
       continue
     }
     const runs = grams(contentChars(text.replace(LABEL, '')))

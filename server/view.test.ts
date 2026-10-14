@@ -165,6 +165,7 @@ test('completed library answers drop free commentary after the citations', () =>
     `| 行业扶贫 | “规划总投资526亿元” | ${cite} |`,
     '**2. 产业项目**（十三五纲要）',
     '**贫困人口覆盖**：“项目覆盖贫困户2.1万户6.34万人。”',
+    '文献库中未检索到城固县“十三五”扶贫项目的完成情况。',
     '**口径说明**：上述内容反映了当时主流扶贫方式，次年还部署了社区教育示范区。',
     '## 分析（推断）',
     '1. 基础设施是投入重心。',
@@ -183,9 +184,13 @@ test('completed library answers drop free commentary after the citations', () =>
   trimAnswers(facts)
   assert.deepEqual(
     textOf(facts[0]).split('\n'),
-    answer.slice(0, 8),
-    'keeps the opening, cited lines, cited tables, headings (with a source note) and labelled passage text; drops commentary and unrequested analysis',
+    answer.slice(0, 9),
+    'keeps the opening, cited lines, cited tables, headings (with a source note), labelled passage text and not-found notes; drops commentary and unrequested analysis',
   )
+
+  const report = [make('城固县2016年政府工作报告提到哪些扶贫项目？', answer.join('\n'))]
+  trimAnswers(report)
+  assert.equal(textOf(report[0]), textOf(facts[0]), 'a government work report question is factual')
 
   const analysis = [make('分析城固县扶贫的投入重心。', answer.join('\n'))]
   trimAnswers(analysis)
