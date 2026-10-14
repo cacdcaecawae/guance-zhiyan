@@ -264,6 +264,7 @@ test('library_search passes a normalized scope, rejects an invalid one, and libr
   sources.saveMetadata([
     {
       id: '33236',
+      title: null,
       area: ['全国', '安徽', '六安市', '裕安区'],
       level: '县',
       period: '十四五',
