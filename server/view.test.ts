@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import type { Message } from '../src/types/index.ts'
-import { checkCitations } from './view.ts'
+import { checkCitations, trimAnswers } from './view.ts'
 
 const returned = '01234567-89ab-5def-a123-456789abcdef'
 const invented = '00000000-0000-5000-a000-000000000000'
@@ -140,4 +140,169 @@ test('incremental citation checks reuse validated text but retain ordered histor
   for (const part of prefix.parts) Object.freeze(part)
   checkCitations(messages, 2)
   assert.deepEqual(messages, expected)
+})
+
+test('completed library answers drop free commentary after the citations', () => {
+  const passage = '实施行业扶贫10大类137个项目，规划总投资526亿元，项目覆盖贫困户2.1万户6.34万人。'
+  const tool = {
+    id: 't1',
+    type: 'tool' as const,
+    name: 'library_search',
+    input: '{"query":"扶贫"}',
+    output: [
+      '共享文献库检索结果：',
+      JSON.stringify({ id: returned, link: path(returned), text: passage }),
+    ].join('\n'),
+    status: 'done' as const,
+  }
+  const cite = `[planid 5116·原文](${path(returned)})`
+  const answer = [
+    '依据《城固县“十三五”规划纲要》（planid 5116），文献库中只有这一篇城固县文件。',
+    '## 一、城固县（含各镇）行业扶贫与基础设施配套项目',
+    `- **项目**：“实施行业扶贫10大类137个项目” ${cite}`,
+    '| 工程 | 原文 | 出处 |',
+    '|---|---|---|',
+    `| 行业扶贫 | “规划总投资526亿元” | ${cite} |`,
+    '**2. 产业项目**（十三五纲要）',
+    '**贫困人口覆盖**：“项目覆盖贫困户2.1万户6.34万人。”',
+    '文献库中未检索到城固县“十三五”扶贫项目的完成情况。',
+    '**口径说明**：上述内容反映了当时主流扶贫方式，次年还部署了社区教育示范区。',
+    '## 分析（推断）',
+    '1. 基础设施是投入重心。',
+  ]
+  const make = (question: string, text: string): Message => ({
+    id: 'turn-1',
+    role: 'assistant',
+    question,
+    status: 'done',
+    parts: [tool, { id: 'x1', type: 'text', step: 1, text }],
+  })
+  const textOf = (message: Message) =>
+    message.role === 'assistant' ? (message.parts.at(-1) as { text: string }).text : ''
+
+  const facts = [make('城固县扶贫有哪些项目？', answer.join('\n'))]
+  trimAnswers(facts)
+  assert.deepEqual(
+    textOf(facts[0]).split('\n'),
+    answer.slice(0, 9),
+    'keeps the opening, cited lines, cited tables, headings (with a source note), labelled passage text and not-found notes; drops commentary and unrequested analysis',
+  )
+
+  const report = [make('城固县2016年政府工作报告提到哪些扶贫项目？', answer.join('\n'))]
+  trimAnswers(report)
+  assert.equal(textOf(report[0]), textOf(facts[0]), 'a government work report question is factual')
+
+  const analysis = [make('分析城固县扶贫的投入重心。', answer.join('\n'))]
+  trimAnswers(analysis)
+  assert.equal(
+    textOf(analysis[0]),
+    answer.join('\n'),
+    'questions asking for analysis are left whole',
+  )
+
+  const refusal = `库中没有“十五五”规划，无法列出。\n仅供参考：${cite}`
+  const loading = { ...make('问题', answer.join('\n')), status: 'loading' as const }
+  const untouched = [make('“十五五”有哪些产业？', refusal), loading]
+  trimAnswers(untouched)
+  assert.equal(textOf(untouched[0]), refusal, 'fewer than two cited lines are left whole')
+  assert.equal(textOf(untouched[1]), answer.join('\n'), 'answers still streaming are not trimmed')
+})
+
+test('trimming uses results up to each answer and keeps web sources, bare tables and stated gaps only', () => {
+  const passage = '实施行业扶贫10大类137个项目，规划总投资526亿元，项目覆盖贫困户2.1万户6.34万人。'
+  const later = '易地扶贫搬迁安置点配套建设产业园区和社区工厂，带动搬迁群众就近就业。'
+  const search = (id: string, text: string) => ({
+    id,
+    type: 'tool' as const,
+    name: 'library_search',
+    input: '{"query":"扶贫"}',
+    output: [
+      '共享文献库检索结果：',
+      JSON.stringify({ id: returned, link: path(returned), text }),
+    ].join('\n'),
+    status: 'done' as const,
+  })
+  const cite = `[planid 5116·原文](${path(returned)})`
+  const answer = [
+    `- **项目**：“实施行业扶贫10大类137个项目” ${cite}`,
+    '工程 | 原文 | 出处',
+    '--- | --- | ---',
+    `行业扶贫 | “规划总投资526亿元” | ${cite}`,
+    '据新华网报道，项目已全部开工。[新华网](https://www.news.cn/x)',
+    '项目覆盖贫困户21万户634万人。',
+    later,
+    '文献库中未检索到项目完成情况；因此可以确认所有项目均未实施。',
+    '## 分析（推断）',
+    '### 主要影响',
+    '扶贫成效显著。',
+  ]
+  const messages: Message[] = [
+    {
+      id: 'turn-1',
+      role: 'assistant',
+      question: '城固县扶贫有哪些项目？',
+      status: 'done',
+      parts: [search('t1', passage), { id: 'x1', type: 'text', step: 1, text: answer.join('\n') }],
+    },
+    {
+      id: 'turn-2',
+      role: 'assistant',
+      question: '搬迁安置怎么安排？',
+      status: 'done',
+      parts: [search('t2', later), { id: 'x2', type: 'text', step: 1, text: '只有一条引用' }],
+    },
+  ]
+  trimAnswers(messages)
+  const text = messages[0].role === 'assistant' ? messages[0].parts[1] : undefined
+  assert.deepEqual(
+    text?.type === 'text' && text.text.split('\n'),
+    [...answer.slice(0, 5), '文献库中未检索到项目完成情况；'],
+    'drops a misquoted number, passages returned only in a later turn, the unsupported conclusion and the analysis subsection',
+  )
+})
+
+test('trimming keeps Latin terms distinct, counts only rendered citation links and leaves image questions whole', () => {
+  const passage = '完善GDP统一核算制度并加强地区生产总值质量管理。'
+  const tool = {
+    id: 't1',
+    type: 'tool' as const,
+    name: 'library_search',
+    input: '{"query":"核算"}',
+    output: [
+      '共享文献库检索结果：',
+      JSON.stringify({ id: returned, link: path(returned), text: passage }),
+    ].join('\n'),
+    status: 'done' as const,
+  }
+  const cite = `[planid 5116·原文](${path(returned)})`
+  const answer = [
+    `- **核算**：“完善GDP统一核算制度” ${cite}`,
+    `- **质量**：“加强地区生产总值质量管理” ${cite}`,
+    '完善GNP统一核算制度并加强地区生产总值质量管理。',
+    `项目均已完成 ${path(returned)}`,
+    passage,
+  ]
+  const make = (extra: Partial<Message> = {}): Message =>
+    ({
+      id: 'turn-1',
+      role: 'assistant',
+      question: '统计核算有哪些要求？',
+      status: 'done',
+      parts: [tool, { id: 'x1', type: 'text', step: 1, text: answer.join('\n') }],
+      ...extra,
+    }) as Message
+  const textOf = (message: Message) =>
+    message.role === 'assistant' ? (message.parts.at(-1) as { text: string }).text : ''
+
+  const facts = [make()]
+  trimAnswers(facts)
+  assert.deepEqual(
+    textOf(facts[0]).split('\n'),
+    [answer[0], answer[1], passage],
+    'drops a changed Latin term and a line whose only "citation" is a bare path',
+  )
+
+  const pictured = [make({ question: '', questionImages: [{ id: 'i1', width: 1, height: 1 }] })]
+  trimAnswers(pictured)
+  assert.equal(textOf(pictured[0]), answer.join('\n'), 'a question in an image is left whole')
 })
