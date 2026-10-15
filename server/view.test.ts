@@ -207,3 +207,56 @@ test('completed library answers drop free commentary after the citations', () =>
   assert.equal(textOf(untouched[0]), refusal, 'fewer than two cited lines are left whole')
   assert.equal(textOf(untouched[1]), answer.join('\n'), 'answers still streaming are not trimmed')
 })
+
+test('trimming uses results up to each answer and keeps web sources, bare tables and stated gaps only', () => {
+  const passage = '实施行业扶贫10大类137个项目，规划总投资526亿元，项目覆盖贫困户2.1万户6.34万人。'
+  const later = '易地扶贫搬迁安置点配套建设产业园区和社区工厂，带动搬迁群众就近就业。'
+  const search = (id: string, text: string) => ({
+    id,
+    type: 'tool' as const,
+    name: 'library_search',
+    input: '{"query":"扶贫"}',
+    output: [
+      '共享文献库检索结果：',
+      JSON.stringify({ id: returned, link: path(returned), text }),
+    ].join('\n'),
+    status: 'done' as const,
+  })
+  const cite = `[planid 5116·原文](${path(returned)})`
+  const answer = [
+    `- **项目**：“实施行业扶贫10大类137个项目” ${cite}`,
+    '工程 | 原文 | 出处',
+    '--- | --- | ---',
+    `行业扶贫 | “规划总投资526亿元” | ${cite}`,
+    '据新华网报道，项目已全部开工。[新华网](https://www.news.cn/x)',
+    '项目覆盖贫困户21万户634万人。',
+    later,
+    '文献库中未检索到项目完成情况；因此可以确认所有项目均未实施。',
+    '## 分析（推断）',
+    '### 主要影响',
+    '扶贫成效显著。',
+  ]
+  const messages: Message[] = [
+    {
+      id: 'turn-1',
+      role: 'assistant',
+      question: '城固县扶贫有哪些项目？',
+      status: 'done',
+      parts: [search('t1', passage), { id: 'x1', type: 'text', step: 1, text: answer.join('\n') }],
+    },
+    {
+      id: 'turn-2',
+      role: 'assistant',
+      question: '搬迁安置怎么安排？',
+      status: 'done',
+      parts: [search('t2', later), { id: 'x2', type: 'text', step: 1, text: '只有一条引用' }],
+    },
+  ]
+  trimAnswers(messages)
+  const text = messages[0].role === 'assistant' ? messages[0].parts[1] : undefined
+  assert.deepEqual(
+    text?.type === 'text' && text.text.split('\n'),
+    [...answer.slice(0, 5), '文献库中未检索到项目完成情况；'],
+    'drops a misquoted number, passages returned only in a later turn, the unsupported conclusion and the analysis subsection',
+  )
+})
