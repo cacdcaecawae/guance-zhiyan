@@ -270,8 +270,8 @@ const grams = (text: string) =>
  * 8-character runs found in the library results returned up to that answer). Free commentary after
  * the citations (scope notes, summaries, reminders, unrequested analysis sections with their
  * subsections) is dropped: it caused most rejections of factual answers. Replayed on existing answers,
- * the pass rate rose from 49.2% to 54.8% on the 506-document training sample (four rounds, paired CI
- * +2.5 to +8.5) and from 36.3% to 40.0% on the full library (two rounds, CI +1.7 to +6.7), with no
+ * the pass rate rose from 49.2% to 55.0% on the 506-document training sample (four rounds, paired CI
+ * +2.5 to +8.7) and from 36.3% to 39.7% on the full library (two rounds, CI +1.3 to +6.0), with no
  * category worse. Questions asking for comparison or analysis (a government work report alone does
  * not count), and answers with fewer than two cited lines (refusals, clarifying questions), are left
  * whole. Returns each line as kept (possibly shortened) or undefined when dropped.
