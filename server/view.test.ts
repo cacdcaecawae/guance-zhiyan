@@ -260,3 +260,49 @@ test('trimming uses results up to each answer and keeps web sources, bare tables
     'drops a misquoted number, passages returned only in a later turn, the unsupported conclusion and the analysis subsection',
   )
 })
+
+test('trimming keeps Latin terms distinct, counts only rendered citation links and leaves image questions whole', () => {
+  const passage = '完善GDP统一核算制度并加强地区生产总值质量管理。'
+  const tool = {
+    id: 't1',
+    type: 'tool' as const,
+    name: 'library_search',
+    input: '{"query":"核算"}',
+    output: [
+      '共享文献库检索结果：',
+      JSON.stringify({ id: returned, link: path(returned), text: passage }),
+    ].join('\n'),
+    status: 'done' as const,
+  }
+  const cite = `[planid 5116·原文](${path(returned)})`
+  const answer = [
+    `- **核算**：“完善GDP统一核算制度” ${cite}`,
+    `- **质量**：“加强地区生产总值质量管理” ${cite}`,
+    '完善GNP统一核算制度并加强地区生产总值质量管理。',
+    `项目均已完成 ${path(returned)}`,
+    passage,
+  ]
+  const make = (extra: Partial<Message> = {}): Message =>
+    ({
+      id: 'turn-1',
+      role: 'assistant',
+      question: '统计核算有哪些要求？',
+      status: 'done',
+      parts: [tool, { id: 'x1', type: 'text', step: 1, text: answer.join('\n') }],
+      ...extra,
+    }) as Message
+  const textOf = (message: Message) =>
+    message.role === 'assistant' ? (message.parts.at(-1) as { text: string }).text : ''
+
+  const facts = [make()]
+  trimAnswers(facts)
+  assert.deepEqual(
+    textOf(facts[0]).split('\n'),
+    [answer[0], answer[1], passage],
+    'drops a changed Latin term and a line whose only "citation" is a bare path',
+  )
+
+  const pictured = [make({ question: '', questionImages: [{ id: 'i1', width: 1, height: 1 }] })]
+  trimAnswers(pictured)
+  assert.equal(textOf(pictured[0]), answer.join('\n'), 'a question in an image is left whole')
+})

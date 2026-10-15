@@ -235,7 +235,8 @@ function returnedPassages(output: string) {
   })
 }
 
-const CITED = /\/api\/library\/passages\/[0-9a-fA-F-]{36}/
+/** An inline link to a library passage; a bare path renders no citation badge, so it does not count. */
+const CITED = /\]\(\s*<?\/api\/library\/passages\/[0-9a-fA-F-]{36}/
 const ASKS_ANALYSIS =
   /比较|对比|异同|差异|区别|变化|演变|演进|转变|分析|评价|评估|研判|原因|为什么|建议|启示|特点|特征|逻辑|关系|侧重|趋势|研析|(?<!工作)报告/
 const HEADING =
@@ -248,8 +249,15 @@ const ABSENT =
 const SENTENCE = /[^。；;！？!?]+[。；;！？!?]?/g
 /** Web sources cited from web tools; the library check cannot judge them. */
 const WEB_LINK = /https?:\/\//
-/** CJK characters, digits and decimal points between digits, so "5.2" does not match "52". */
-const contentChars = (text: string) => text.match(/[一-鿿0-9]|(?<=\d)\.(?=\d)/g)?.join('') ?? ''
+/**
+ * CJK characters, digits, Latin letters (case-folded) and decimal points between digits, so "5.2"
+ * does not match "52" nor "GNP" match "GDP".
+ */
+const contentChars = (text: string) =>
+  text
+    .match(/[一-鿿0-9a-zA-Z]|(?<=\d)\.(?=\d)/g)
+    ?.join('')
+    .toLowerCase() ?? ''
 const grams = (text: string) =>
   Array.from({ length: Math.max(0, text.length - 7) }, (_, i) => text.slice(i, i + 8))
 
@@ -334,6 +342,8 @@ export function trimAnswers(messages: Message[]) {
   let read = 0 // messages whose library results are already in sources
   for (const [index, message] of messages.entries()) {
     if (message.role !== 'assistant' || message.status !== 'done') continue
+    // A question in an attached image may ask for analysis the typed text does not show.
+    if (message.questionImages?.length) continue
     // Text parts are trimmed as one answer, then each part keeps its own surviving lines.
     const texts = message.parts.filter((part) => part.type === 'text')
     const lines = texts.flatMap((part, partIndex) =>
