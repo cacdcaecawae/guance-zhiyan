@@ -298,7 +298,10 @@ export class LibraryStore {
   /**
    * Documents in scope for library_list, ordered by period and year so a series reads in order.
    * Catalogue entries without imported text are listed too, flagged `noText`, so the model can
-   * say a document exists but has no usable text instead of claiming it is missing.
+   * say a document exists but has no usable text instead of claiming it is missing. They come
+   * after every document with text: a catalogue far larger than the imported texts (the 506-text
+   * training library lists ~53,000 entries) otherwise fills the first rows with them, and the model
+   * concluded the library had nothing on the question.
    */
   listDocuments(filter: LibraryFilter, title?: string, limit = 50) {
     const ids = this.documentIds(filter, true)
@@ -319,9 +322,10 @@ export class LibraryStore {
       const index = PERIODS.indexOf(period as string)
       return period === null ? -1 : index < 0 ? PERIODS.length : index
     }
-    rows.sort((a, b) => rank(a.period) - rank(b.period))
+    rows.sort((a, b) => Number(a.noText) - Number(b.noText) || rank(a.period) - rank(b.period))
     return {
       total: rows.length,
+      withoutText: rows.filter((row) => row.noText).length,
       documents: rows.slice(0, limit).map((row) => ({
         documentId: row.documentId as string,
         title: row.title as string,

@@ -15,7 +15,7 @@ const GUIDE = `共享文献库（管理员导入的政策、规划等文件）�
 检索步骤：
 1. 先确定涉及的文献：问题写明地区、规划期、文种、年份或文件名时，用 library_list（带 area、period、docType、year，文件名关键词放 title）找到对应文献；比较多个地区或多个规划期时，每个对象分别找。
 2. 再用 library_search 检索：已选定文献时把它们的 documentId 放进 documentIds，只在这些文献内检索；否则带上与第 1 步相同的筛选条件。问题问到的每个方面分别换关键词检索，片段不足时继续换词或用 library_open 看前后文。
-3. 检索不到或片段不足以回答时，明确说明未在文献库中找到、查过哪些范围，不凭记忆编造，也不推测未收录文件的内容。库中收录但标有 noText 的文献没有可用正文：如实告知用户，不检索、不推测它的内容。
+3. 检索不到或片段不足以回答时，明确说明未在文献库中找到、查过哪些范围，不凭记忆编造，也不推测未收录文件的内容。库中收录但标有 noText 的文献没有可用正文，不检索、不推测它的内容；它没有正文不等于库里没有相关资料，仍按题目检索其他有正文的文献，都找不到再如实告知哪些文献没有正文。
 依据文献库作答时按以下格式：
 1. 开头一句写明依据的文献，只写工具返回的标题与文献编号，不加发文日期、发文机构、会议届次。
 2. 正文按要点分条。每条写成“十字以内的小标题：“原文摘录””，摘录从片段中原样复制回答该要点的一段连续原文（一两句即可），中间不跳过、不用省略号；需要的内容不相连时拆成两条，各自加引号，条末原样复制该片段的 cite 字段作为引用（整段复制，含方括号和链接，不能只写 planid）；用表格呈现时，每行加“出处”列，放该行内容对应片段的 cite；不同要点引用各自对应的片段，不要多个要点共用一条引用。不用自己的话转述片段内容，片段没写的背景、意义、成效评价、数字换算、规划期起止年份、文件日期、机构沿革和其他地区或年份的情况一律不写，宁缺不补。
@@ -198,7 +198,7 @@ export function registerLibrary(ctx: Context, library: Library, deadline = Infin
           const title = args.title?.trim() || undefined
           if ((!filter && !title) || (title && (title.length > 64 || !title.isWellFormed())))
             throw reject('RAG_INVALID_FILTER')
-          const { total, documents } = library.list(filter ?? {}, title)
+          const { total, withoutText, documents } = library.list(filter ?? {}, title)
           if (!total)
             return '没有符合条件的文献。可放宽条件（例如改用上一级地区或去掉规划期）后再列出。'
           // Same budget as the other library tools; at least one row is always listed.
@@ -211,10 +211,16 @@ export function registerLibrary(ctx: Context, library: Library, deadline = Infin
           }
           return [
             `共 ${total} 篇符合条件` +
+              (withoutText ? `（其中 ${withoutText} 篇没有可用正文，排在最后）` : '') +
               (total > lines.length
                 ? `，以下列出前 ${lines.length} 篇（可加 title 关键词或更多条件缩小范围）：`
                 : '：'),
             ...lines,
+            ...(withoutText === total
+              ? [
+                  '这些文献都没有可用正文。库里其他文献（同地区其他规划期或年份、政府工作报告、上级文件）仍可能有相关原文：去掉规划期、文种或年份条件再列出，或直接 library_search，之后再下结论。',
+                ]
+              : []),
           ].join('\n')
         } catch (error) {
           failure(error, exec.signal)
