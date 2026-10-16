@@ -260,6 +260,28 @@ const contentChars = (text: string) =>
     .toLowerCase() ?? ''
 const grams = (text: string) =>
   Array.from({ length: Math.max(0, text.length - 7) }, (_, i) => text.slice(i, i + 8))
+/** Numbers of two or more digits or with a decimal point (full-width too), outside link markup. */
+const numbers = (text: string) =>
+  (
+    text
+      .replace(/[０-９．]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xfee0))
+      .replace(/\[[^\]]*\]\([^)]*\)/g, '')
+      .match(/\d+(?:\.\d+)?/g) ?? []
+  ).filter((n) => n.length >= 2 || n.includes('.'))
+/** Counts the model tends to add when summarizing, such as "六大", "七项", "六个方面", "第九章". */
+const COUNT = /[一二三四五六七八九十两]+个?(?:大|项|方面|章|节|部分|板块|领域)/g
+/** What the library results returned so far and the questions asked so far say. */
+type Facts = { runs: Set<string>; numbers: Set<string>; text: string }
+/**
+ * A sentence giving a number or count found in neither the library results nor the questions, such
+ * as "共六个方面", "六大抓手" or "2019年撤市设区". Sentences saying what was not found, and counts
+ * of the user's own aspects ("你关注的三个维度"), are never unsourced.
+ */
+const unsourced = (sentence: string, facts: Facts) =>
+  !ABSENT.test(sentence) &&
+  (numbers(sentence).some((n) => !facts.numbers.has(n)) ||
+    (!/你|您/.test(sentence) &&
+      (sentence.match(COUNT) ?? []).some((count) => !facts.text.includes(count))))
 
 /**
  * Completed answers to factual library questions keep only what the cited passages support:
@@ -272,12 +294,16 @@ const grams = (text: string) =>
  * subsections) is dropped: it caused most rejections of factual answers. Replayed on existing answers,
  * the pass rate rose from 49.2% to 55.0% on the 506-document training sample (four rounds, paired CI
  * +2.5 to +8.7) and from 36.3% to 39.7% on the full library (two rounds, CI +1.3 to +6.0), with no
- * category worse. Questions asking for comparison or analysis (a government work report alone does
- * not count), and answers with fewer than two cited lines (refusals, clarifying questions), are left
- * whole. Returns each line as kept (possibly shortened) or undefined when dropped.
+ * category worse. Kept lines without a citation (the opening, headings, passage-text lines) then
+ * lose the sentences giving an unsourced number or count, the model's own summaries the judge
+ * rejected as information outside the passages: replayed, 55.0% to 56.0% on the 506-document sample
+ * (CI +0.2 to +2.0), unchanged on the full library, no category worse. Questions asking for
+ * comparison or analysis (a government work report alone does not count), and answers with fewer
+ * than two cited lines (refusals, clarifying questions), are left whole. Returns each line as kept
+ * (possibly shortened) or undefined when dropped.
  * ponytail: keyword rules; an analysis question without these words is trimmed like a factual one.
  */
-function trimAnswer(lines: string[], question: string, sources: Set<string>) {
+function trimAnswer(lines: string[], question: string, facts: Facts) {
   const cited = lines.map((line) => CITED.test(line))
   if (ASKS_ANALYSIS.test(question) || cited.filter(Boolean).length < 2) return lines
   const kept: (string | undefined)[] = lines.map(() => undefined)
@@ -316,30 +342,48 @@ function trimAnswer(lines: string[], question: string, sources: Set<string>) {
     if (
       !section &&
       runs.length &&
-      runs.filter((run) => sources.has(run)).length >= 0.8 * runs.length
+      runs.filter((run) => facts.runs.has(run)).length >= 0.8 * runs.length
     )
       kept[index] = line
+  }
+  for (const [index, line] of kept.entries()) {
+    if (line === undefined || cited[index] || line.includes('|') || WEB_LINK.test(line)) continue
+    if (!line.trim() || !unsourced(line, facts)) continue
+    const prefix = /^\s*(?:#{1,6}\s|[-*+]\s|\d+[.、]\s*)?/.exec(line)?.[0] ?? ''
+    const rest =
+      line
+        .slice(prefix.length)
+        .match(SENTENCE)
+        ?.filter((sentence) => !unsourced(sentence, facts))
+        .join('') ?? ''
+    kept[index] = rest.trim() ? prefix + rest : undefined
   }
   return kept
 }
 
-function addPassageRuns(message: Message, sources: Set<string>) {
-  if (message.role === 'assistant')
+function addFacts(message: Message, facts: Facts) {
+  const add = (text: string) => {
+    for (const n of numbers(text)) facts.numbers.add(n)
+    facts.text += contentChars(text)
+  }
+  if (message.role === 'user') add(message.text)
+  else
     for (const part of message.parts)
       if (part.type === 'tool' && part.name.startsWith('library_') && part.status === 'done')
         for (const line of part.output.split('\n'))
           try {
-            const { text } = JSON.parse(line)
+            const { text, title, heading, documentId } = JSON.parse(line)
             if (typeof text === 'string')
-              for (const run of grams(contentChars(text))) sources.add(run)
+              for (const run of grams(contentChars(text))) facts.runs.add(run)
+            add([text, title, heading, documentId].filter((x) => x != null).join(' '))
           } catch {
             // Header and notice lines are not JSON.
           }
 }
 
 export function trimAnswers(messages: Message[]) {
-  const sources = new Set<string>()
-  let read = 0 // messages whose library results are already in sources
+  const facts: Facts = { runs: new Set(), numbers: new Set(), text: '' }
+  let read = 0 // messages already added to facts
   for (const [index, message] of messages.entries()) {
     if (message.role !== 'assistant' || message.status !== 'done') continue
     // A question in an attached image may ask for analysis the typed text does not show.
@@ -351,11 +395,11 @@ export function trimAnswers(messages: Message[]) {
     )
     if (lines.filter(({ line }) => CITED.test(line)).length < 2) continue
     // Only results returned up to this answer count, so a later turn cannot bring back trimmed lines.
-    for (; read <= index; read++) addPassageRuns(messages[read], sources)
+    for (; read <= index; read++) addFacts(messages[read], facts)
     const kept = trimAnswer(
       lines.map(({ line }) => line),
       message.question,
-      sources,
+      facts,
     )
     for (const [partIndex, part] of texts.entries())
       part.text = lines
