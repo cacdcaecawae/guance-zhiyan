@@ -404,6 +404,7 @@ test('metadata validates source exports, scopes current documents by area, perio
 
     const listed = library.listDocuments({ area: '六安市' })
     assert.equal(listed.total, 4)
+    assert.equal(listed.withoutText, 1)
     assert.deepEqual(
       listed.documents.find((d) => d.documentId === 'pending'),
       {
@@ -428,8 +429,13 @@ test('metadata validates source exports, scopes current documents by area, perio
     assert.equal(library.listDocuments({ area: '安徽' }, undefined, 2).documents.length, 2)
     assert.deepEqual(
       library.listDocuments({ area: '安徽' }).documents.map((d) => d.documentId),
-      ['report', 'old', 'province', 'pending', 'city', 'county'],
-      'periods in time order (十二五 before 十三五), reports without a period first',
+      ['report', 'old', 'province', 'city', 'county', 'pending'],
+      'documents with text first; periods in time order (十二五 before 十三五), reports without a period first',
+    )
+    assert.deepEqual(
+      library.listDocuments({ area: '安徽' }, undefined, 5).documents.map((d) => d.documentId),
+      ['report', 'old', 'province', 'city', 'county'],
+      'a document without text never pushes one with text out of the listed rows',
     )
 
     const scoped = await library.lexical('规划', 40, undefined, ['county', 'province'])

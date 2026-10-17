@@ -178,7 +178,7 @@ test('library_open retains the requested passage, budgets neighbors and preserve
       available: () => true,
       retrieve: async () => shortTail,
       neighbors: (id, before, after) => sources.neighbors(id, before, after),
-      list: () => ({ total: 0, documents: [] }),
+      list: () => ({ total: 0, withoutText: 0, documents: [] }),
     },
   }).init()
   try {
@@ -272,6 +272,16 @@ test('library_search passes a normalized scope, rejects an invalid one, and libr
       docType: '规划文件',
       outline: false,
     },
+    {
+      id: '2025',
+      title: '正定县“十一五”规划',
+      area: ['全国', '河北', '石家庄市', '正定县'],
+      level: '县',
+      period: '十一五',
+      year: null,
+      docType: '规划文件',
+      outline: false,
+    },
   ])
   const scopes: (LibraryFilter | undefined)[] = []
   const library = {
@@ -285,6 +295,7 @@ test('library_search passes a normalized scope, rejects an invalid one, and libr
       title === '长标题'
         ? {
             total: 50,
+            withoutText: 0,
             documents: Array.from({ length: 50 }, (_, i) => ({
               documentId: String(i),
               title: '长'.repeat(500),
@@ -301,6 +312,7 @@ test('library_search passes a normalized scope, rejects an invalid one, and libr
     if (input === 'invalid')
       return toolChunks('library_search', { query: '水利', period: '2025年' })
     if (input === 'long') return toolChunks('library_list', { title: '长标题' })
+    if (input === 'no text') return toolChunks('library_list', { area: '正定县' })
     if (input === 'document')
       return toolChunks('library_search', { query: '水利', documentIds: [' 33236 ', ''] })
     return toolChunks('library_search', {
@@ -341,6 +353,11 @@ test('library_search passes a normalized scope, rejects an invalid one, and libr
       `共 50 篇符合条件，以下列出前 ${rows.length} 篇（可加 title 关键词或更多条件缩小范围）：`,
     )
     assert.ok(rows.join('').length <= 6000)
+    // Only documents without text: the count is stated and the model is pointed at the rest of the library.
+    const bare = (await run('no text')).split('\n')
+    assert.equal(bare[0], '共 1 篇符合条件（其中 1 篇没有可用正文，排在最后）：')
+    assert.equal(JSON.parse(bare[1]).noText, true)
+    assert.match(bare[2], /^这些文献都没有可用正文。.*library_search/)
   } finally {
     await agents.close()
     store.close()
@@ -460,7 +477,7 @@ test('library tools stop searching once the question passes its deadline', async
   let searched = 0
   const library = {
     retrieve: async () => (searched++, []),
-    list: () => (searched++, { total: 0, documents: [] }),
+    list: () => (searched++, { total: 0, withoutText: 0, documents: [] }),
   } as unknown as Library
   registerLibrary(ctx, library, Date.now() - 1)
   const exec = { signal: new AbortController().signal } as ToolRunContext
