@@ -309,7 +309,7 @@ test('trimming keeps Latin terms distinct, counts only rendered citation links a
 
 test('trimming drops uncited sentences giving numbers or counts the results and question never gave', () => {
   const passage =
-    '划分为禁止开发区、限制开发区、优化开发区和重点开发区四大类，全市人才总量达到12.5万人。'
+    '划分为禁止开发区、限制开发区、优化开发区和重点开发区四大类，全市人才总量达到12.5万人，人才投入10,000万元，详见第十一章。'
   const search = {
     id: 't1',
     type: 'tool' as const,
@@ -328,12 +328,19 @@ test('trimming drops uncited sentences giving numbers or counts the results and 
   const cite = `[planid 11729·原文](${path(returned)})`
   const answer = [
     '依据《莱芜市2010年政府工作报告》（planid 11729）。报告共六个方面，莱芜市2019年撤市设区。',
-    '围绕你关注的三个维度和2025年目标整理如下：',
+    '围绕你关注的三个方面和2025年目标整理如下：',
+    '| 指标 | 目标 |',
+    '|---|---|',
+    '| 人才总量 | 2030年达到20万人〔片1〕 |',
+    '为您说明：报告共六个方面。',
+    '该市2019年撤市设区。文献库中未检索到2030年的人才目标。',
     '## 五、人才开发（“六大抓手”）',
     `- **总量**：“全市人才总量达到12.5万人” ${cite}`,
     '**四、重点开发区**（第九章，四大类）',
+    '**二、总体要求**（第一章）',
+    '人才投入10000万元。',
+    '## 产业 | 2019年撤市设区',
     `- **分区**：“划分为禁止开发区、限制开发区” ${cite}`,
-    '文献库中未检索到2030年的人才目标。',
   ]
   const messages: Message[] = [
     { id: 'u1', role: 'user', text: '莱芜市2025年人才目标是什么？' },
@@ -352,11 +359,15 @@ test('trimming drops uncited sentences giving numbers or counts the results and 
     [
       '依据《莱芜市2010年政府工作报告》（planid 11729）。',
       answer[1],
+      answer[2],
       answer[3],
       answer[4],
-      answer[5],
-      answer[6],
+      '文献库中未检索到2030年的人才目标。',
+      answer[8],
+      answer[9],
+      answer[11],
+      answer[13],
     ],
-    'keeps sourced numbers, numbered headings, counts of the asked aspects and not-found notes; drops invented counts and years',
+    'checks each sentence (a not-found note does not shield its neighbor), keeps tables whole, sourced numbers (10,000 = 10000), numbered headings and counts of the asked aspects; drops invented counts and years, "第一章" when only "第十一章" was returned, and a heading with a pipe',
   )
 })

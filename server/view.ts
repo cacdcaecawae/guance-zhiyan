@@ -260,28 +260,38 @@ const contentChars = (text: string) =>
     .toLowerCase() ?? ''
 const grams = (text: string) =>
   Array.from({ length: Math.max(0, text.length - 7) }, (_, i) => text.slice(i, i + 8))
-/** Numbers of two or more digits or with a decimal point (full-width too), outside link markup. */
+/**
+ * Numbers of two or more digits or with a decimal point, outside link markup; full-width digits and
+ * thousands separators are normalized, so "10,000" and "10000" are the same number.
+ */
 const numbers = (text: string) =>
   (
     text
       .replace(/[０-９．]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xfee0))
+      .replace(/(?<=\d),(?=\d{3}(?!\d))/g, '')
       .replace(/\[[^\]]*\]\([^)]*\)/g, '')
       .match(/\d+(?:\.\d+)?/g) ?? []
   ).filter((n) => n.length >= 2 || n.includes('.'))
-/** Counts the model tends to add when summarizing, such as "六大", "七项", "六个方面", "第九章". */
+/**
+ * Counts the model tends to add when summarizing, such as "六大", "七项", "六个方面", "第九章".
+ * Compared whole, so "第十九章" in a passage does not support "第九章".
+ */
 const COUNT = /[一二三四五六七八九十两]+个?(?:大|项|方面|章|节|部分|板块|领域)/g
-/** What the library results returned so far and the questions asked so far say. */
-type Facts = { runs: Set<string>; numbers: Set<string>; text: string }
+/** A count of the user's own aspects, such as "你关注的三个方面"; "为您说明：共六个方面" is not one. */
+const ASKED_COUNT =
+  /(?:你|您)[^，。；：:！？]{0,6}的[一二三四五六七八九十两]+个?(?:大|项|方面|章|节|部分|板块|领域)/g
+/** Numbers and counts in the library results returned so far and in the questions asked so far. */
+type Facts = { runs: Set<string>; numbers: Set<string>; counts: Set<string> }
 /**
  * A sentence giving a number or count found in neither the library results nor the questions, such
- * as "共六个方面", "六大抓手" or "2019年撤市设区". Sentences saying what was not found, and counts
- * of the user's own aspects ("你关注的三个维度"), are never unsourced.
+ * as "共六个方面", "六大抓手" or "2019年撤市设区". A sentence saying what was not found never is.
  */
 const unsourced = (sentence: string, facts: Facts) =>
   !ABSENT.test(sentence) &&
   (numbers(sentence).some((n) => !facts.numbers.has(n)) ||
-    (!/你|您/.test(sentence) &&
-      (sentence.match(COUNT) ?? []).some((count) => !facts.text.includes(count))))
+    (sentence.replace(ASKED_COUNT, '').match(COUNT) ?? []).some(
+      (count) => !facts.counts.has(count),
+    ))
 
 /**
  * Completed answers to factual library questions keep only what the cited passages support:
@@ -296,8 +306,8 @@ const unsourced = (sentence: string, facts: Facts) =>
  * +2.5 to +8.7) and from 36.3% to 39.7% on the full library (two rounds, CI +1.3 to +6.0), with no
  * category worse. Kept lines without a citation (the opening, headings, passage-text lines) then
  * lose the sentences giving an unsourced number or count, the model's own summaries the judge
- * rejected as information outside the passages: replayed, 55.0% to 56.0% on the 506-document sample
- * (CI +0.2 to +2.0), unchanged on the full library, no category worse. Questions asking for
+ * rejected as information outside the passages: replayed, 55.0% to 56.2% on the 506-document sample
+ * (CI +0.2 to +2.2), unchanged on the full library, no category worse. Questions asking for
  * comparison or analysis (a government work report alone does not count), and answers with fewer
  * than two cited lines (refusals, clarifying questions), are left whole. Returns each line as kept
  * (possibly shortened) or undefined when dropped.
@@ -307,9 +317,12 @@ function trimAnswer(lines: string[], question: string, facts: Facts) {
   const cited = lines.map((line) => CITED.test(line))
   if (ASKS_ANALYSIS.test(question) || cited.filter(Boolean).length < 2) return lines
   const kept: (string | undefined)[] = lines.map(() => undefined)
+  // Table rows: two or more consecutive lines with a pipe; a single heading with a pipe is not one.
+  const table = new Set<number>()
   for (let start = 0; start < lines.length;) {
     let end = start
     while (end < lines.length && lines[end].includes('|')) end++
+    for (let n = start; end - start >= 2 && n < end; n++) table.add(n)
     if (end > start && cited.slice(start, end).some(Boolean))
       for (let n = start; n < end; n++) kept[n] = lines[n]
     start = Math.max(end, start + 1)
@@ -347,15 +360,11 @@ function trimAnswer(lines: string[], question: string, facts: Facts) {
       kept[index] = line
   }
   for (const [index, line] of kept.entries()) {
-    if (line === undefined || cited[index] || line.includes('|') || WEB_LINK.test(line)) continue
-    if (!line.trim() || !unsourced(line, facts)) continue
+    if (line === undefined || cited[index] || table.has(index) || WEB_LINK.test(line)) continue
     const prefix = /^\s*(?:#{1,6}\s|[-*+]\s|\d+[.、]\s*)?/.exec(line)?.[0] ?? ''
-    const rest =
-      line
-        .slice(prefix.length)
-        .match(SENTENCE)
-        ?.filter((sentence) => !unsourced(sentence, facts))
-        .join('') ?? ''
+    const sentences = line.slice(prefix.length).match(SENTENCE) ?? []
+    if (!sentences.some((sentence) => unsourced(sentence, facts))) continue
+    const rest = sentences.filter((sentence) => !unsourced(sentence, facts)).join('')
     kept[index] = rest.trim() ? prefix + rest : undefined
   }
   return kept
@@ -364,7 +373,7 @@ function trimAnswer(lines: string[], question: string, facts: Facts) {
 function addFacts(message: Message, facts: Facts) {
   const add = (text: string) => {
     for (const n of numbers(text)) facts.numbers.add(n)
-    facts.text += contentChars(text)
+    for (const count of text.match(COUNT) ?? []) facts.counts.add(count)
   }
   if (message.role === 'user') add(message.text)
   else
@@ -382,7 +391,7 @@ function addFacts(message: Message, facts: Facts) {
 }
 
 export function trimAnswers(messages: Message[]) {
-  const facts: Facts = { runs: new Set(), numbers: new Set(), text: '' }
+  const facts: Facts = { runs: new Set(), numbers: new Set(), counts: new Set() }
   let read = 0 // messages already added to facts
   for (const [index, message] of messages.entries()) {
     if (message.role !== 'assistant' || message.status !== 'done') continue
