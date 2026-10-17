@@ -297,7 +297,8 @@ const unsourced = (text: string, facts: Facts) =>
  */
 function sourcedPart(sentence: string, facts: Facts) {
   if (!ABSENT.test(sentence)) return unsourced(sentence, facts) ? '' : sentence
-  const clauses = sentence.match(/[^，,]+[，,]?/g) ?? []
+  // A comma between digits is a thousands separator ("10,000"), not a clause break.
+  const clauses = sentence.match(/(?:[^，,]|(?<=\d),(?=\d))+[，,]?/g) ?? []
   if (!clauses.some((clause) => !ABSENT.test(clause) && unsourced(clause, facts))) return sentence
   return clauses
     .filter((clause) => ABSENT.test(clause))
@@ -329,8 +330,9 @@ function trimAnswer(lines: string[], question: string, facts: Facts) {
   const cited = lines.map((line) => CITED.test(line))
   if (ASKS_ANALYSIS.test(question) || cited.filter(Boolean).length < 2) return lines
   const kept: (string | undefined)[] = lines.map(() => undefined)
-  // Table rows: from the header above a separator row ("|---|", "--- | ---") to the end of the
-  // lines with pipes; a heading with a pipe right above the table is not a row.
+  // Table rows, as Markdown reads them: from the header above a separator row ("|---|",
+  // "--- | ---") to the last line with a pipe before a heading, so a heading with a pipe just above
+  // or below the table is not a row.
   const table = new Set<number>()
   for (let start = 0; start < lines.length;) {
     let end = start
@@ -338,7 +340,12 @@ function trimAnswer(lines: string[], question: string, facts: Facts) {
     const separator = lines
       .slice(start, end)
       .findIndex((line) => /^[\s|:-]*-{3}[\s|:-]*$/.test(line))
-    if (separator >= 0) for (let n = start + Math.max(separator - 1, 0); n < end; n++) table.add(n)
+    for (
+      let n = start + Math.max(separator - 1, 0);
+      separator >= 0 && n < end && !/^\s*#{1,6}\s/.test(lines[n]);
+      n++
+    )
+      table.add(n)
     if (end > start && cited.slice(start, end).some(Boolean))
       for (let n = start; n < end; n++) kept[n] = lines[n]
     start = Math.max(end, start + 1)
