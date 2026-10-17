@@ -260,16 +260,18 @@ const contentChars = (text: string) =>
     .toLowerCase() ?? ''
 const grams = (text: string) =>
   Array.from({ length: Math.max(0, text.length - 7) }, (_, i) => text.slice(i, i + 8))
+/** A thousands separator, half- or full-width: the commas of "10,000" and "10，000". */
+const THOUSANDS = /(?<=\d)[,，](?=\d{3}(?!\d))/g
 /**
  * Numbers of two or more digits or with a decimal point; full-width digits and thousands separators
- * are normalized, so "10,000" and "10000" are the same number. Link targets do not count, link text
- * does.
+ * are normalized, so "10,000", "10，000" and "10000" are the same number. Link targets do not count,
+ * link text does.
  */
 const numbers = (text: string) =>
   (
     text
       .replace(/[０-９．]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xfee0))
-      .replace(/(?<=\d),(?=\d{3}(?!\d))/g, '')
+      .replace(THOUSANDS, '')
       .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
       .match(/\d+(?:\.\d+)?/g) ?? []
   ).filter((n) => n.length >= 2 || n.includes('.'))
@@ -297,8 +299,8 @@ const unsourced = (text: string, facts: Facts) =>
  */
 function sourcedPart(sentence: string, facts: Facts) {
   if (!ABSENT.test(sentence)) return unsourced(sentence, facts) ? '' : sentence
-  // A comma between digits is a thousands separator ("10,000"), not a clause break.
-  const clauses = sentence.match(/(?:[^，,]|(?<=\d),(?=\d))+[，,]?/g) ?? []
+  // A thousands separator ("10,000", "10，000") is not a clause break.
+  const clauses = sentence.match(/(?:[^，,]|(?<=\d)[,，](?=\d{3}(?!\d)))+[，,]?/g) ?? []
   if (!clauses.some((clause) => !ABSENT.test(clause) && unsourced(clause, facts))) return sentence
   return clauses
     .filter((clause) => ABSENT.test(clause))
@@ -330,22 +332,17 @@ function trimAnswer(lines: string[], question: string, facts: Facts) {
   const cited = lines.map((line) => CITED.test(line))
   if (ASKS_ANALYSIS.test(question) || cited.filter(Boolean).length < 2) return lines
   const kept: (string | undefined)[] = lines.map(() => undefined)
-  // Table rows, as Markdown reads them: from the header above a separator row ("|---|",
-  // "--- | ---") to the last line with a pipe before a heading, so a heading with a pipe just above
-  // or below the table is not a row.
+  // Table rows, as Markdown reads them: a header line that is not a heading, a separator row
+  // ("|---|", "--- | ---"), then the lines with a pipe up to a heading. Each table is found on its
+  // own, so a heading with a pipe above, below or between tables is not a row.
   const table = new Set<number>()
+  const row = (line: string) => line.includes('|') && !/^\s*#{1,6}\s/.test(line)
+  for (let n = 0; n + 1 < lines.length; n++)
+    if (row(lines[n]) && /^(?=.*\|)(?=.*-)[\s|:-]+$/.test(lines[n + 1]))
+      for (table.add(n); n + 1 < lines.length && row(lines[n + 1]);) table.add(++n)
   for (let start = 0; start < lines.length;) {
     let end = start
     while (end < lines.length && lines[end].includes('|')) end++
-    const separator = lines
-      .slice(start, end)
-      .findIndex((line) => /^[\s|:-]*-{3}[\s|:-]*$/.test(line))
-    for (
-      let n = start + Math.max(separator - 1, 0);
-      separator >= 0 && n < end && !/^\s*#{1,6}\s/.test(lines[n]);
-      n++
-    )
-      table.add(n)
     if (end > start && cited.slice(start, end).some(Boolean))
       for (let n = start; n < end; n++) kept[n] = lines[n]
     start = Math.max(end, start + 1)
@@ -384,12 +381,24 @@ function trimAnswer(lines: string[], question: string, facts: Facts) {
   }
   for (const [index, line] of kept.entries()) {
     if (line === undefined || cited[index] || table.has(index) || WEB_LINK.test(line)) continue
-    // A list number is "1." or "1、", not the "12." of "12.5万".
-    const prefix = /^\s*(?:#{1,6}\s|[-*+]\s|\d+(?:\.(?!\d)|、)\s*)?/.exec(line)?.[0] ?? ''
-    const sentences = line.slice(prefix.length).match(SENTENCE) ?? []
+    // Structure, not data: heading marks, a bullet, then a list or section number, bold or not
+    // ("12.", "12、", "12）", "（12）", "3.2 "), but not the "12." of "12.5万".
+    const prefix =
+      /^\s*(?:#{1,6}\s+|[-*+]\s+)?(?:(?:\*\*)?(?:\d+(?:\.\d+)*(?:\.(?!\d)|[、)）])\s*|\d+(?:\.\d+)+\s+|[（(]\d+[）)]\s*))?/.exec(
+        line,
+      )?.[0] ?? ''
+    // A leading "label:" is checked on its own, so the "（五项）" of "**编制原则**（五项）：" does not
+    // take the passage text after it.
+    const body = line.slice(prefix.length)
+    const label = LABEL.exec(body)?.[0] ?? ''
+    const sentences = body.slice(label.length).match(SENTENCE) ?? []
     const rest = sentences.map((sentence) => sourcedPart(sentence, facts)).join('')
-    if (rest === sentences.join('')) continue
-    kept[index] = rest.trim() ? prefix + rest : undefined
+    const head = unsourced(label, facts) ? '' : label
+    if (head === label && rest === sentences.join('')) continue
+    const shown = prefix + head + rest
+    // Bold a dropped sentence opened or closed is removed rather than shown as a stray "**".
+    if (!rest.trim()) kept[index] = undefined
+    else kept[index] = (shown.match(/\*\*/g)?.length ?? 0) % 2 ? shown.replaceAll('**', '') : shown
   }
   return kept
 }

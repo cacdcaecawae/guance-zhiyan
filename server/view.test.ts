@@ -378,3 +378,111 @@ test('trimming drops uncited sentences giving numbers or counts the results and 
     'checks each sentence and, in a not-found sentence, each clause (a thousands separator is not a clause break); keeps tables whole, sourced numbers (10,000 = 10000), numbered headings and counts of the asked aspects; drops invented counts and years (also in link text and at a line start), "第一章" when only "第十一章" was returned, "六十项" when only "一百六十项" was, and a heading with a pipe, even right above or below a table',
   )
 })
+
+test('number and count trimming reads tables, list numbers and thousands separators as written', () => {
+  const passage =
+    '全市人才总量达到12万人，建设产业园区和配套设施，总投资10,000万元，共实施一百六十项重点工程。'
+  const cite = `[planid 1·原文](${path(returned)})`
+  const trim = (head: string[]) => {
+    const messages: Message[] = [
+      {
+        id: 'turn-1',
+        role: 'assistant',
+        question: '该市有哪些安排？',
+        status: 'done',
+        parts: [
+          {
+            id: 't1',
+            type: 'tool',
+            name: 'library_search',
+            input: '{}',
+            status: 'done',
+            output: JSON.stringify({
+              id: returned,
+              documentId: '1',
+              heading: '第三章 保障',
+              text: passage,
+            }),
+          },
+          {
+            id: 'x1',
+            type: 'text',
+            step: 1,
+            text: [
+              ...head,
+              `- 人才：“人才总量达到12万人” ${cite}`,
+              `- 园区：“建设产业园区” ${cite}`,
+            ].join('\n'),
+          },
+        ],
+      },
+    ]
+    trimAnswers(messages)
+    const part = messages[0].role === 'assistant' ? messages[0].parts[1] : undefined
+    return part?.type === 'text' ? part.text.split('\n').slice(0, -2) : []
+  }
+  const table = ['| 指标 | 目标 |', '|---|---|', '| 人才 | 2030年20万人 |']
+  const other = ['| 项目 | 投资 |', '| --- | --- |', '| 园区 | 2031年30亿元 |']
+  // [lines before the citations, lines kept]
+  const cases: [string[], string[]][] = [
+    [
+      [...table, '## 2019年 | 六大任务', ...other],
+      [...table, ...other],
+    ],
+    [['## 2019年 | 表', ...table, '## 2019年规划 | 六大任务'], table],
+    [
+      ['指标 | 目标', '--- | ---', '人才 | 2030年20万人'],
+      ['指标 | 目标', '--- | ---', '人才 | 2030年20万人'],
+    ],
+    [
+      ['| 指标 | 目标 |', '|:---|---:|', '| 人才 | 2030年20万人 |'],
+      ['| 指标 | 目标 |', '|:---|---:|', '| 人才 | 2030年20万人 |'],
+    ],
+    [
+      ['总投资10，000万元。', '总投资10000万元。'],
+      ['总投资10，000万元。', '总投资10000万元。'],
+    ],
+    [
+      ['未检索到总投资10，000万元的项目，但该市2019年撤市设区。'],
+      ['未检索到总投资10，000万元的项目。'],
+    ],
+    [['未检索到相关资料,但该市2019年撤市设区。'], ['未检索到相关资料。']],
+    [['2019，2020年分别撤市设区。'], []],
+    [
+      [
+        '## 27. 保障措施',
+        '- 27. 保障措施',
+        '**27. 保障措施**',
+        '## 4.3 节能减排',
+        '（27）保障措施',
+        '27、保障措施',
+      ],
+      [
+        '## 27. 保障措施',
+        '- 27. 保障措施',
+        '**27. 保障措施**',
+        '## 4.3 节能减排',
+        '（27）保障措施',
+        '27、保障措施',
+      ],
+    ],
+    [['## 27. 2019年撤市设区', '12.5万人才完成培训。', '2019 年撤市设区。'], []],
+    [['共实施一百六十项重点工程。', '共实施六十项重点工程。'], ['共实施一百六十项重点工程。']],
+    [
+      [
+        '**编制原则**（五项）：“建设产业园区和配套设施。”（园区原则）',
+        '- **园区**：2019年撤市设区。建设产业园区。',
+        '**2019年撤市设区。建设产业园区。**',
+        '**27. 保障措施。2019年撤市设区。**',
+        '- **园区**：2019年撤市设区。',
+      ],
+      [
+        '“建设产业园区和配套设施。”（园区原则）',
+        '- **园区**：建设产业园区。',
+        '建设产业园区。',
+        '**27. 保障措施。**',
+      ],
+    ],
+  ]
+  for (const [head, kept] of cases) assert.deepEqual(trim(head), kept, head.join(' / '))
+})
