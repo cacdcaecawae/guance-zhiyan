@@ -260,6 +260,53 @@ const contentChars = (text: string) =>
     .toLowerCase() ?? ''
 const grams = (text: string) =>
   Array.from({ length: Math.max(0, text.length - 7) }, (_, i) => text.slice(i, i + 8))
+/** A thousands separator, half- or full-width: the commas of "10,000" and "10，000". */
+const THOUSANDS = /(?<=\d)[,，](?=\d{3}(?!\d))/g
+/**
+ * Numbers of two or more digits or with a decimal point; full-width digits and thousands separators
+ * are normalized, so "10,000", "10，000" and "10000" are the same number. Link targets do not count,
+ * link text does.
+ */
+const numbers = (text: string) =>
+  (
+    text
+      .replace(/[０-９．]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xfee0))
+      .replace(THOUSANDS, '')
+      .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
+      .match(/\d+(?:\.\d+)?/g) ?? []
+  ).filter((n) => n.length >= 2 || n.includes('.'))
+/**
+ * Counts the model tends to add when summarizing, such as "六大", "七项", "六个方面", "第九章".
+ * Compared whole, so "第十九章" in a passage does not support "第九章", nor "一百六十项" "六十项".
+ */
+const COUNT = /[零〇一二三四五六七八九十百千万两]+个?(?:大|项|方面|章|节|部分|板块|领域)/g
+/** A count of the user's own aspects, such as "你关注的三个方面"; "为您说明：共六个方面" is not one. */
+const ASKED_COUNT =
+  /(?:你|您)[^，。；：:！？]{0,6}的[零〇一二三四五六七八九十百千万两]+个?(?:大|项|方面|章|节|部分|板块|领域)/g
+/** Numbers and counts in the library results returned so far and in the questions asked so far. */
+type Facts = { runs: Set<string>; numbers: Set<string>; counts: Set<string> }
+/**
+ * Text giving a number or count found in neither the library results nor the questions, such as
+ * "共六个方面", "六大抓手" or "2019年撤市设区".
+ */
+const unsourced = (text: string, facts: Facts) =>
+  numbers(text).some((n) => !facts.numbers.has(n)) ||
+  (text.replace(ASKED_COUNT, '').match(COUNT) ?? []).some((count) => !facts.counts.has(count))
+/**
+ * What to keep of a sentence: all of it, nothing when it is unsourced, or, in a sentence saying what
+ * was not found, only its not-found clauses when another clause is unsourced
+ * ("未检索到后续资料，但该市2019年撤市设区。" keeps "未检索到后续资料。").
+ */
+function sourcedPart(sentence: string, facts: Facts) {
+  if (!ABSENT.test(sentence)) return unsourced(sentence, facts) ? '' : sentence
+  // A thousands separator ("10,000", "10，000") is not a clause break.
+  const clauses = sentence.match(/(?:[^，,]|(?<=\d)[,，](?=\d{3}(?!\d)))+[，,]?/g) ?? []
+  if (!clauses.some((clause) => !ABSENT.test(clause) && unsourced(clause, facts))) return sentence
+  return clauses
+    .filter((clause) => ABSENT.test(clause))
+    .join('')
+    .replace(/[，,。；;！？!?]?$/, '。')
+}
 
 /**
  * Completed answers to factual library questions keep only what the cited passages support:
@@ -272,15 +319,27 @@ const grams = (text: string) =>
  * subsections) is dropped: it caused most rejections of factual answers. Replayed on existing answers,
  * the pass rate rose from 49.2% to 55.0% on the 506-document training sample (four rounds, paired CI
  * +2.5 to +8.7) and from 36.3% to 39.7% on the full library (two rounds, CI +1.3 to +6.0), with no
- * category worse. Questions asking for comparison or analysis (a government work report alone does
- * not count), and answers with fewer than two cited lines (refusals, clarifying questions), are left
- * whole. Returns each line as kept (possibly shortened) or undefined when dropped.
+ * category worse. Kept lines without a citation (the opening, headings, passage-text lines) then
+ * lose the sentences giving an unsourced number or count, the model's own summaries the judge
+ * rejected as information outside the passages: replayed, 55.0% to 56.2% on the 506-document sample
+ * (CI +0.2 to +2.2), unchanged on the full library, no category worse. Questions asking for
+ * comparison or analysis (a government work report alone does not count), and answers with fewer
+ * than two cited lines (refusals, clarifying questions), are left whole. Returns each line as kept
+ * (possibly shortened) or undefined when dropped.
  * ponytail: keyword rules; an analysis question without these words is trimmed like a factual one.
  */
-function trimAnswer(lines: string[], question: string, sources: Set<string>) {
+function trimAnswer(lines: string[], question: string, facts: Facts) {
   const cited = lines.map((line) => CITED.test(line))
   if (ASKS_ANALYSIS.test(question) || cited.filter(Boolean).length < 2) return lines
   const kept: (string | undefined)[] = lines.map(() => undefined)
+  // Table rows, as Markdown reads them: a header line that is not a heading, a separator row
+  // ("|---|", "--- | ---"), then the lines with a pipe up to a heading. Each table is found on its
+  // own, so a heading with a pipe above, below or between tables is not a row.
+  const table = new Set<number>()
+  const row = (line: string) => line.includes('|') && !/^\s*#{1,6}\s/.test(line)
+  for (let n = 0; n + 1 < lines.length; n++)
+    if (row(lines[n]) && /^(?=.*\|)(?=.*-)[\s|:-]+$/.test(lines[n + 1]))
+      for (table.add(n); n + 1 < lines.length && row(lines[n + 1]);) table.add(++n)
   for (let start = 0; start < lines.length;) {
     let end = start
     while (end < lines.length && lines[end].includes('|')) end++
@@ -316,30 +375,57 @@ function trimAnswer(lines: string[], question: string, sources: Set<string>) {
     if (
       !section &&
       runs.length &&
-      runs.filter((run) => sources.has(run)).length >= 0.8 * runs.length
+      runs.filter((run) => facts.runs.has(run)).length >= 0.8 * runs.length
     )
       kept[index] = line
+  }
+  for (const [index, line] of kept.entries()) {
+    if (line === undefined || cited[index] || table.has(index) || WEB_LINK.test(line)) continue
+    // Structure, not data: heading marks, a bullet, then a list or section number, bold or not
+    // ("12.", "12、", "12）", "（12）", "3.2 "), but not the "12." of "12.5万".
+    const prefix =
+      /^\s*(?:#{1,6}\s+|[-*+]\s+)?(?:(?:\*\*)?(?:\d+(?:\.\d+)*(?:\.(?!\d)|[、)）])\s*|\d+(?:\.\d+)+\s+|[（(]\d+[）)]\s*))?/.exec(
+        line,
+      )?.[0] ?? ''
+    // A leading "label:" is checked on its own, so the "（五项）" of "**编制原则**（五项）：" does not
+    // take the passage text after it.
+    const body = line.slice(prefix.length)
+    const label = LABEL.exec(body)?.[0] ?? ''
+    const sentences = body.slice(label.length).match(SENTENCE) ?? []
+    const rest = sentences.map((sentence) => sourcedPart(sentence, facts)).join('')
+    const head = unsourced(label, facts) ? '' : label
+    if (head === label && rest === sentences.join('')) continue
+    const shown = prefix + head + rest
+    // Bold a dropped sentence opened or closed is removed rather than shown as a stray "**".
+    if (!rest.trim()) kept[index] = undefined
+    else kept[index] = (shown.match(/\*\*/g)?.length ?? 0) % 2 ? shown.replaceAll('**', '') : shown
   }
   return kept
 }
 
-function addPassageRuns(message: Message, sources: Set<string>) {
-  if (message.role === 'assistant')
+function addFacts(message: Message, facts: Facts) {
+  const add = (text: string) => {
+    for (const n of numbers(text)) facts.numbers.add(n)
+    for (const count of text.match(COUNT) ?? []) facts.counts.add(count)
+  }
+  if (message.role === 'user') add(message.text)
+  else
     for (const part of message.parts)
       if (part.type === 'tool' && part.name.startsWith('library_') && part.status === 'done')
         for (const line of part.output.split('\n'))
           try {
-            const { text } = JSON.parse(line)
+            const { text, title, heading, documentId } = JSON.parse(line)
             if (typeof text === 'string')
-              for (const run of grams(contentChars(text))) sources.add(run)
+              for (const run of grams(contentChars(text))) facts.runs.add(run)
+            add([text, title, heading, documentId].filter((x) => x != null).join(' '))
           } catch {
             // Header and notice lines are not JSON.
           }
 }
 
 export function trimAnswers(messages: Message[]) {
-  const sources = new Set<string>()
-  let read = 0 // messages whose library results are already in sources
+  const facts: Facts = { runs: new Set(), numbers: new Set(), counts: new Set() }
+  let read = 0 // messages already added to facts
   for (const [index, message] of messages.entries()) {
     if (message.role !== 'assistant' || message.status !== 'done') continue
     // A question in an attached image may ask for analysis the typed text does not show.
@@ -351,11 +437,11 @@ export function trimAnswers(messages: Message[]) {
     )
     if (lines.filter(({ line }) => CITED.test(line)).length < 2) continue
     // Only results returned up to this answer count, so a later turn cannot bring back trimmed lines.
-    for (; read <= index; read++) addPassageRuns(messages[read], sources)
+    for (; read <= index; read++) addFacts(messages[read], facts)
     const kept = trimAnswer(
       lines.map(({ line }) => line),
       message.question,
-      sources,
+      facts,
     )
     for (const [partIndex, part] of texts.entries())
       part.text = lines

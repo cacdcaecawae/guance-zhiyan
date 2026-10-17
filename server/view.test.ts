@@ -151,7 +151,7 @@ test('completed library answers drop free commentary after the citations', () =>
     input: '{"query":"扶贫"}',
     output: [
       '共享文献库检索结果：',
-      JSON.stringify({ id: returned, link: path(returned), text: passage }),
+      JSON.stringify({ id: returned, link: path(returned), documentId: '5116', text: passage }),
     ].join('\n'),
     status: 'done' as const,
   }
@@ -305,4 +305,184 @@ test('trimming keeps Latin terms distinct, counts only rendered citation links a
   const pictured = [make({ question: '', questionImages: [{ id: 'i1', width: 1, height: 1 }] })]
   trimAnswers(pictured)
   assert.equal(textOf(pictured[0]), answer.join('\n'), 'a question in an image is left whole')
+})
+
+test('trimming drops uncited sentences giving numbers or counts the results and question never gave', () => {
+  const passage =
+    '划分为禁止开发区、限制开发区、优化开发区和重点开发区四大类，全市人才总量达到12.5万人，人才投入10,000万元，共实施一百六十项重点工程，详见第十一章。'
+  const search = {
+    id: 't1',
+    type: 'tool' as const,
+    name: 'library_search',
+    input: '{"query":"人才"}',
+    output: JSON.stringify({
+      id: returned,
+      link: path(returned),
+      documentId: '11729',
+      title: '莱芜市2010年政府工作报告',
+      heading: '第九章 人才',
+      text: passage,
+    }),
+    status: 'done' as const,
+  }
+  const cite = `[planid 11729·原文](${path(returned)})`
+  const answer = [
+    '依据《莱芜市2010年政府工作报告》（planid 11729）。报告共六个方面，莱芜市2019年撤市设区。',
+    '围绕你关注的三个方面和2025年目标整理如下：',
+    '## 指标 | 2019年撤市设区',
+    '| 指标 | 目标 |',
+    '|---|---|',
+    '| 人才总量 | 2030年达到20万人〔片1〕 |',
+    '## 2019年规划 | 六大任务',
+    '文献库中未检索到总投资10,000万元以上的项目。',
+    '为您说明：报告共六个方面。',
+    '该市2019年撤市设区。文献库中未检索到2030年的人才目标，但当年已完成13.5万人培训。',
+    '13.5万人才完成培训。',
+    '参见[2019年撤市设区公告](#note)。',
+    '共实施六十项重点工程。',
+    '## 五、人才开发（“六大抓手”）',
+    `- **总量**：“全市人才总量达到12.5万人” ${cite}`,
+    '**四、重点开发区**（第九章，四大类）',
+    '**二、总体要求**（第一章）',
+    '人才投入10000万元。',
+    '## 产业 | 2019年撤市设区',
+    `- **分区**：“划分为禁止开发区、限制开发区” ${cite}`,
+  ]
+  const messages: Message[] = [
+    { id: 'u1', role: 'user', text: '莱芜市2025年人才目标是什么？' },
+    {
+      id: 'turn-1',
+      role: 'assistant',
+      question: '莱芜市2025年人才目标是什么？',
+      status: 'done',
+      parts: [search, { id: 'x1', type: 'text', step: 1, text: answer.join('\n') }],
+    },
+  ]
+  trimAnswers(messages)
+  const text = messages[1].role === 'assistant' ? messages[1].parts[1] : undefined
+  assert.deepEqual(
+    text?.type === 'text' && text.text.split('\n'),
+    [
+      '依据《莱芜市2010年政府工作报告》（planid 11729）。',
+      answer[1],
+      answer[3],
+      answer[4],
+      answer[5],
+      answer[7],
+      '文献库中未检索到2030年的人才目标。',
+      answer[14],
+      answer[15],
+      answer[17],
+      answer[19],
+    ],
+    'checks each sentence and, in a not-found sentence, each clause (a thousands separator is not a clause break); keeps tables whole, sourced numbers (10,000 = 10000), numbered headings and counts of the asked aspects; drops invented counts and years (also in link text and at a line start), "第一章" when only "第十一章" was returned, "六十项" when only "一百六十项" was, and a heading with a pipe, even right above or below a table',
+  )
+})
+
+test('number and count trimming reads tables, list numbers and thousands separators as written', () => {
+  const passage =
+    '全市人才总量达到12万人，建设产业园区和配套设施，总投资10,000万元，共实施一百六十项重点工程。'
+  const cite = `[planid 1·原文](${path(returned)})`
+  const trim = (head: string[]) => {
+    const messages: Message[] = [
+      {
+        id: 'turn-1',
+        role: 'assistant',
+        question: '该市有哪些安排？',
+        status: 'done',
+        parts: [
+          {
+            id: 't1',
+            type: 'tool',
+            name: 'library_search',
+            input: '{}',
+            status: 'done',
+            output: JSON.stringify({
+              id: returned,
+              documentId: '1',
+              heading: '第三章 保障',
+              text: passage,
+            }),
+          },
+          {
+            id: 'x1',
+            type: 'text',
+            step: 1,
+            text: [
+              ...head,
+              `- 人才：“人才总量达到12万人” ${cite}`,
+              `- 园区：“建设产业园区” ${cite}`,
+            ].join('\n'),
+          },
+        ],
+      },
+    ]
+    trimAnswers(messages)
+    const part = messages[0].role === 'assistant' ? messages[0].parts[1] : undefined
+    return part?.type === 'text' ? part.text.split('\n').slice(0, -2) : []
+  }
+  const table = ['| 指标 | 目标 |', '|---|---|', '| 人才 | 2030年20万人 |']
+  const other = ['| 项目 | 投资 |', '| --- | --- |', '| 园区 | 2031年30亿元 |']
+  // [lines before the citations, lines kept]
+  const cases: [string[], string[]][] = [
+    [
+      [...table, '## 2019年 | 六大任务', ...other],
+      [...table, ...other],
+    ],
+    [['## 2019年 | 表', ...table, '## 2019年规划 | 六大任务'], table],
+    [
+      ['指标 | 目标', '--- | ---', '人才 | 2030年20万人'],
+      ['指标 | 目标', '--- | ---', '人才 | 2030年20万人'],
+    ],
+    [
+      ['| 指标 | 目标 |', '|:---|---:|', '| 人才 | 2030年20万人 |'],
+      ['| 指标 | 目标 |', '|:---|---:|', '| 人才 | 2030年20万人 |'],
+    ],
+    [
+      ['总投资10，000万元。', '总投资10000万元。'],
+      ['总投资10，000万元。', '总投资10000万元。'],
+    ],
+    [
+      ['未检索到总投资10，000万元的项目，但该市2019年撤市设区。'],
+      ['未检索到总投资10，000万元的项目。'],
+    ],
+    [['未检索到相关资料,但该市2019年撤市设区。'], ['未检索到相关资料。']],
+    [['2019，2020年分别撤市设区。'], []],
+    [
+      [
+        '## 27. 保障措施',
+        '- 27. 保障措施',
+        '**27. 保障措施**',
+        '## 4.3 节能减排',
+        '（27）保障措施',
+        '27、保障措施',
+      ],
+      [
+        '## 27. 保障措施',
+        '- 27. 保障措施',
+        '**27. 保障措施**',
+        '## 4.3 节能减排',
+        '（27）保障措施',
+        '27、保障措施',
+      ],
+    ],
+    [['## 27. 2019年撤市设区', '12.5万人才完成培训。', '2019 年撤市设区。'], []],
+    [['共实施一百六十项重点工程。', '共实施六十项重点工程。'], ['共实施一百六十项重点工程。']],
+    [
+      [
+        '**编制原则**（五项）：“建设产业园区和配套设施。”（园区原则）',
+        '- **园区**：2019年撤市设区。建设产业园区。',
+        '**2019年撤市设区。建设产业园区。**',
+        '**27. 保障措施。2019年撤市设区。**',
+        '- **园区**：2019年撤市设区。',
+      ],
+      [
+        '“建设产业园区和配套设施。”（园区原则）',
+        '- **园区**：建设产业园区。',
+        '建设产业园区。',
+        '**27. 保障措施。**',
+      ],
+    ],
+  ]
+  for (const [head, kept] of cases) assert.deepEqual(trim(head), kept, head.join(' / '))
 })
