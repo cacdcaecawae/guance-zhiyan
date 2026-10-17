@@ -261,37 +261,49 @@ const contentChars = (text: string) =>
 const grams = (text: string) =>
   Array.from({ length: Math.max(0, text.length - 7) }, (_, i) => text.slice(i, i + 8))
 /**
- * Numbers of two or more digits or with a decimal point, outside link markup; full-width digits and
- * thousands separators are normalized, so "10,000" and "10000" are the same number.
+ * Numbers of two or more digits or with a decimal point; full-width digits and thousands separators
+ * are normalized, so "10,000" and "10000" are the same number. Link targets do not count, link text
+ * does.
  */
 const numbers = (text: string) =>
   (
     text
       .replace(/[０-９．]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xfee0))
       .replace(/(?<=\d),(?=\d{3}(?!\d))/g, '')
-      .replace(/\[[^\]]*\]\([^)]*\)/g, '')
+      .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
       .match(/\d+(?:\.\d+)?/g) ?? []
   ).filter((n) => n.length >= 2 || n.includes('.'))
 /**
  * Counts the model tends to add when summarizing, such as "六大", "七项", "六个方面", "第九章".
- * Compared whole, so "第十九章" in a passage does not support "第九章".
+ * Compared whole, so "第十九章" in a passage does not support "第九章", nor "一百六十项" "六十项".
  */
-const COUNT = /[一二三四五六七八九十两]+个?(?:大|项|方面|章|节|部分|板块|领域)/g
+const COUNT = /[零〇一二三四五六七八九十百千万两]+个?(?:大|项|方面|章|节|部分|板块|领域)/g
 /** A count of the user's own aspects, such as "你关注的三个方面"; "为您说明：共六个方面" is not one. */
 const ASKED_COUNT =
-  /(?:你|您)[^，。；：:！？]{0,6}的[一二三四五六七八九十两]+个?(?:大|项|方面|章|节|部分|板块|领域)/g
+  /(?:你|您)[^，。；：:！？]{0,6}的[零〇一二三四五六七八九十百千万两]+个?(?:大|项|方面|章|节|部分|板块|领域)/g
 /** Numbers and counts in the library results returned so far and in the questions asked so far. */
 type Facts = { runs: Set<string>; numbers: Set<string>; counts: Set<string> }
 /**
- * A sentence giving a number or count found in neither the library results nor the questions, such
- * as "共六个方面", "六大抓手" or "2019年撤市设区". A sentence saying what was not found never is.
+ * Text giving a number or count found in neither the library results nor the questions, such as
+ * "共六个方面", "六大抓手" or "2019年撤市设区".
  */
-const unsourced = (sentence: string, facts: Facts) =>
-  !ABSENT.test(sentence) &&
-  (numbers(sentence).some((n) => !facts.numbers.has(n)) ||
-    (sentence.replace(ASKED_COUNT, '').match(COUNT) ?? []).some(
-      (count) => !facts.counts.has(count),
-    ))
+const unsourced = (text: string, facts: Facts) =>
+  numbers(text).some((n) => !facts.numbers.has(n)) ||
+  (text.replace(ASKED_COUNT, '').match(COUNT) ?? []).some((count) => !facts.counts.has(count))
+/**
+ * What to keep of a sentence: all of it, nothing when it is unsourced, or, in a sentence saying what
+ * was not found, only its not-found clauses when another clause is unsourced
+ * ("未检索到后续资料，但该市2019年撤市设区。" keeps "未检索到后续资料。").
+ */
+function sourcedPart(sentence: string, facts: Facts) {
+  if (!ABSENT.test(sentence)) return unsourced(sentence, facts) ? '' : sentence
+  const clauses = sentence.match(/[^，,]+[，,]?/g) ?? []
+  if (!clauses.some((clause) => !ABSENT.test(clause) && unsourced(clause, facts))) return sentence
+  return clauses
+    .filter((clause) => ABSENT.test(clause))
+    .join('')
+    .replace(/[，,。；;！？!?]?$/, '。')
+}
 
 /**
  * Completed answers to factual library questions keep only what the cited passages support:
@@ -317,12 +329,16 @@ function trimAnswer(lines: string[], question: string, facts: Facts) {
   const cited = lines.map((line) => CITED.test(line))
   if (ASKS_ANALYSIS.test(question) || cited.filter(Boolean).length < 2) return lines
   const kept: (string | undefined)[] = lines.map(() => undefined)
-  // Table rows: two or more consecutive lines with a pipe; a single heading with a pipe is not one.
+  // Table rows: from the header above a separator row ("|---|", "--- | ---") to the end of the
+  // lines with pipes; a heading with a pipe right above the table is not a row.
   const table = new Set<number>()
   for (let start = 0; start < lines.length;) {
     let end = start
     while (end < lines.length && lines[end].includes('|')) end++
-    for (let n = start; end - start >= 2 && n < end; n++) table.add(n)
+    const separator = lines
+      .slice(start, end)
+      .findIndex((line) => /^[\s|:-]*-{3}[\s|:-]*$/.test(line))
+    if (separator >= 0) for (let n = start + Math.max(separator - 1, 0); n < end; n++) table.add(n)
     if (end > start && cited.slice(start, end).some(Boolean))
       for (let n = start; n < end; n++) kept[n] = lines[n]
     start = Math.max(end, start + 1)
@@ -361,10 +377,11 @@ function trimAnswer(lines: string[], question: string, facts: Facts) {
   }
   for (const [index, line] of kept.entries()) {
     if (line === undefined || cited[index] || table.has(index) || WEB_LINK.test(line)) continue
-    const prefix = /^\s*(?:#{1,6}\s|[-*+]\s|\d+[.、]\s*)?/.exec(line)?.[0] ?? ''
+    // A list number is "1." or "1、", not the "12." of "12.5万".
+    const prefix = /^\s*(?:#{1,6}\s|[-*+]\s|\d+(?:\.(?!\d)|、)\s*)?/.exec(line)?.[0] ?? ''
     const sentences = line.slice(prefix.length).match(SENTENCE) ?? []
-    if (!sentences.some((sentence) => unsourced(sentence, facts))) continue
-    const rest = sentences.filter((sentence) => !unsourced(sentence, facts)).join('')
+    const rest = sentences.map((sentence) => sourcedPart(sentence, facts)).join('')
+    if (rest === sentences.join('')) continue
     kept[index] = rest.trim() ? prefix + rest : undefined
   }
   return kept
