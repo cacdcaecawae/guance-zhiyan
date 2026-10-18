@@ -250,7 +250,7 @@ const ABSENT =
  * A half-width period ends a sentence too, except after a digit ("12.5", the "1." of a list) and
  * before Latin letters ("规划.pdf").
  */
-const SENTENCE = /(?:[^。；;！？!?.]|(?<=\d)\.|\.(?=[A-Za-z]))+[。；;！？!?.]?/g
+const SENTENCE = /(?:[^。；;！？!?.]|(?<=[0-9０-９])\.|\.(?=[A-Za-z]))+[。；;！？!?.]?/g
 /** Web sources cited from web tools; the library check cannot judge them. */
 const WEB_LINK = /https?:\/\//
 /**
@@ -272,17 +272,16 @@ const THOUSANDS = /(?<=[0-9０-９])[,，](?=[0-9０-９]{3}(?![0-9０-９]))/g
 /**
  * Numbers of two or more digits or with a decimal point; full-width digits, thousands separators
  * and trailing decimal zeros are normalized, so "10,000", "１０，０００" and "10000" are the same
- * number, as are "12.50" and "12.5". Link targets do not count, link text does.
+ * number, as are "12.50" and "12.5"; whether a number is checked goes by how it is written.
  */
 const numbers = (text: string) =>
   (
     halfWidth(text)
       .replace(THOUSANDS, '')
-      .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
       .match(/\d+(?:\.\d+)?/g) ?? []
   )
+    .filter((n) => n.length >= 2 || n.includes('.')) // as written: "5.0" is checked
     .map((n) => (n.includes('.') ? n.replace(/\.?0+$/, '') : n))
-    .filter((n) => n.length >= 2 || n.includes('.'))
 /**
  * Counts the model tends to add when summarizing, such as "六大", "七项", "六个方面", "第九章".
  * Compared whole, so "第十九章" in a passage does not support "第九章", nor "一百六十项" "六十项".
@@ -297,9 +296,13 @@ type Facts = { runs: Set<string>; numbers: Set<string>; counts: Set<string> }
  * Text giving a number or count found in neither the library results nor the questions, such as
  * "共六个方面", "六大抓手" or "2019年撤市设区".
  */
-const unsourced = (text: string, facts: Facts) =>
-  numbers(text).some((n) => !facts.numbers.has(n)) ||
-  (text.replace(ASKED_COUNT, '').match(COUNT) ?? []).some((count) => !facts.counts.has(count))
+function unsourced(text: string, facts: Facts) {
+  const shown = text.replace(/\[([^\]]*)\]\([^)]*\)/g, '$1') // link text, not link targets
+  return (
+    numbers(shown).some((n) => !facts.numbers.has(n)) ||
+    (shown.replace(ASKED_COUNT, '').match(COUNT) ?? []).some((count) => !facts.counts.has(count))
+  )
+}
 /**
  * What to keep of a sentence: all of it, nothing when it is unsourced, or, in a sentence saying what
  * was not found, only its not-found clauses when another clause is unsourced
@@ -390,10 +393,13 @@ function trimAnswer(lines: string[], question: string, facts: Facts) {
   for (const [index, line] of kept.entries()) {
     if (line === undefined || cited[index] || table.has(index) || WEB_LINK.test(line)) continue
     // Structure, not data: heading marks, a bullet, then a list or section number, bold or not
-    // ("12.", "12、", "12）", "（12）", "3.2 ", full-width too), but not the "12." of "12.5万".
+    // ("12.", "12、", "12）", "（12）", "3.2 ", full-width too), but not the "12." of "12.5万" nor
+    // "12.5 万人": a section number is followed by a title, a quantity by its unit.
+    // ponytail: unit list; a quantity with another unit after a space ("1.5 公顷") is taken for a
+    // section number and not checked; add the unit when one shows up in answers.
     const prefix = line.slice(
       0,
-      /^\s*(?:#{1,6}\s+|[-*+]\s+)?(?:(?:\*\*)?(?:\d+(?:\.\d+)*(?:\.(?!\d)|[、)）])\s*|\d+(?:\.\d+)+\s+|[（(]\d+[）)]\s*))?/.exec(
+      /^\s*(?:#{1,6}\s+|[-*+]\s+)?(?:(?:\*\*)?(?:\d+(?:\.\d+)*(?:\.(?!\d)|[、)）])\s*|\d+(?:\.\d+)+\s+(?![\s万亿千百%％‰倍元吨亩]|公里|平方|个百分点)|[（(]\d+[）)]\s*))?/.exec(
         halfWidth(line),
       )?.[0].length,
     )
