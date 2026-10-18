@@ -232,6 +232,7 @@ test('trimming uses results up to each answer and keeps web sources, bare tables
     '项目覆盖贫困户21万户634万人。',
     later,
     '文献库中未检索到项目完成情况；因此可以确认所有项目均未实施。',
+    '1. **文献库中未收录验收表格**。',
     '## 分析（推断）',
     '### 主要影响',
     '扶贫成效显著。',
@@ -256,7 +257,7 @@ test('trimming uses results up to each answer and keeps web sources, bare tables
   const text = messages[0].role === 'assistant' ? messages[0].parts[1] : undefined
   assert.deepEqual(
     text?.type === 'text' && text.text.split('\n'),
-    [...answer.slice(0, 5), '文献库中未检索到项目完成情况；'],
+    [...answer.slice(0, 5), '文献库中未检索到项目完成情况；', '1. **文献库中未收录验收表格**。'],
     'drops a misquoted number, passages returned only in a later turn, the unsupported conclusion and the analysis subsection',
   )
 })
@@ -381,7 +382,7 @@ test('trimming drops uncited sentences giving numbers or counts the results and 
 
 test('number and count trimming reads tables, list numbers and thousands separators as written', () => {
   const passage =
-    '全市人才总量达到12万人，建设产业园区和配套设施，总投资10,000万元，共实施一百六十项重点工程。'
+    '全市人才总量达到12万人，建设产业园区和配套设施，总投资10,000万元，共实施一百六十项重点工程，绿地率36.40%。'
   const cite = `[planid 1·原文](${path(returned)})`
   const trim = (head: string[]) => {
     const messages: Message[] = [
@@ -482,6 +483,37 @@ test('number and count trimming reads tables, list numbers and thousands separat
         '建设产业园区。',
         '**27. 保障措施。**',
       ],
+    ],
+    [
+      [
+        '未检索到总投资１０,０００万元的项目，但该市2019年撤市设区。',
+        '未检索到总投资１０，０００万元的项目，但该市2019年撤市设区。',
+        '总投资１０，０００万元。',
+        '## １２. 保障措施',
+      ],
+      [
+        '未检索到总投资１０,０００万元的项目。',
+        '未检索到总投资１０，０００万元的项目。',
+        '总投资１０，０００万元。',
+        '## １２. 保障措施',
+      ],
+    ],
+    [
+      ['未检索到2030年目标：请补充文献。', '未检索到2030年目标：但该市2019年撤市设区。'],
+      ['未检索到2030年目标：请补充文献。', '未检索到2030年目标：'],
+    ],
+    [
+      ['绿地率36.4%。', '绿地率36.400%。', '绿地率３６．４０%。', '绿地率36.41%。'],
+      ['绿地率36.4%。', '绿地率36.400%。', '绿地率３６．４０%。'],
+    ],
+    [
+      [
+        '建设产业园区. 2019年撤市设区.',
+        '建设产业园区.2019年撤市设区',
+        '人均36.4平方米.',
+        '见规划.pdf，2019年撤市设区。',
+      ],
+      ['建设产业园区.', '建设产业园区.', '人均36.4平方米.'],
     ],
   ]
   for (const [head, kept] of cases) assert.deepEqual(trim(head), kept, head.join(' / '))

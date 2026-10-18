@@ -246,7 +246,11 @@ const LABEL = /^(?:[-*+]\s*|\d+[.、]\s*)?(?:\*\*[^*]{1,30}\*\*|[^：:「“"]{1
 /** Says what the library did not have; such sentences are kept so a trimmed answer never hides a gap. */
 const ABSENT =
   /未能?(检索到|找到|查到|收录|涉及)|没有(检索到|找到|收录)|暂未(检索到|收录|找到)|暂无|无正文|没有可用正文/
-const SENTENCE = /[^。；;！？!?]+[。；;！？!?]?/g
+/**
+ * A half-width period ends a sentence too, except after a digit ("12.5", the "1." of a list) and
+ * before Latin letters ("规划.pdf").
+ */
+const SENTENCE = /(?:[^。；;！？!?.]|(?<=\d)\.|\.(?=[A-Za-z]))+[。；;！？!?.]?/g
 /** Web sources cited from web tools; the library check cannot judge them. */
 const WEB_LINK = /https?:\/\//
 /**
@@ -260,21 +264,25 @@ const contentChars = (text: string) =>
     .toLowerCase() ?? ''
 const grams = (text: string) =>
   Array.from({ length: Math.max(0, text.length - 7) }, (_, i) => text.slice(i, i + 8))
-/** A thousands separator, half- or full-width: the commas of "10,000" and "10，000". */
-const THOUSANDS = /(?<=\d)[,，](?=\d{3}(?!\d))/g
+/** Full-width digits and decimal point as half-width; one character each, so lengths match. */
+const halfWidth = (text: string) =>
+  text.replace(/[０-９．]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xfee0))
+/** A thousands separator between half- or full-width digits: "10,000", "10，000", "１０,０００". */
+const THOUSANDS = /(?<=[0-9０-９])[,，](?=[0-9０-９]{3}(?![0-9０-９]))/g
 /**
- * Numbers of two or more digits or with a decimal point; full-width digits and thousands separators
- * are normalized, so "10,000", "10，000" and "10000" are the same number. Link targets do not count,
- * link text does.
+ * Numbers of two or more digits or with a decimal point; full-width digits, thousands separators
+ * and trailing decimal zeros are normalized, so "10,000", "１０，０００" and "10000" are the same
+ * number, as are "12.50" and "12.5". Link targets do not count, link text does.
  */
 const numbers = (text: string) =>
   (
-    text
-      .replace(/[０-９．]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xfee0))
+    halfWidth(text)
       .replace(THOUSANDS, '')
       .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
       .match(/\d+(?:\.\d+)?/g) ?? []
-  ).filter((n) => n.length >= 2 || n.includes('.'))
+  )
+    .map((n) => (n.includes('.') ? n.replace(/\.?0+$/, '') : n))
+    .filter((n) => n.length >= 2 || n.includes('.'))
 /**
  * Counts the model tends to add when summarizing, such as "六大", "七项", "六个方面", "第九章".
  * Compared whole, so "第十九章" in a passage does not support "第九章", nor "一百六十项" "六十项".
@@ -299,8 +307,8 @@ const unsourced = (text: string, facts: Facts) =>
  */
 function sourcedPart(sentence: string, facts: Facts) {
   if (!ABSENT.test(sentence)) return unsourced(sentence, facts) ? '' : sentence
-  // A thousands separator ("10,000", "10，000") is not a clause break.
-  const clauses = sentence.match(/(?:[^，,]|(?<=\d)[,，](?=\d{3}(?!\d)))+[，,]?/g) ?? []
+  // A thousands separator ("10,000", "１０，０００") is not a clause break.
+  const clauses = sentence.match(new RegExp(`(?:[^，,]|${THOUSANDS.source})+[，,]?`, 'g')) ?? []
   if (!clauses.some((clause) => !ABSENT.test(clause) && unsourced(clause, facts))) return sentence
   return clauses
     .filter((clause) => ABSENT.test(clause))
@@ -382,22 +390,24 @@ function trimAnswer(lines: string[], question: string, facts: Facts) {
   for (const [index, line] of kept.entries()) {
     if (line === undefined || cited[index] || table.has(index) || WEB_LINK.test(line)) continue
     // Structure, not data: heading marks, a bullet, then a list or section number, bold or not
-    // ("12.", "12、", "12）", "（12）", "3.2 "), but not the "12." of "12.5万".
-    const prefix =
+    // ("12.", "12、", "12）", "（12）", "3.2 ", full-width too), but not the "12." of "12.5万".
+    const prefix = line.slice(
+      0,
       /^\s*(?:#{1,6}\s+|[-*+]\s+)?(?:(?:\*\*)?(?:\d+(?:\.\d+)*(?:\.(?!\d)|[、)）])\s*|\d+(?:\.\d+)+\s+|[（(]\d+[）)]\s*))?/.exec(
-        line,
-      )?.[0] ?? ''
-    // A leading "label:" is checked on its own, so the "（五项）" of "**编制原则**（五项）：" does not
-    // take the passage text after it.
+        halfWidth(line),
+      )?.[0].length,
+    )
+    // A leading "label:" is checked on its own like a sentence, so the "（五项）" of
+    // "**编制原则**（五项）：" does not take the passage text after it, and "未检索到2030年目标：" stays.
     const body = line.slice(prefix.length)
     const label = LABEL.exec(body)?.[0] ?? ''
     const sentences = body.slice(label.length).match(SENTENCE) ?? []
     const rest = sentences.map((sentence) => sourcedPart(sentence, facts)).join('')
-    const head = unsourced(label, facts) ? '' : label
+    const head = sourcedPart(label, facts)
     if (head === label && rest === sentences.join('')) continue
     const shown = prefix + head + rest
     // Bold a dropped sentence opened or closed is removed rather than shown as a stray "**".
-    if (!rest.trim()) kept[index] = undefined
+    if (!rest.trim() && !ABSENT.test(head)) kept[index] = undefined
     else kept[index] = (shown.match(/\*\*/g)?.length ?? 0) % 2 ? shown.replaceAll('**', '') : shown
   }
   return kept
