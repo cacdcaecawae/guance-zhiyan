@@ -465,7 +465,12 @@ export class Agents {
         }
         // Offered only when the library has content; otherwise chat and web search work as usual.
         if (this.options.library?.available())
-          registerLibrary(ctx, this.options.library, Date.now() + SEARCH_BUDGET_MS)
+          registerLibrary(
+            ctx,
+            this.options.library,
+            Date.now() + SEARCH_BUDGET_MS,
+            content.flatMap((block) => (block.type === 'text' ? [block.text] : [])).join('\n'),
+          )
         else
           ctx.systemPrompt.section({
             name: 'shared-library',

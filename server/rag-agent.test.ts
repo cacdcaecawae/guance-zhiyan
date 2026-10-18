@@ -75,7 +75,11 @@ test('library tools are offered only with content; the model searches on demand 
     const session = store.create(alice.id)
     await agents.start(alice.id, session.id, '养老服务有哪些政策？')
     await agents.active.get(session.id)?.done
-    assert.deepEqual(queries, ['养老服务'], 'the model writes the query and searches once')
+    assert.deepEqual(
+      queries,
+      ['养老服务', '养老服务有哪些政策？'],
+      "the model writes the query; the user's question is searched once alongside it",
+    )
     assert.equal(model.requests.length, 2)
     const [first, second] = model.requests
     assert.ok(toolNames(first).includes('library_search'))
@@ -331,11 +335,12 @@ test('library_search passes a normalized scope, rejects an invalid one, and libr
       return lastText(model.requests.at(-1)!)
     }
     await run('search')
-    assert.deepEqual(scopes, [{ area: '裕安区', period: '十四五' }])
+    // Each answer's first call also searches the user's question across the whole library.
+    assert.deepEqual(scopes, [{ area: '裕安区', period: '十四五' }, undefined])
     assert.match(await run('invalid'), /筛选条件无效/)
-    assert.equal(scopes.length, 1, 'an invalid scope is reported, not silently dropped')
+    assert.equal(scopes.length, 2, 'an invalid scope is reported, not silently dropped')
     await run('document')
-    assert.deepEqual(scopes[1], { documentIds: ['33236'] })
+    assert.deepEqual(scopes.slice(2), [{ documentIds: ['33236'] }, undefined])
     const listed = (await run('list')).split('\n')
     assert.equal(listed[0], '共 1 篇符合条件：')
     assert.deepEqual(JSON.parse(listed[1]), {
@@ -346,7 +351,11 @@ test('library_search passes a normalized scope, rejects an invalid one, and libr
       docType: '规划文件',
     })
     // A long list stays within the same budget as the other library tools.
-    const [header, ...rows] = (await run('long')).split('\n')
+    const [header, ...more] = (await run('long')).split('\n')
+    const rows = more.slice(
+      0,
+      more.findIndex((line) => line.startsWith('按用户问题原文')),
+    )
     assert.ok(rows.length > 0 && rows.length < 50)
     assert.equal(
       header,
@@ -488,4 +497,48 @@ test('library tools stop searching once the question passes its deadline', async
   ] as const)
     assert.match(String(await tools.get(name)!.execute(args, exec)), /超过时限/, name)
   assert.equal(searched, 0)
+})
+
+test("an answer's first library call also returns the user's question searched across the library, once", async () => {
+  const passage = (documentId: string, n: number): Passage => ({
+    id: `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`,
+    versionId: 'v',
+    documentId,
+    title: `文献${documentId}`,
+    sourceUrl: null,
+    publishedAt: null,
+    ordinal: n,
+    start: 0,
+    end: 1,
+    heading: '',
+    text: `测试资料${n}`,
+  })
+  const tools = new Map<string, ToolDefinition>()
+  const ctx = {
+    systemPrompt: { section() {} },
+    tools: { register: (tool: ToolDefinition) => tools.set(tool.name, tool) },
+  } as unknown as Context
+  const calls: [string, LibraryFilter | undefined][] = []
+  const library = {
+    async retrieve(query: string, _signal?: AbortSignal, filter?: LibraryFilter) {
+      calls.push([query, filter])
+      return filter ? [passage('2051', 1)] : [passage('2051', 1), passage('49893', 2)]
+    },
+  } as unknown as Library
+  registerLibrary(ctx, library, Infinity, '  济南市民政事业有哪些安排？  ')
+  const exec = { signal: new AbortController().signal } as ToolRunContext
+  const search = async () =>
+    String(
+      await tools.get('library_search')!.execute({ query: '民政', documentIds: ['2051'] }, exec),
+    )
+  const lines = (await search()).split('\n')
+  assert.deepEqual(calls, [
+    ['民政', { documentIds: ['2051'] }],
+    ['济南市民政事业有哪些安排？', undefined],
+  ])
+  assert.equal(lines.length, 4, 'the passage already shown is not repeated')
+  assert.match(lines[2], /^按用户问题原文在全库检索的结果/)
+  assert.equal(JSON.parse(lines[3]).documentId, '49893')
+  assert.equal((await search()).split('\n').length, 2, 'once per answer')
+  assert.equal(calls.length, 3)
 })

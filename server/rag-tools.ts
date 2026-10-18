@@ -125,8 +125,34 @@ const OVERTIME =
  * After `deadline` (epoch ms) the tools stop searching so a long question still answers in time:
  * every extra step re-reads the context and thinks again, which costs more than the search itself.
  */
-export function registerLibrary(ctx: Context, library: Library, deadline = Infinity) {
+export function registerLibrary(
+  ctx: Context,
+  library: Library,
+  deadline = Infinity,
+  question = '',
+) {
   ctx.systemPrompt.section({ name: 'shared-library', order: 90, text: GUIDE })
+  // The answer's first library call also gets the user's own question searched across the whole
+  // library. Models tend to pick one of several same-region documents by title and search only
+  // inside it; on the full library the question itself has the right document in its top eight
+  // passages for 86% of locating questions, including about two thirds of those answered from the
+  // wrong document (iteration 21).
+  let asked = question.trim().slice(0, 1000)
+  if (!asked.isWellFormed()) asked = ''
+  const withAsked = async (output: string, shown: Passage[], signal: AbortSignal) => {
+    const query = asked
+    asked = ''
+    if (!query || Date.now() > deadline) return output
+    try {
+      const ids = new Set(shown.map((passage) => passage.id))
+      const more = (await library.retrieve(query, signal)).filter((p) => !ids.has(p.id))
+      return more.length
+        ? `${output}\n${render(more, '按用户问题原文在全库检索的结果（每次回答只附一次，用来核对该依据哪篇文献；与上面重复的片段已省略）：')}`
+        : output
+    } catch {
+      return output // The requested results stand on their own.
+    }
+  }
   ctx.tools.register(
     defineTool({
       name: 'library_search',
@@ -150,15 +176,19 @@ export function registerLibrary(ctx: Context, library: Library, deadline = Infin
             throw reject('RAG_INVALID_QUERY')
           const filter = scopeOf(args)
           const passages = await library.retrieve(query, exec.signal, filter)
-          return passages.length
-            ? render(
-                passages,
-                // Retrieval has no relevance floor yet: it always returns the nearest passages.
-                '共享文献库检索结果（按相关度从高到低，每行一个片段；排在前面也未必相关，先判断能否支撑回答）：',
-              )
-            : filter
-              ? '所选范围内没有找到相关片段。可换关键词，或用 library_list 确认该范围内有哪些文献、放宽筛选条件后再检索；仍无结果时如实告诉用户。'
-              : '未在共享文献库中找到相关片段。可换关键词再检索；仍无结果时如实告诉用户。'
+          return await withAsked(
+            passages.length
+              ? render(
+                  passages,
+                  // Retrieval has no relevance floor yet: it always returns the nearest passages.
+                  '共享文献库检索结果（按相关度从高到低，每行一个片段；排在前面也未必相关，先判断能否支撑回答）：',
+                )
+              : filter
+                ? '所选范围内没有找到相关片段。可换关键词，或用 library_list 确认该范围内有哪些文献、放宽筛选条件后再检索；仍无结果时如实告诉用户。'
+                : '未在共享文献库中找到相关片段。可换关键词再检索；仍无结果时如实告诉用户。',
+            passages,
+            exec.signal,
+          )
         } catch (error) {
           failure(error, exec.signal)
         }
@@ -200,7 +230,11 @@ export function registerLibrary(ctx: Context, library: Library, deadline = Infin
             throw reject('RAG_INVALID_FILTER')
           const { total, withoutText, documents } = library.list(filter ?? {}, title)
           if (!total)
-            return '没有符合条件的文献。可放宽条件（例如改用上一级地区或去掉规划期）后再列出。'
+            return await withAsked(
+              '没有符合条件的文献。可放宽条件（例如改用上一级地区或去掉规划期）后再列出。',
+              [],
+              exec.signal,
+            )
           // Same budget as the other library tools; at least one row is always listed.
           const lines: string[] = []
           let spent = 0
@@ -209,7 +243,7 @@ export function registerLibrary(ctx: Context, library: Library, deadline = Infin
             lines.push(line)
             spent += line.length
           }
-          return [
+          const listed = [
             `共 ${total} 篇符合条件` +
               (withoutText ? `（其中 ${withoutText} 篇没有可用正文，排在最后）` : '') +
               (total > lines.length
@@ -222,6 +256,7 @@ export function registerLibrary(ctx: Context, library: Library, deadline = Infin
                 ]
               : []),
           ].join('\n')
+          return await withAsked(listed, [], exec.signal)
         } catch (error) {
           failure(error, exec.signal)
         }
