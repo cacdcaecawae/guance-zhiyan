@@ -121,11 +121,65 @@ const OVERTIME =
   '本题检索已超过时限：不再检索，直接依据已经取得的片段作答；片段没有覆盖的方面如实说明未找到。'
 
 /**
+ * The same query within the region only, for a search narrowed to documents, a period, a type or
+ * a year: names the documents outside that scope the wider search ranks high (the top passage, or
+ * two of its passages). Models tend to pick one of several same-region documents by title and
+ * search only inside it; on the full library the right document then often never comes up,
+ * although searching the question itself ranks it first.
+ * ponytail: a document counts as outside when the narrowed results lack it; runs once per answer.
+ */
+async function widerHint(
+  library: Library,
+  query: string,
+  filter: LibraryFilter,
+  passages: Passage[],
+  signal: AbortSignal,
+) {
+  let area = filter.area
+  if (!area && filter.documentIds) {
+    try {
+      // The region the chosen documents share, from their metadata.
+      const paths = library
+        .list({ documentIds: filter.documentIds })
+        .documents.map((document) => document.area.split('/').filter(Boolean))
+      const shared = paths[0]?.filter((part, i) => paths.every((path) => path[i] === part)) ?? []
+      area = shared.at(-1)
+    } catch {
+      return '' // No metadata: nothing to widen to.
+    }
+  }
+  if (!area) return ''
+  const inScope = new Set(passages.map((passage) => passage.documentId))
+  let wider: Passage[]
+  try {
+    wider = await library.retrieve(query, signal, { area })
+  } catch {
+    return '' // The narrowed results stand on their own.
+  }
+  const outside = new Map<string, { title: string; hits: number; top: boolean }>()
+  for (const [rank, passage] of wider.entries()) {
+    if (inScope.has(passage.documentId)) continue
+    const entry = outside.get(passage.documentId) ?? { title: passage.title, hits: 0, top: false }
+    entry.hits++
+    entry.top ||= rank === 0
+    outside.set(passage.documentId, entry)
+  }
+  const named = [...outside].filter(([, entry]) => entry.top || entry.hits >= 2)
+  if (!named.length) return ''
+  return (
+    `\n只限地区“${area}”、不加其他条件检索同样的词时，前 ${wider.length} 个片段里还有这次范围外的文献：` +
+    named.map(([id, entry]) => `${id}《${entry.title}》${entry.hits} 个`).join('、') +
+    '。题目没有指定篇目或规划期时，先在这些文献里检索，再决定依据哪篇。'
+  )
+}
+
+/**
  * On-demand retrieval: the model decides when to search, so evidence enters context only then.
  * After `deadline` (epoch ms) the tools stop searching so a long question still answers in time:
  * every extra step re-reads the context and thinks again, which costs more than the search itself.
  */
 export function registerLibrary(ctx: Context, library: Library, deadline = Infinity) {
+  let widened = false // widerHint runs once per answer
   ctx.systemPrompt.section({ name: 'shared-library', order: 90, text: GUIDE })
   ctx.tools.register(
     defineTool({
@@ -150,15 +204,23 @@ export function registerLibrary(ctx: Context, library: Library, deadline = Infin
             throw reject('RAG_INVALID_QUERY')
           const filter = scopeOf(args)
           const passages = await library.retrieve(query, exec.signal, filter)
-          return passages.length
-            ? render(
-                passages,
-                // Retrieval has no relevance floor yet: it always returns the nearest passages.
-                '共享文献库检索结果（按相关度从高到低，每行一个片段；排在前面也未必相关，先判断能否支撑回答）：',
-              )
-            : filter
-              ? '所选范围内没有找到相关片段。可换关键词，或用 library_list 确认该范围内有哪些文献、放宽筛选条件后再检索；仍无结果时如实告诉用户。'
-              : '未在共享文献库中找到相关片段。可换关键词再检索；仍无结果时如实告诉用户。'
+          const narrowed =
+            !widened && (filter?.documentIds || filter?.period || filter?.docType || filter?.year)
+          if (narrowed) widened = true
+          const hint = narrowed
+            ? await widerHint(library, query, filter!, passages, exec.signal)
+            : ''
+          return (
+            (passages.length
+              ? render(
+                  passages,
+                  // Retrieval has no relevance floor yet: it always returns the nearest passages.
+                  '共享文献库检索结果（按相关度从高到低，每行一个片段；排在前面也未必相关，先判断能否支撑回答）：',
+                )
+              : filter
+                ? '所选范围内没有找到相关片段。可换关键词，或用 library_list 确认该范围内有哪些文献、放宽筛选条件后再检索；仍无结果时如实告诉用户。'
+                : '未在共享文献库中找到相关片段。可换关键词再检索；仍无结果时如实告诉用户。') + hint
+          )
         } catch (error) {
           failure(error, exec.signal)
         }

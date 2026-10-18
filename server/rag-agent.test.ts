@@ -331,11 +331,12 @@ test('library_search passes a normalized scope, rejects an invalid one, and libr
       return lastText(model.requests.at(-1)!)
     }
     await run('search')
-    assert.deepEqual(scopes, [{ area: '裕安区', period: '十四五' }])
+    // The narrowed search is repeated once within the region alone (see the wider-search test).
+    assert.deepEqual(scopes, [{ area: '裕安区', period: '十四五' }, { area: '裕安区' }])
     assert.match(await run('invalid'), /筛选条件无效/)
-    assert.equal(scopes.length, 1, 'an invalid scope is reported, not silently dropped')
+    assert.equal(scopes.length, 2, 'an invalid scope is reported, not silently dropped')
     await run('document')
-    assert.deepEqual(scopes[1], { documentIds: ['33236'] })
+    assert.deepEqual(scopes.slice(2), [{ documentIds: ['33236'] }, { area: '裕安区' }])
     const listed = (await run('list')).split('\n')
     assert.equal(listed[0], '共 1 篇符合条件：')
     assert.deepEqual(JSON.parse(listed[1]), {
@@ -488,4 +489,72 @@ test('library tools stop searching once the question passes its deadline', async
   ] as const)
     assert.match(String(await tools.get(name)!.execute(args, exec)), /超过时限/, name)
   assert.equal(searched, 0)
+})
+
+test('a narrowed search names the documents outside it that a region-wide search ranks high, once per answer', async () => {
+  const passage = (documentId: string, n: number): Passage => ({
+    id: `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`,
+    versionId: 'v',
+    documentId,
+    title: `文献${documentId}`,
+    sourceUrl: null,
+    publishedAt: null,
+    ordinal: n,
+    start: 0,
+    end: 1,
+    heading: '',
+    text: '测试资料',
+  })
+  const register = () => {
+    const tools = new Map<string, ToolDefinition>()
+    const ctx = {
+      systemPrompt: { section() {} },
+      tools: { register: (tool: ToolDefinition) => tools.set(tool.name, tool) },
+    } as unknown as Context
+    const scopes: (LibraryFilter | undefined)[] = []
+    const library = {
+      async retrieve(_query: string, _signal?: AbortSignal, filter?: LibraryFilter) {
+        scopes.push(filter)
+        return filter?.area && Object.keys(filter).length === 1
+          ? [
+              passage('7', 1),
+              passage('49893', 2),
+              passage('2051', 3),
+              passage('49893', 4),
+              passage('8', 5),
+            ]
+          : [passage('2051', 3), passage('2051', 6)]
+      },
+      list: () => ({
+        total: 2,
+        withoutText: 0,
+        documents: [
+          { documentId: '2051', title: '甲', area: '山东/济南市' },
+          { documentId: '2052', title: '乙', area: '山东/济南市/历下区' },
+        ],
+      }),
+    } as unknown as Library
+    registerLibrary(ctx, library)
+    const exec = { signal: new AbortController().signal } as ToolRunContext
+    const search = async (args: Record<string, unknown>) =>
+      String(await tools.get('library_search')!.execute(args as never, exec))
+    return { scopes, search }
+  }
+  const answer = register()
+  const first = await answer.search({ query: '民政', documentIds: ['2051', '2052'] })
+  assert.deepEqual(answer.scopes, [{ documentIds: ['2051', '2052'] }, { area: '济南市' }])
+  assert.equal(
+    first.split('\n').at(-1),
+    '只限地区“济南市”、不加其他条件检索同样的词时，前 5 个片段里还有这次范围外的文献：7《文献7》1 个、49893《文献49893》2 个。题目没有指定篇目或规划期时，先在这些文献里检索，再决定依据哪篇。',
+    'the top passage or two passages name a document; one lower passage does not',
+  )
+  await answer.search({ query: '民政', area: '济南市', period: '十二五' })
+  assert.equal(answer.scopes.length, 3, 'once per answer')
+  const plain = register()
+  assert.doesNotMatch(await plain.search({ query: '民政', area: '济南市' }), /范围外/)
+  assert.equal(plain.scopes.length, 1, 'a region alone is not narrowed')
+  assert.match(
+    await plain.search({ query: '民政', area: '济南市', year: 2015 }),
+    /只限地区“济南市”/,
+  )
 })
