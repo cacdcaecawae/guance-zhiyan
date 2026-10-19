@@ -17,7 +17,7 @@ import { TestModel, textChunks, toolChunks } from '../tests/support/model.ts'
 import { Store } from './store.ts'
 import { Agents } from './agent.ts'
 import { createApp } from './http.ts'
-import { campusFetch, connection, modelAdapter } from './models.ts'
+import { campusFetch, modelAdapter } from './models.ts'
 
 test('existing SQLite sessions migrate without losing ownership and keep model selection on reopen', async () => {
   const root = await mkdtemp(join(tmpdir(), 'gczy-migration-test-'))
@@ -614,64 +614,107 @@ test('DeepSeek and Qianwen models accept images, campus models are text-only; of
   }
 })
 
-test('campus vLLM stream is normalized to standard Messages events; other endpoints pass through untouched', async () => {
-  const events = [
-    { type: 'content_block_start', index: 0, content_block: { type: 'thinking' } },
-    { type: 'content_block_delta', index: 0, delta: { type: 'thinking_delta', text: '思考' } },
-    { type: 'content_block_start', index: 1, content_block: { type: 'text' } },
-    { type: 'content_block_delta', index: 1, delta: { type: 'text_delta', text: '您好' } },
-    { type: 'content_block_stop', index: 1 },
-    { type: 'content_block_delta', index: 1, delta: { type: 'text_delta', text: '\n' } },
-    {
-      type: 'content_block_start',
-      index: 2,
-      content_block: { type: 'tool_use', id: 't1', name: 'library_search' },
-    },
-  ]
-  const raw = new TextEncoder().encode(
-    events.map((e) => `event: ${e.type}\ndata: ${JSON.stringify(e)}\n\n`).join(''),
-  )
-  const inner = (async () =>
-    new Response(
-      new ReadableStream({
-        start(controller) {
-          // 故意在 JSON 中间切块，验证跨块拼行
-          for (let at = 0; at < raw.length; at += 7) controller.enqueue(raw.slice(at, at + 7))
-          controller.close()
-        },
-      }),
-      { headers: { 'content-type': 'text/event-stream' } },
-    )) as typeof fetch
-  const base = connection({ provider: 'campus', model: '' }).baseURL
-  const text = await (await campusFetch(inner)(`${base}/v1/messages`)).text()
-  const lines = text.split('\n')
-  const fixed = lines
-    .filter((line) => line.startsWith('data:'))
-    .map((line) => JSON.parse(line.slice(5)))
-  // 每条 data 前的 event: 行与修正后的类型一致
-  assert.deepEqual(
-    lines.filter((line) => line.startsWith('event:')).map((line) => line.slice(6).trim()),
-    fixed.map((event) => event.type),
-  )
-  assert.deepEqual(fixed, [
-    { type: 'content_block_start', index: 0, content_block: { type: 'thinking', thinking: '' } },
-    { type: 'content_block_delta', index: 0, delta: { type: 'thinking_delta', thinking: '思考' } },
-    { type: 'content_block_start', index: 1, content_block: { type: 'text', text: '' } },
-    { type: 'content_block_delta', index: 1, delta: { type: 'text_delta', text: '您好' } },
-    { type: 'content_block_stop', index: 1 },
-    { type: 'ping' },
-    {
-      type: 'content_block_start',
-      index: 2,
-      content_block: { type: 'tool_use', id: 't1', name: 'library_search', input: {} },
-    },
+test('campus requests go to chat/completions with thinking off; the reply streams back as Messages, tool calls included', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'gczy-campus-test-'))
+  const saved = ['CAMPUS_API_KEY', 'CAMPUS_BASE_URL', 'DSH_HOME'].map((key) => [
+    key,
+    process.env[key],
   ])
-  const untouched = await inner('https://api.deepseek.com/anthropic/v1/messages')
-  const other = (async () => untouched) as typeof fetch
-  assert.equal(
-    await campusFetch(other)('https://api.deepseek.com/anthropic/v1/messages'),
-    untouched,
-  )
+  const bodies: any[] = []
+  const upstream = createServer(async (request, response) => {
+    assert.equal(request.url, '/v1/chat/completions')
+    assert.equal(request.headers.authorization, 'Bearer campus-test-only')
+    assert.equal(request.headers['x-api-key'], undefined)
+    const chunks: Buffer[] = []
+    for await (const chunk of request) chunks.push(chunk)
+    const body = JSON.parse(Buffer.concat(chunks).toString())
+    bodies.push(body)
+    const answered = body.messages.some((message: { role: string }) => message.role === 'tool')
+    const chunk = (delta: object, finish: string | null = null) => ({
+      id: 'c1',
+      model: body.model,
+      choices: [{ index: 0, delta, finish_reason: finish }],
+    })
+    const stream = answered
+      ? [chunk({ role: 'assistant', content: '完' }), chunk({ content: '成' }, 'stop')]
+      : [
+          chunk({ role: 'assistant', content: '先看文件。' }),
+          // Arguments arrive in pieces, as vLLM streams them.
+          chunk({
+            tool_calls: [
+              {
+                index: 0,
+                id: 'call-1',
+                type: 'function',
+                function: { name: 'list_files', arguments: '{' },
+              },
+            ],
+          }),
+          chunk({ tool_calls: [{ index: 0, function: { arguments: '}' } }] }, 'tool_calls'),
+        ]
+    response.setHeader('Content-Type', 'text/event-stream')
+    response.end(
+      [...stream, { id: 'c1', choices: [], usage: { prompt_tokens: 12, completion_tokens: 3 } }]
+        .map((data) => `data: ${JSON.stringify(data)}\n\n`)
+        .join('') + 'data: [DONE]\n\n',
+    )
+  })
+  upstream.listen(0, '127.0.0.1')
+  await once(upstream, 'listening')
+  const address = upstream.address()
+  assert.ok(address && typeof address !== 'string')
+  process.env.CAMPUS_API_KEY = 'campus-test-only'
+  process.env.CAMPUS_BASE_URL = `http://127.0.0.1:${address.port}`
+  process.env.DSH_HOME = join(root, 'dsh')
+  const store = new Store(root)
+  const agents = await new Agents(store).init()
+  try {
+    const user = store.user('campus-test', 'Test')
+    const session = store.create(user.id)
+    store.selectModel(user.id, session.id, { provider: 'campus', model: 'qwen3.8-27b' })
+    await agents.start(user.id, session.id, '有哪些文件？')
+    await agents.active.get(session.id)?.done
+    const answer = (await agents.snapshot(user.id, session.id)).messages.at(-1)
+    assert.ok(answer?.role === 'assistant' && answer.status === 'done')
+    const tool = answer.parts.find((part) => part.type === 'tool')
+    assert.ok(tool?.type === 'tool' && tool.name === 'list_files' && tool.status === 'done')
+    assert.equal(answer.parts.findLast((part) => part.type === 'text')?.text, '完成')
+    const [first, second] = bodies
+    assert.equal(bodies.length, 2)
+    assert.deepEqual(first.chat_template_kwargs, { enable_thinking: false })
+    assert.equal(first.stream, true)
+    assert.equal(first.messages[0].role, 'system')
+    assert.deepEqual(first.messages.at(-1), { role: 'user', content: '有哪些文件？' })
+    const listFiles = first.tools.find((item: any) => item.function.name === 'list_files')
+    assert.equal(listFiles.type, 'function')
+    assert.ok(listFiles.function.parameters)
+    const call = second.messages.find((message: any) => message.tool_calls)
+    assert.equal(call.content, '先看文件。')
+    assert.deepEqual(call.tool_calls, [
+      { id: 'call-1', type: 'function', function: { name: 'list_files', arguments: '{}' } },
+    ])
+    const result = second.messages.at(-1)
+    assert.equal(result.role, 'tool')
+    assert.equal(result.tool_call_id, 'call-1')
+    // Other providers' requests pass through untouched.
+    const untouched = new Response('ok')
+    const other = (async () => untouched) as typeof fetch
+    assert.equal(
+      await campusFetch(other)('https://api.deepseek.com/anthropic/v1/messages'),
+      untouched,
+    )
+  } finally {
+    await agents.close()
+    store.close()
+    await new Promise<void>((done) => upstream.close(() => done()))
+    for (const [key, value] of saved)
+      if (value === undefined) delete process.env[key!]
+      else process.env[key!] = value
+    assert.ok(
+      resolve(root).startsWith(resolve(tmpdir()) + sep) && root.includes('gczy-campus-test-'),
+    )
+    await rm(root, { recursive: true })
+  }
 })
 
 test('HTTP: authentication, ownership, request boundaries and file download', async () => {

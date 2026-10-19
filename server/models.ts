@@ -75,76 +75,203 @@ export function connection(selection: ModelSelection) {
     apiKey: process.env[provider.key]?.trim(),
   }
 }
-// ponytail: 校内 vLLM 0.28 的 Anthropic 流不标准（块起始缺 thinking/text/input 字段，思考增量放在 text 字段，
-// 并行工具调用时在已结束的文本块上补发空白增量），DSH 适配器只用全局 fetch，故按校内地址包一层修正。
-// 学校升级 vLLM 或改用 OpenAI 格式适配器后删除。
-export function fixCampusEvent(event: any, closed: Set<number>) {
-  const block = event.content_block
-  if (block?.type === 'thinking') block.thinking ??= ''
-  if (block?.type === 'text') block.text ??= ''
-  if (block?.type === 'tool_use') block.input ??= {}
-  const delta = event.delta
-  if (delta?.type === 'thinking_delta' && delta.thinking === undefined) {
-    delta.thinking = delta.text
-    delete delta.text
-  }
-  if (event.type === 'content_block_stop') closed.add(event.index)
-  // 已结束块上的纯空白文本改为 DSH 会跳过的 ping；有内容的迟到增量照常交给 DSH 报错，不静默丢弃
-  if (
-    event.type === 'content_block_delta' &&
-    closed.has(event.index) &&
-    delta?.type === 'text_delta' &&
-    !delta.text?.trim()
-  )
-    return { type: 'ping' }
-  return event
+// 校内 GPUStack（vLLM）的 Anthropic 接口关不掉 qwen 的思考：thinking disabled、budget_tokens、预填空思考都无效；
+// OpenAI 接口的 chat_template_kwargs.enable_thinking=false 才有效，而思考约占慢题输出的三分之二（评测迭代 22）。
+// DSH 只有 Messages 适配器且只用全局 fetch，故把发往校内 /v1/messages 的请求改发 /v1/chat/completions，
+// 再把 OpenAI 流转回标准 Messages 事件。
+// ponytail: 只转换本项目用到的字段（文本、工具调用与结果、用量）；校内模型按纯文本接入，不收图片。
+type Block = {
+  type: string
+  text?: string
+  id?: string
+  name?: string
+  input?: unknown
+  tool_use_id?: string
+  content?: string | Block[]
 }
-// event: 行按修正后的类型重写（DSH 校验它与 data.type 一致），原 event: 行丢弃
-function fixCampusLine(line: string, closed: Set<number>) {
-  if (line.startsWith('event:')) return undefined
-  if (!line.startsWith('data:')) return line
-  try {
-    const event = fixCampusEvent(JSON.parse(line.slice(5)), closed)
-    return `event: ${event.type}\ndata: ${JSON.stringify(event)}`
-  } catch {
-    return line
+const blockText = (content: string | Block[] | undefined) =>
+  typeof content === 'string'
+    ? content
+    : (content ?? [])
+        .filter((block) => block.type === 'text')
+        .map((block) => block.text)
+        .join('\n')
+
+/** A Messages request body as an OpenAI chat request with thinking off. */
+export function toChatRequest(body: any) {
+  const messages: object[] = body.system ? [{ role: 'system', content: body.system }] : []
+  for (const message of body.messages) {
+    const blocks: Block[] =
+      typeof message.content === 'string'
+        ? [{ type: 'text', text: message.content }]
+        : message.content
+    if (message.role === 'assistant') {
+      const calls = blocks.filter((block) => block.type === 'tool_use')
+      messages.push({
+        role: 'assistant',
+        content: blockText(blocks) || null, // earlier thinking blocks are dropped
+        ...(calls.length && {
+          tool_calls: calls.map((block) => ({
+            id: block.id,
+            type: 'function',
+            function: { name: block.name, arguments: JSON.stringify(block.input ?? {}) },
+          })),
+        }),
+      })
+      continue
+    }
+    for (const block of blocks)
+      if (block.type === 'tool_result')
+        messages.push({
+          role: 'tool',
+          tool_call_id: block.tool_use_id,
+          content: blockText(block.content),
+        })
+    const text = blockText(blocks)
+    if (text) messages.push({ role: 'user', content: text })
+  }
+  return {
+    model: body.model,
+    stream: true,
+    stream_options: { include_usage: true },
+    max_tokens: body.max_tokens,
+    messages,
+    chat_template_kwargs: { enable_thinking: false },
+    ...(body.temperature !== undefined && { temperature: body.temperature }),
+    ...(body.stop_sequences && { stop: body.stop_sequences }),
+    ...(body.tools && {
+      tools: body.tools.map((tool: any) => ({
+        type: 'function',
+        function: { name: tool.name, description: tool.description, parameters: tool.input_schema },
+      })),
+    }),
   }
 }
+
+/**
+ * An OpenAI chat stream as Messages events: text streams as it arrives, tool calls are sent whole
+ * once the stream ends (the agent only runs them after the step), then the stop reason and usage.
+ */
+export function chatToMessages(body: NonNullable<Response['body']>) {
+  const usage = { input_tokens: 0, output_tokens: 0 }
+  const calls = new Map<number, { id: string; name: string; args: string }>()
+  let started = false
+  let text = -1 // index of the open text block
+  let next = 0
+  let stop = 'end_turn'
+  let rest = ''
+  const send = (
+    controller: TransformStreamDefaultController<string>,
+    event: { type: string; [key: string]: unknown },
+  ) => controller.enqueue(`event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`)
+  const handle = (controller: TransformStreamDefaultController<string>, line: string) => {
+    const data = line.startsWith('data:') ? line.slice(5).trim() : ''
+    if (!data || data === '[DONE]') return
+    const chunk = JSON.parse(data)
+    if (!started) {
+      started = true
+      const message = { id: chunk.id ?? 'campus', type: 'message', role: 'assistant', content: [] }
+      send(controller, {
+        type: 'message_start',
+        message: { ...message, model: chunk.model, usage },
+      })
+    }
+    if (chunk.error)
+      return send(controller, {
+        type: 'error',
+        error: { type: 'api_error', message: String(chunk.error.message ?? chunk.error) },
+      })
+    if (chunk.usage) {
+      usage.input_tokens = chunk.usage.prompt_tokens ?? 0
+      usage.output_tokens = chunk.usage.completion_tokens ?? 0
+    }
+    for (const choice of chunk.choices ?? []) {
+      const delta = choice.delta ?? {}
+      if (delta.content) {
+        if (text < 0) {
+          text = next++
+          send(controller, {
+            type: 'content_block_start',
+            index: text,
+            content_block: { type: 'text', text: '' },
+          })
+        }
+        send(controller, {
+          type: 'content_block_delta',
+          index: text,
+          delta: { type: 'text_delta', text: delta.content },
+        })
+      }
+      for (const call of delta.tool_calls ?? []) {
+        const entry = calls.get(call.index) ?? { id: '', name: '', args: '' }
+        entry.id ||= call.id ?? ''
+        entry.name ||= call.function?.name ?? ''
+        entry.args += call.function?.arguments ?? ''
+        calls.set(call.index, entry)
+      }
+      if (choice.finish_reason === 'length') stop = 'max_tokens'
+    }
+  }
+  return body
+    .pipeThrough(new TextDecoderStream())
+    .pipeThrough(
+      new TransformStream<string, string>({
+        transform(chunk, controller) {
+          const lines = (rest + chunk).split('\n')
+          rest = lines.pop()!
+          for (const line of lines) handle(controller, line)
+        },
+        flush(controller) {
+          handle(controller, rest)
+          if (!started) return // nothing arrived; the adapter reports the closed stream
+          if (text >= 0) send(controller, { type: 'content_block_stop', index: text })
+          for (const { id, name, args } of calls.values()) {
+            const index = next++
+            const content_block = { type: 'tool_use', id: id || `call_${index}`, name, input: {} }
+            send(controller, { type: 'content_block_start', index, content_block })
+            if (args)
+              send(controller, {
+                type: 'content_block_delta',
+                index,
+                delta: { type: 'input_json_delta', partial_json: args },
+              })
+            send(controller, { type: 'content_block_stop', index })
+          }
+          if (calls.size && stop !== 'max_tokens') stop = 'tool_use'
+          send(controller, {
+            type: 'message_delta',
+            delta: { stop_reason: stop, stop_sequence: null },
+            usage,
+          })
+          send(controller, { type: 'message_stop' })
+        },
+      }),
+    )
+    .pipeThrough(new TextEncoderStream())
+}
+
 export function campusFetch(inner: typeof fetch): typeof fetch {
   return async (input, init) => {
-    const response = await inner(input, init)
     const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
     if (
-      !response.body ||
-      !response.headers.get('content-type')?.includes('text/event-stream') ||
-      !url.startsWith(connection({ provider: 'campus', model: '' }).baseURL + '/')
+      !url.startsWith(connection({ provider: 'campus', model: '' }).baseURL + '/') ||
+      !url.endsWith('/messages') ||
+      typeof init?.body !== 'string'
     )
-      return response
-    let rest = ''
-    const closed = new Set<number>()
-    const body = response.body
-      .pipeThrough(new TextDecoderStream())
-      .pipeThrough(
-        new TransformStream<string, string>({
-          transform(chunk, controller) {
-            const lines = (rest + chunk).split('\n')
-            rest = lines.pop()!
-            for (const line of lines) {
-              const fixed = fixCampusLine(line, closed)
-              if (fixed !== undefined) controller.enqueue(fixed + '\n')
-            }
-          },
-          flush(controller) {
-            const fixed = rest && fixCampusLine(rest, closed)
-            if (fixed) controller.enqueue(fixed)
-          },
-        }),
-      )
-      .pipeThrough(new TextEncoderStream())
-    return new Response(body, {
+      return inner(input, init)
+    const headers = new Headers(init.headers)
+    headers.set('authorization', `Bearer ${headers.get('x-api-key') ?? ''}`)
+    headers.delete('x-api-key')
+    const response = await inner(url.replace(/\/messages$/, '/chat/completions'), {
+      ...init,
+      headers,
+      body: JSON.stringify(toChatRequest(JSON.parse(init.body))),
+    })
+    if (!response.ok || !response.body) return response
+    return new Response(chatToMessages(response.body), {
       status: response.status,
       statusText: response.statusText,
-      headers: response.headers,
+      headers: { 'content-type': 'text/event-stream' },
     })
   }
 }
