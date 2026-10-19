@@ -15,7 +15,7 @@ const providers = [
 ]
 
 for (const selection of providers)
-  for (const outcome of ['headers', 'body', 'success', 'stop'] as const)
+  for (const outcome of ['headers', 'body', 'success', 'stop-headers', 'stop-body'] as const)
     test(`${selection.provider} search: ${outcome} keeps the declared timeout and cancellation semantics`, async (t) => {
       const root = await mkdtemp(join(tmpdir(), 'gczy-search-timeout-test-'))
       const saved = Object.fromEntries(
@@ -46,7 +46,7 @@ for (const selection of providers)
               ],
             }),
           )
-        } else if (outcome !== 'headers') {
+        } else if (outcome === 'body' || outcome === 'stop-body') {
           response.writeHead(200, { 'Content-Type': 'application/json' })
           response.write('{"content":[') // Response headers arrive, but JSON never completes.
         }
@@ -79,7 +79,7 @@ for (const selection of providers)
         await received.promise
         assert.equal(agents.ctx.tools.get('web_search', run.handle!.agent)?.timeoutMs, 30_000)
         assert.equal(agents.ctx.tools.get('create_file', run.handle!.agent)?.timeoutMs, undefined)
-        if (outcome === 'stop') await agents.stop(user.id, session.id)
+        if (outcome.startsWith('stop')) await agents.stop(user.id, session.id)
         else if (outcome !== 'success') {
           t.mock.timers.tick(29_999)
           assert.equal(agents.active.has(session.id), true, 'the search retains its full budget')
@@ -108,10 +108,13 @@ for (const selection of providers)
           assert.equal(part.status, 'done')
           assert.match(part.output, /https:\/\/example.org\/source/)
           assert.equal(result.data.error, undefined)
-        } else if (outcome === 'stop') {
+        } else if (outcome.startsWith('stop')) {
           assert.equal(answer.status, 'stopped')
           assert.notEqual(result.data.error?.code, 'TOOL_TIMEOUT')
-          assert.doesNotMatch(part.output, /超时/)
+          // Stopped before the reply headers or while reading its body: interrupted, not failed.
+          assert.equal(part.status, 'stopped')
+          assert.equal(part.output, '工具执行已中断。')
+          assert.equal(snapshot.trace.find((row) => row.kind === 'tool')?.status, 'stopped')
         } else {
           assert.equal(part.status, 'error')
           assert.equal(result.data.error?.code, 'TOOL_TIMEOUT')

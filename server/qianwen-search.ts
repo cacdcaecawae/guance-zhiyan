@@ -19,6 +19,11 @@ export function qianwenSearch(model: string): WebSearchProvider {
     async search(request, signal) {
       const config = connection({ provider: 'qianwen', model })
       if (!config.apiKey) throw new Error('千问平台密钥尚未配置。')
+      // A stop shows as interrupted, like DSH's own search providers; other failures keep their cause.
+      const aborted = (error: unknown): never => {
+        if (signal?.aborted) throw new WebError('联网搜索已停止。', 'WEB_ABORTED')
+        throw error
+      }
       const response = await fetch(`${config.baseURL.replace(/\/v1$/, '')}/v1/messages`, {
         method: 'POST',
         redirect: 'error',
@@ -42,12 +47,12 @@ export function qianwenSearch(model: string): WebSearchProvider {
             },
           ],
         }),
-      })
+      }).catch(aborted)
       if (!response.ok) {
         await response.body?.cancel()
         throw new Error(`千问联网搜索请求失败（${response.status}）。`)
       }
-      const content = record(await response.json()).content
+      const content = record(await response.json().catch(aborted)).content
       if (!Array.isArray(content)) throw new Error('联网搜索响应格式无效。')
       const blocks = content.map(record)
       const results = blocks.filter((block) => block.type === 'web_search_tool_result')
