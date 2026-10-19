@@ -682,6 +682,7 @@ test('campus requests go to chat/completions with thinking off; the reply stream
     const [first, second] = bodies
     assert.equal(bodies.length, 2)
     assert.deepEqual(first.chat_template_kwargs, { enable_thinking: false })
+    assert.equal(first.parallel_tool_calls, false)
     assert.equal(first.stream, true)
     assert.equal(first.messages[0].role, 'system')
     assert.deepEqual(first.messages.at(-1), { role: 'user', content: '有哪些文件？' })

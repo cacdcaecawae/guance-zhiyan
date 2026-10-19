@@ -144,6 +144,9 @@ export function toChatRequest(body: any) {
         type: 'function',
         function: { name: tool.name, description: tool.description, parameters: tool.input_schema },
       })),
+      // Without thinking the model fires 8–12 searches in one step (4 per answer with thinking);
+      // their results crowd the context and slowed answers (iteration 22: median 87 → 102 s).
+      parallel_tool_calls: false,
     }),
   }
 }
