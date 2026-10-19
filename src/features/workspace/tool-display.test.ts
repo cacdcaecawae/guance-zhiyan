@@ -1,6 +1,6 @@
 import { expect, it } from 'vitest'
 import type { AnswerPart } from '@/types'
-import { processItems } from './tool-display'
+import { processItems, toolSummary } from './tool-display'
 
 const tool = (id: string, name: string, status: 'running' | 'done' | 'error' = 'done') =>
   ({ id, type: 'tool', name, input: '{"query":"糖果题"}', output: '', status }) as const
@@ -36,6 +36,14 @@ it('未结束的组写正在运行的工具与参数，没有运行工具时写�
     '正在搜索网页 · 糖果题',
   ])
   expect(titles([tool('a', 'web_search'), think('r2')], false)).toEqual(['正在分析请求'])
+})
+
+it('列出文献的参数摘要写筛选条件，不显示原始 JSON', () => {
+  expect(toolSummary('{"area":"珙县","period":"十四五","docType":"规划文件"}')).toBe(
+    '珙县 · 十四五 · 规划文件',
+  )
+  expect(toolSummary('{"year":2023,"title":"政府工作报告"}')).toBe('2023 · 政府工作报告')
+  expect(toolSummary('{}')).toBe('{}')
 })
 
 it('已结束的组不把失败说成完成：全部失败写“…失败”，有工具被停止时加“已中断”', () => {

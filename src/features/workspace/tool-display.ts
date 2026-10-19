@@ -4,6 +4,7 @@ export const toolNames: Record<string, string> = {
   web_search: '搜索网页',
   library_search: '文献检索',
   library_open: '查看原文',
+  library_list: '列出文献',
   web_fetch: '访问网页',
   create_file: '生成文件',
   read_file: '读取文件',
@@ -25,7 +26,12 @@ export function toolSummary(input: string): string {
       value.path ??
       value.url ??
       value.name ??
-      value.id
+      value.id ??
+      // library_list 只有筛选条件
+      ([value.area, value.period, value.docType, value.year, value.title]
+        .filter(Boolean)
+        .join(' · ') ||
+        undefined)
     return typeof summary === 'string' ? summary : input
   } catch {
     return input
