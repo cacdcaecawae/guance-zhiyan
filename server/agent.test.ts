@@ -127,6 +127,30 @@ test('native DSH: scoped tools, persistent history, cancellation and long-runnin
       traceFromEvents(resumed, true).find((row) => row.kind === 'tool')?.status,
       'stopped',
     )
+    // 停止时工具返回的中断错误（如联网工具的 WEB_ABORTED）同样记为“已中断”
+    const abortedResult = history.map((event) =>
+      event.type === 'tool/result'
+        ? {
+            ...event,
+            data: {
+              ...event.data,
+              message: { ...event.data.message, isError: true },
+              error: { name: 'WebError', code: 'WEB_ABORTED' },
+            },
+          }
+        : event,
+    ) as SessionEvent[]
+    const abortedTool = messagesFromEvents(abortedResult, false).at(-1)!
+    assert.ok(
+      abortedTool.role === 'assistant' &&
+        abortedTool.parts.some(
+          (part) => part.type === 'tool' && part.status === 'stopped' && /已中断/.test(part.output),
+        ),
+    )
+    assert.equal(
+      traceFromEvents(abortedResult, false).find((row) => row.kind === 'tool')?.status,
+      'stopped',
+    )
     const largeCall = history.map((event) =>
       event.type === 'tool/call'
         ? {

@@ -25,11 +25,15 @@ const textOf = (content: readonly ContentBlock[]) =>
 export const imagesOf = (content: readonly ContentBlock[]) =>
   content.flatMap((block) => (block.type === 'image' ? [block.attachment] : []))
 
+/** Error codes of a tool cut off by stopping the answer; shown as interrupted, not failed. */
+const STOP_CODES = ['ABORTED', 'ABORTED_BEFORE_DISPATCH', 'WEB_ABORTED', 'FS_ABORTED']
+export const toolStatus = (isError: boolean | undefined, code?: string) =>
+  !isError ? 'done' : STOP_CODES.includes(code ?? '') ? 'stopped' : 'error'
+
 export function toolError(code?: string): string {
   const messages: Record<string, string> = {
     ...RAG_ERRORS,
-    ABORTED: '工具执行已中断。',
-    ABORTED_BEFORE_DISPATCH: '工具执行已中断。',
+    ...Object.fromEntries(STOP_CODES.map((code) => [code, '工具执行已中断。'])),
     TOOL_TIMEOUT: '工具执行超时，请重试或更换来源。',
     FILE_INVALID_NAME: '文件名称或格式无效。',
     FILE_INVALID_CONTENT: '文件内容为空或超过 200 KB。',
@@ -173,7 +177,7 @@ export function messagesFromEvents(
         (p) => p.type === 'tool' && p.id === event.data.message.toolCallId,
       )
       if (part?.type === 'tool') {
-        part.status = event.data.message.isError ? 'error' : 'done'
+        part.status = toolStatus(event.data.message.isError, event.data.error?.code)
         part.output = event.data.message.isError
           ? toolError(event.data.error?.code)
           : toolText(textOf(event.data.message.content))
