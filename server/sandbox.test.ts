@@ -191,6 +191,12 @@ async function protocolFixture() {
           } else {
             assert.deepEqual(data.argv.slice(0, 2), ['node', '/opt/gczy/fs-worker.mjs'])
             const { method, args } = JSON.parse(uploads.get(data.argv[2])!)
+            // A file operation that runs until the answer is stopped.
+            if (method === 'resolve' && args[0] === '/workspace/wait-for-stop') {
+              entry.pending.push(response)
+              for (const ready of commandStarted) ready()
+              return
+            }
             let value: unknown
             if (method === 'resolve')
               value = {
@@ -437,6 +443,28 @@ test('DSH tools use isolated OpenSandbox SDK sessions, persist exports and kill 
     const stopped = (await agents.snapshot(alice.id, a.id)).messages.at(-1)!
     assert.ok(stopped.role === 'assistant' && stopped.status === 'stopped')
     assert.equal(fixture.live.size, 1, 'stopping Alice preserves Bob')
+    // 沙箱文件工具执行中停止：对话与轨迹都记“已中断”，不算失败
+    for (const [name, args] of [
+      ['export_file', { path: '/workspace/wait-for-stop' }],
+      ['read', { file_path: '/workspace/wait-for-stop' }],
+      ['write', { file_path: '/workspace/wait-for-stop', content: '新内容' }],
+    ] as const) {
+      const fileStarted = Promise.withResolvers<void>()
+      fixture.commandStarted.add(fileStarted.resolve)
+      model.respond = (request) =>
+        request.messages.at(-1)?.role === 'tool' ? textChunks('已结束。') : toolChunks(name, args)
+      await agents.start(alice.id, a.id, `stop ${name}`)
+      await fileStarted.promise
+      fixture.commandStarted.delete(fileStarted.resolve)
+      await agents.stop(alice.id, a.id)
+      const view = await agents.snapshot(alice.id, a.id)
+      const answer = view.messages.at(-1)!
+      assert.ok(answer.role === 'assistant' && answer.status === 'stopped', name)
+      const tool = answer.parts.find((part) => part.type === 'tool' && part.name === name)
+      assert.ok(tool?.type === 'tool' && tool.status === 'stopped', name)
+      assert.equal(tool.output, '工具执行已中断。')
+      assert.equal(view.trace.findLast((row) => row.kind === 'tool')?.status, 'stopped', name)
+    }
     assert.equal(await readFile(agents.files.path(exported.id), 'utf8'), 'sandbox report')
     // 删除会话时先回收它仍在运行的容器；回收失败时会话与实例记录都保留，可重试
     fixture.state.failDeletes = 1

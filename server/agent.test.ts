@@ -1265,3 +1265,67 @@ test('HTTP: only a signed-in question may take longer than 30 seconds to upload'
     await rm(root, { recursive: true })
   }
 })
+
+test('a tool stopped mid-way shows as interrupted, while its coded failures still show as failed', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'gczy-stop-tool-test-'))
+  const store = new Store(root)
+  const model = new TestModel()
+  const agents = await new Agents(store, { adapter: model }).init()
+  const create = agents.files.create.bind(agents.files)
+  try {
+    const user = store.user('stop-tool', 'Test')
+    for (const [format, name] of [
+      ['md', '报告'],
+      ['docx', '报告'],
+      ['xlsx', '报告'],
+      ['md', ''], // FILE_INVALID_NAME: a coded failure stays a failure even when stopped
+    ] as const) {
+      const session = store.create(user.id)
+      const entered = Promise.withResolvers<void>()
+      const release = Promise.withResolvers<void>()
+      // Generation is still running when the answer is stopped, as with a long Office export.
+      agents.files.create = async (...args) => {
+        entered.resolve()
+        await release.promise
+        return create(...args)
+      }
+      model.respond = (request) =>
+        request.messages.at(-1)?.role === 'tool'
+          ? textChunks('已结束。')
+          : toolChunks('create_file', {
+              name,
+              format,
+              content: format === 'xlsx' ? '[["指标"]]' : '正文',
+            })
+      await agents.start(user.id, session.id, '生成文件')
+      await entered.promise
+      const stopping = agents.stop(user.id, session.id)
+      release.resolve()
+      await stopping
+      const view = await agents.snapshot(user.id, session.id)
+      const answer = view.messages.at(-1)!
+      assert.ok(answer.role === 'assistant' && answer.status === 'stopped')
+      const part = answer.parts.find((item) => item.type === 'tool')
+      const row = view.trace.find((item) => item.kind === 'tool')
+      assert.ok(part?.type === 'tool')
+      if (name) {
+        assert.equal(part.status, 'stopped', format)
+        assert.equal(part.output, '工具执行已中断。')
+        assert.equal(row?.status, 'stopped')
+      } else {
+        assert.equal(part.status, 'error')
+        assert.equal(part.output, '文件名称或格式无效。')
+        assert.equal(row?.status, 'error')
+      }
+      assert.deepEqual(store.artifacts(user.id, session.id), [])
+    }
+  } finally {
+    agents.files.create = create
+    await agents.close()
+    store.close()
+    assert.ok(
+      resolve(root).startsWith(resolve(tmpdir()) + sep) && root.includes('gczy-stop-tool-test-'),
+    )
+    await rm(root, { recursive: true })
+  }
+})
