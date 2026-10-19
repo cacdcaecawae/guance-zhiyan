@@ -80,6 +80,18 @@ const RERANK_CANDIDATES = 30
 const MAX_RERANK_BYTES = 1024 * 1024
 
 /**
+ * Qwen3-Reranker scores a yes/no judgement and needs its prompt around the query and each document;
+ * vLLM's rerank API leaves that to the caller. Sent as plain text, the campus qwen3-reranker-8b
+ * ranked a passage on rural water supply above the one on elderly care asked about.
+ */
+const QWEN3_RERANKER = /qwen3-reranker/i
+const qwen3Query = (query: string) =>
+  '<|im_start|>system\nJudge whether the Document meets the requirements based on the Query and the Instruct provided. Note that the answer can only be "yes" or "no".<|im_end|>\n<|im_start|>user\n' +
+  `<Instruct>: Given a web search query, retrieve relevant passages that answer the query\n<Query>: ${query}\n`
+const qwen3Document = (text: string) =>
+  `<Document>: ${text}<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n`
+
+/**
  * Orders items by a cross-encoder rerank service (`/v1/rerank`: query + documents → scores).
  * Scores only order the candidates; there is still no relevance floor.
  */
@@ -96,7 +108,15 @@ export async function rerank<T extends { text: string }>(
       'Content-Type': 'application/json',
       ...(config.apiKey ? { Authorization: `Bearer ${config.apiKey}` } : {}),
     },
-    body: JSON.stringify({ model: config.model, query, documents: items.map((item) => item.text) }),
+    body: JSON.stringify(
+      QWEN3_RERANKER.test(config.model)
+        ? {
+            model: config.model,
+            query: qwen3Query(query),
+            documents: items.map((item) => qwen3Document(item.text)),
+          }
+        : { model: config.model, query, documents: items.map((item) => item.text) },
+    ),
     signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
   })
   if (!response.ok) {

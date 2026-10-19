@@ -874,11 +874,21 @@ test('JSONL keeps UTF-8 text across stream boundaries and identifies invalid dat
 })
 
 test('rerank orders candidates by the service score and rejects malformed replies', async (t) => {
+  const wrapped: boolean[] = []
   const server = createServer(async (request, response) => {
     const buffers: Buffer[] = []
     for await (const buffer of request) buffers.push(buffer)
-    const { query, documents } = JSON.parse(Buffer.concat(buffers).toString())
+    let { query, documents } = JSON.parse(Buffer.concat(buffers).toString())
     assert.equal(request.headers.authorization, 'Bearer test-key')
+    // Qwen3-Reranker inputs arrive wrapped in its prompt; score what is inside.
+    wrapped.push(query.startsWith('<|im_start|>system'))
+    if (wrapped.at(-1)) {
+      query = /<Query>: (.*)\n$/.exec(query)![1]
+      documents = (documents as string[]).map((text) => {
+        assert.match(text, /^<Document>: .*<\|im_end\|>\n<\|im_start\|>assistant\n/s)
+        return /^<Document>: (.*?)<\|im_end\|>/s.exec(text)![1]
+      })
+    }
     const results = (documents as string[]).map((text, index) => ({
       index,
       relevance_score: text.includes(query) ? 0.9 : 0.1 * index,
@@ -900,6 +910,12 @@ test('rerank orders candidates by the service score and rejects malformed replie
     (await rerank(config, '用水', items)).map((item) => item.id),
     ['b', 'c', 'a'],
   )
+  const qwen3 = { ...config, model: 'qwen3-reranker-8b' }
+  assert.deepEqual(
+    (await rerank(qwen3, '用水', items)).map((item) => item.id),
+    ['b', 'c', 'a'],
+  )
+  assert.deepEqual(wrapped, [false, true]) // only Qwen3-Reranker gets its prompt
   await assert.rejects(rerank(config, '残缺', items), /格式无效/)
   await assert.rejects(rerank(config, '过大', items), /过大/)
   const embedding = {
