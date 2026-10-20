@@ -1,5 +1,5 @@
 import { FileTextIcon, Loader2Icon, XIcon } from 'lucide-react'
-import { memo, useEffect, useRef, useState } from 'react'
+import { memo, useEffect, useRef, useState, type ReactNode } from 'react'
 import { Button } from '@/components/ui/button'
 import { ResizeHandle } from '@/components/ui/resize-handle'
 import { parseCsv } from '@/lib/csv'
@@ -181,8 +181,16 @@ export const FilePreview = memo(function FilePreview({
 const WIDTH_KEY = 'gczy.preview-width'
 const WIDTH = { min: 320, max: 760, initial: 440 }
 
-/** 宽屏右侧的预览栏：左边缘可拖动调整宽度并保存为界面偏好；独立成组件，拖动时不重绘对话。 */
-export function PreviewPane({ file, onClose }: { file: Artifact; onClose: () => void }) {
+/** 宽屏右侧的预览栏（文件或引用原文）：左边缘可拖动调整宽度并保存为界面偏好；独立成组件，拖动时不重绘对话。 */
+export function PreviewPane({
+  label,
+  onClose,
+  children,
+}: {
+  label: string
+  onClose: () => void
+  children: ReactNode
+}) {
   const aside = useRef<HTMLElement>(null)
   const [width, setWidth] = useState(() => {
     const saved = Number(readPref(WIDTH_KEY))
@@ -200,7 +208,7 @@ export function PreviewPane({ file, onClose }: { file: Artifact; onClose: () => 
   return (
     <aside
       ref={aside}
-      aria-label="文件预览"
+      aria-label={label}
       style={{ width }}
       className="relative min-w-0 border-l border-border"
     >
@@ -216,7 +224,7 @@ export function PreviewPane({ file, onClose }: { file: Artifact; onClose: () => 
         onCommit={(next) => writePref(WIDTH_KEY, String(next))}
         className="absolute inset-y-0 -left-1 z-10 w-2 transition-colors hover:bg-brand/25"
       />
-      <FilePreview file={file} onClose={onClose} />
+      {children}
     </aside>
   )
 }

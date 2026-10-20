@@ -11,6 +11,7 @@ import { useEffect, useState, type ReactNode } from 'react'
 import { initialize, useResearch } from '@/services/research'
 import { Button } from '@/components/ui/button'
 import { ThemeToggle } from './theme-toggle'
+import { LibraryDocumentPage } from '@/features/library/library-document'
 import { LibraryPage } from '@/features/library/library-page'
 import { OutputsPage } from '@/features/outputs/outputs-page'
 import { WorkspacePage } from '@/features/workspace/workspace-page'
@@ -41,6 +42,7 @@ export function AppRouter() {
             <Route index element={<Navigate to="/workspace" replace />} />
             <Route path="/workspace/:sessionId?" element={<WorkspaceRoute />} />
             <Route path="/library" element={<LibraryPage />} />
+            <Route path="/library/:documentId" element={<LibraryDocumentPage />} />
             <Route path="/outputs" element={<OutputsPage />} />
             <Route path="*" element={<Navigate to="/workspace" replace />} />
           </Route>

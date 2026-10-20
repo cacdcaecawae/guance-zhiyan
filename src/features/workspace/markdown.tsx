@@ -1,6 +1,7 @@
+import { useContext } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import { passagePath } from './citations'
+import { OpenPassage, passagePath } from './citations'
 
 // U+2060 keeps a citation badge or footnote marker on the line of the word it follows; an
 // inline-block can wrap alone, and CJK text may break inside “注1”.
@@ -14,6 +15,7 @@ const WORD_JOINER = String.fromCodePoint(0x2060)
  * server-checked passages (citationOrder); without it, as in file previews, they stay text.
  */
 export function Markdown({ text, citations }: { text: string; citations?: readonly string[] }) {
+  const openPassage = useContext(OpenPassage)
   return (
     <div className="answer-markdown min-w-0">
       <ReactMarkdown
@@ -51,7 +53,20 @@ export function Markdown({ text, citations }: { text: string; citations?: readon
                     target="_blank"
                     rel="noopener noreferrer"
                     aria-label={`原文 ${number}`}
-                    title={`${label?.[1] ? `文献编号 ${label[1]}，` : ''}在新标签页打开原文`}
+                    title={`${label?.[1] ? `文献编号 ${label[1]}，` : ''}${openPassage ? '查看原文' : '在新标签页打开原文'}`}
+                    onClick={(event) => {
+                      if (
+                        !openPassage ||
+                        event.button !== 0 ||
+                        event.ctrlKey ||
+                        event.metaKey ||
+                        event.shiftKey ||
+                        event.altKey
+                      )
+                        return
+                      event.preventDefault()
+                      openPassage(passage[1].toLowerCase())
+                    }}
                     className="mx-0.5 rounded-sm bg-tag px-1.5 py-0.5 align-super text-ui-xs leading-none font-medium text-brand no-underline outline-none transition-colors hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring"
                   >
                     {number}

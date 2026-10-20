@@ -1,3 +1,4 @@
+import { createContext } from 'react'
 import remarkGfm from 'remark-gfm'
 import remarkParse from 'remark-parse'
 import remarkRehype from 'remark-rehype'
@@ -5,6 +6,10 @@ import { unified } from 'unified'
 
 const PASSAGE = '/api/library/passages/([0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12})'
 export const passagePath = new RegExp(`^${PASSAGE}$`)
+/** 工作区提供：点击引用编号在侧栏打开原文；未提供时在新标签页打开。Ctrl / ⌘ 等组合点击仍按浏览器默认处理。 */
+export const OpenPassage = createContext<((id: string) => void) | null>(null)
+/** 片段的章节路径（“# 编 / ## 章”）去掉 Markdown 标题符号后显示 */
+export const headingPath = (heading: string) => heading.replace(/(^|\/\s*)#+\s+/g, '$1')
 const passageInText = new RegExp(PASSAGE, 'g')
 // Match <Markdown>'s conversion: only rendered links count, with footnotes moved to the end.
 const parser = unified().use(remarkParse).use(remarkGfm).use(remarkRehype)

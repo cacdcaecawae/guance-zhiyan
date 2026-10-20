@@ -50,7 +50,7 @@ const offline =
   }
 const send = (url: string, init?: RequestInit) => fetch(url, init).catch(offline(init?.signal))
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+export async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await send(`/api${path}`, {
     credentials: 'same-origin',
     ...init,

@@ -252,7 +252,23 @@ for (const supplier of ['deepseek-official', 'qianwen']) {
           .getByRole('article', { name: '回答' })
           .getByRole('link', { name: '原文 1' })
         await expect(citation).toHaveAttribute('href', citationPath)
-        const [original] = await Promise.all([page.waitForEvent('popup'), citation.click()])
+        // A plain click opens the passage beside the answer; the full document opens in the library.
+        await citation.click()
+        const pane = page.getByRole('complementary', { name: '引用原文' })
+        await expect(pane.getByRole('heading', { name: source.title })).toBeVisible()
+        await expect(pane.getByText(source.text)).toBeVisible()
+        await pane.getByRole('link', { name: '查看全文' }).click()
+        await expect(page).toHaveURL(
+          `${appOrigin}/library/${source.id}#${citationPath.split('/').at(-1)}`,
+        )
+        await expect(page.locator('li[aria-current="true"]')).toHaveText(new RegExp(source.text))
+        await page.goBack()
+        await expect(citation).toBeVisible()
+        // Ctrl / ⌘-click still opens the standalone passage page in a new tab.
+        const [original] = await Promise.all([
+          page.context().waitForEvent('page'),
+          citation.click({ modifiers: ['ControlOrMeta'] }),
+        ])
         await expect(original).toHaveURL(appOrigin + citationPath)
         await expect(original.getByRole('heading', { level: 1 })).toHaveText(source.title)
         await expect(original.locator('pre')).toHaveText(source.text)

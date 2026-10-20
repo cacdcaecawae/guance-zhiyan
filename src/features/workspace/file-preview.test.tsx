@@ -68,7 +68,11 @@ ${header}`),
     ),
   )
   const onClose = vi.fn()
-  render(<PreviewPane file={file('csv')} onClose={onClose} />)
+  render(
+    <PreviewPane label="文件预览" onClose={onClose}>
+      <FilePreview file={file('csv')} onClose={onClose} />
+    </PreviewPane>,
+  )
   expect(await screen.findByText(/共 1 行、60 列/)).toBeInTheDocument()
   expect(screen.getAllByRole('columnheader')).toHaveLength(50)
   fireEvent.keyDown(document.body, { key: 'Escape' })

@@ -80,3 +80,35 @@ export interface TraceEntry {
   end?: number
   status?: 'running' | 'done' | 'error' | 'stopped'
 }
+export interface LibraryDocumentSummary {
+  id: string
+  title: string
+  sourceUrl: string | null
+  publishedAt: string | null
+}
+/** 文献的现行版本，片段按原文顺序排列 */
+export interface LibraryDocument extends LibraryDocumentSummary {
+  versionId: string
+  passages: { id: string; ordinal: number; heading: string; text: string }[]
+}
+/** 回答引用的原文片段；文献更新后旧引用仍可读，标明已被替代 */
+export interface LibraryPassage {
+  id: string
+  documentId: string
+  title: string
+  heading: string
+  text: string
+  ordinal: number
+  sourceUrl: string | null
+  publishedAt: string | null
+  superseded: boolean
+}
+/** 按内容检索命中的片段（与模型检索同一套混合检索，按相关度排序） */
+export interface LibraryHit {
+  id: string
+  documentId: string
+  title: string
+  heading: string
+  text: string
+  ordinal: number
+}
