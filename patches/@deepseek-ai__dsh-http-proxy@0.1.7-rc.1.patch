@@ -1,0 +1,24 @@
+diff --git a/lib/index.js b/lib/index.js
+index c2a2858a2077e56585693d062957627b9b3eef1d..cd140032952e74be524082fe132684f0ac7d9d9e 100644
+--- a/lib/index.js
++++ b/lib/index.js
+@@ -387,7 +387,9 @@ function writeProxyEnv(values) {
+ */
+ async function createPolicyDispatcher(policy) {
+ 	const { Agent, Pool, ProxyAgent } = await import("undici");
+-	return new Agent({ factory(origin, options) {
++	// Node's built-in fetch (undici 7) loses every response header from this undici 8 dispatcher on
++	// HTTP/2, so compressed model streams arrive undecoded; HTTP/1.1, as that fetch uses on its own.
++	return new Agent({ allowH2: false, factory(origin, options) {
+ 		const passed = options;
+ 		const proxy = proxyForUrl(policy, new URL(origin.toString()));
+ 		if (proxy !== void 0) return new ProxyAgent({
+@@ -426,7 +428,7 @@ async function installGlobalProxy(policy) {
+ 		const restoreEnv = inheritedProxyEnv === void 0 ? void 0 : writeProxyEnv(inheritedProxyEnv);
+ 		const undici = await import("undici");
+ 		const previous = undici.getGlobalDispatcher();
+-		const direct = new undici.Agent();
++		const direct = new undici.Agent({ allowH2: false });
+ 		undici.setGlobalDispatcher(direct);
+ 		active = policy;
+ 		installed = void 0;

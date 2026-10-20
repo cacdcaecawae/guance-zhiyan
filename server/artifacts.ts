@@ -30,6 +30,21 @@ type GeneratedFormat = 'md' | 'docx' | 'xlsx' | 'csv'
 type Workspace = {
   readOffice(data: Uint8Array, format: 'docx' | 'xlsx', signal?: AbortSignal): Promise<string>
 }
+/**
+ * Rethrows a tool failure, as ABORTED when it is the cancellation of `signal` itself (its reason, or
+ * an AbortError), so a stopped tool shows as interrupted: DSH records no code for these. Any other
+ * failure, such as a file system error at the same moment, keeps its own cause.
+ */
+export const rethrowStopped =
+  (signal?: AbortSignal) =>
+  (error: unknown): never => {
+    if (
+      signal?.aborted &&
+      (error === signal.reason || (error instanceof Error && error.name === 'AbortError'))
+    )
+      throw new HarnessError('工具执行已中断。', 'ABORTED')
+    throw error
+  }
 export const contentOutput = {
   schema: { type: 'string' as const },
   render: (_args: unknown, text: string) => [{ type: 'text' as const, text }],
@@ -268,7 +283,14 @@ export class Artifacts {
         output: contentOutput,
         execute: async (args, exec) =>
           JSON.stringify(
-            await this.create(userId, sessionId, args.name, args.format, args.content, exec.signal),
+            await this.create(
+              userId,
+              sessionId,
+              args.name,
+              args.format,
+              args.content,
+              exec.signal,
+            ).catch(rethrowStopped(exec.signal)),
           ),
       }),
     )
@@ -287,7 +309,10 @@ export class Artifacts {
         description: '读取当前会话生成文件的文本，最多返回 32000 字符。',
         parameters: { id: { type: 'string', required: true } },
         output: contentOutput,
-        execute: (args, exec) => this.read(userId, sessionId, args.id, workspace, exec.signal),
+        execute: (args, exec) =>
+          this.read(userId, sessionId, args.id, workspace, exec.signal).catch(
+            rethrowStopped(exec.signal),
+          ),
       }),
     )
   }

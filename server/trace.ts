@@ -3,7 +3,7 @@ import type {} from '@deepseek-ai/dsh-compaction-image-offload/projection'
 import { assembleAssistantStream, type ContentBlock } from '@deepseek-ai/dsh-llm'
 import type { TraceEntry } from '../src/types/index.ts'
 import type { LiveAttempt } from './view.ts'
-import { toolError, toolInput, toolText } from './view.ts'
+import { toolError, toolInput, toolStatus, toolText } from './view.ts'
 
 const contentText = (content: readonly ContentBlock[]) =>
   content
@@ -124,7 +124,7 @@ export function traceFromEvents(
       const row = tools.get(event.data.message.toolCallId)
       if (row) {
         row.end = event.time
-        row.status = event.data.message.isError ? 'error' : 'done'
+        row.status = toolStatus(event.data.message.isError, event.data.error?.code)
         row.text = event.data.message.isError
           ? toolError(event.data.error?.code)
           : toolText(contentText(event.data.message.content))

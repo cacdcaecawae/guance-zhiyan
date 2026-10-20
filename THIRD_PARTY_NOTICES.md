@@ -11,6 +11,15 @@ post-GC cancellation stall with Node 24; it preserves the native adapter and
 Agent Loop. `pnpm-workspace.yaml` applies the patch on installation. Remove it
 only after an upstream update passes the forced-GC cancellation regression.
 
+`patches/@deepseek-ai__dsh-http-proxy@0.1.7-rc.1.patch` makes the proxy
+package's global dispatchers use HTTP/1.1 (`allowH2: false`). The package builds
+them with undici 8, which negotiates HTTP/2, while Node 24's built-in `fetch`
+(undici 7) receives no response headers from them over HTTP/2, so compressed
+model streams arrive undecoded whenever `HTTPS_PROXY` is set. HTTP/1.1 is what
+the built-in `fetch` uses on its own. Remove the patch only after an upgrade of
+the package or of Node passes `server/network.test.ts` (HTTPS proxy, bypassed
+proxy and compressed responses) without it.
+
 `src/features/workspace/reasoning.tsx` adapts the completed-paragraph summary
 algorithm from [ReasoningRow.tsx](https://github.com/deepseek-ai/deepseek-harness/blob/46a7f68b0922371ce7144b668b90e377d8e799f4/packages/client/ui-chat/src/client/chat/ReasoningRow.tsx).
 The disclosure markup and styling use this project's components and tokens.
@@ -23,8 +32,8 @@ grouping, activity titles, tool-name categories and group disclosure from
 `conversation-nodes/README.zh.md`. `trajectory.tsx` adapts the timeline lanes,
 turn grouping and event disclosure layout from `packages/client/ui-trajectory`.
 These views use this project's React data service and semantic tokens instead
-of the upstream client plugin runtime. `server/network.ts` directly reuses
-`@deepseek-ai/dsh-http-proxy` at the same pinned version.
+of the upstream client plugin runtime. `server/network.ts` reuses
+`@deepseek-ai/dsh-http-proxy` at the same pinned version, with the patch above.
 Upstream commit: `46a7f68b0922371ce7144b668b90e377d8e799f4`.
 
 Upstream [license](https://github.com/deepseek-ai/deepseek-harness/blob/46a7f68b0922371ce7144b668b90e377d8e799f4/LICENSE):

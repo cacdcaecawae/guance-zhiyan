@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtemp, readFile, readdir, rm, chmod, stat, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, readdir, rm, chmod, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve, sep } from 'node:path'
 import { once } from 'node:events'
@@ -17,7 +17,7 @@ import { TestModel, textChunks, toolChunks } from '../tests/support/model.ts'
 import { Store } from './store.ts'
 import { Agents } from './agent.ts'
 import { createApp } from './http.ts'
-import { campusFetch, connection, modelAdapter } from './models.ts'
+import { campusFetch, connection, modelAdapter, modelCatalog, validateSelection } from './models.ts'
 
 test('existing SQLite sessions migrate without losing ownership and keep model selection on reopen', async () => {
   const root = await mkdtemp(join(tmpdir(), 'gczy-migration-test-'))
@@ -125,6 +125,30 @@ test('native DSH: scoped tools, persistent history, cancellation and long-runnin
     assert.equal(projected[1].status, 'loading')
     assert.equal(
       traceFromEvents(resumed, true).find((row) => row.kind === 'tool')?.status,
+      'stopped',
+    )
+    // 停止时工具返回的中断错误（如联网工具的 WEB_ABORTED）同样记为“已中断”
+    const abortedResult = history.map((event) =>
+      event.type === 'tool/result'
+        ? {
+            ...event,
+            data: {
+              ...event.data,
+              message: { ...event.data.message, isError: true },
+              error: { name: 'WebError', code: 'WEB_ABORTED' },
+            },
+          }
+        : event,
+    ) as SessionEvent[]
+    const abortedTool = messagesFromEvents(abortedResult, false).at(-1)!
+    assert.ok(
+      abortedTool.role === 'assistant' &&
+        abortedTool.parts.some(
+          (part) => part.type === 'tool' && part.status === 'stopped' && /已中断/.test(part.output),
+        ),
+    )
+    assert.equal(
+      traceFromEvents(abortedResult, false).find((row) => row.kind === 'tool')?.status,
       'stopped',
     )
     const largeCall = history.map((event) =>
@@ -611,6 +635,37 @@ test('DeepSeek and Qianwen models accept images, campus models are text-only; of
     assert.deepEqual(info.inputModalities, provider === 'campus' ? ['text'] : ['text', 'image'])
     if (provider === 'campus') assert.equal(info.defaultMaxTokens, 32768)
     assert.equal(info.systemPromptUpdate, model === 'deepseek-flash' ? 'in-history' : undefined)
+  }
+})
+
+test('users are offered only the campus models by default; sessions on other providers keep working', () => {
+  const saved = process.env.MODEL_PROVIDERS
+  try {
+    delete process.env.MODEL_PROVIDERS
+    const ids = (catalog: ReturnType<typeof modelCatalog>) => catalog.providers.map(({ id }) => id)
+    assert.deepEqual(ids(modelCatalog()), ['campus'])
+    assert.deepEqual(modelCatalog().defaultSelection, { provider: 'campus', model: 'qwen3.8-27b' })
+    process.env.MODEL_PROVIDERS = 'qianwen, campus'
+    assert.deepEqual(ids(modelCatalog()), ['qianwen', 'campus'])
+    assert.deepEqual(modelCatalog().defaultSelection, {
+      provider: 'qianwen',
+      model: 'deepseek-v4.1-flash',
+    })
+    process.env.MODEL_PROVIDERS = 'unknown'
+    assert.throws(() => modelCatalog(), /MODEL_PROVIDERS/)
+    assert.deepEqual(ids(modelCatalog(true)), ['deepseek-official', 'qianwen', 'campus'])
+    assert.deepEqual(modelCatalog(true).defaultSelection, {
+      provider: 'deepseek-official',
+      model: 'deepseek-flash',
+    })
+    // A provider no longer offered still accepts the sessions that chose it.
+    assert.deepEqual(validateSelection({ provider: 'qianwen', model: 'deepseek-v4.1-flash' }), {
+      provider: 'qianwen',
+      model: 'deepseek-v4.1-flash',
+    })
+  } finally {
+    if (saved === undefined) delete process.env.MODEL_PROVIDERS
+    else process.env.MODEL_PROVIDERS = saved
   }
 })
 
@@ -1238,6 +1293,84 @@ test('HTTP: only a signed-in question may take longer than 30 seconds to upload'
     await agents.close()
     store.close()
     assert.ok(resolve(root).startsWith(resolve(tmpdir()) + sep) && root.includes('gczy-http-test-'))
+    await rm(root, { recursive: true })
+  }
+})
+
+test('a tool stopped mid-way shows as interrupted, while its real failures still show as failed', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'gczy-stop-tool-test-'))
+  const store = new Store(root)
+  const model = new TestModel()
+  const agents = await new Agents(store, { adapter: model }).init()
+  const create = agents.files.create.bind(agents.files)
+  try {
+    const user = store.user('stop-tool', 'Test')
+    // A file where the I/O case creates a directory: a real EEXIST, not a cancellation.
+    const blocker = join(root, 'blocker')
+    await writeFile(blocker, '')
+    for (const [format, name, outcome] of [
+      ['md', '报告', 'stopped'],
+      ['docx', '报告', 'stopped'],
+      ['xlsx', '报告', 'stopped'],
+      ['md', '', 'coded'], // FILE_INVALID_NAME stays a failure even when stopped
+      ['md', '报告', 'io'], // so does a file system error at the moment of stopping
+    ] as const) {
+      const session = store.create(user.id)
+      const entered = Promise.withResolvers<void>()
+      const release = Promise.withResolvers<void>()
+      // Generation is still running when the answer is stopped, as with a long Office export.
+      agents.files.create = async (...args) => {
+        entered.resolve()
+        await release.promise
+        if (outcome === 'io') await mkdir(blocker)
+        return create(...args)
+      }
+      model.respond = (request) =>
+        request.messages.at(-1)?.role === 'tool'
+          ? textChunks('已结束。')
+          : toolChunks('create_file', {
+              name,
+              format,
+              content: format === 'xlsx' ? '[["指标"]]' : '正文',
+            })
+      await agents.start(user.id, session.id, '生成文件')
+      await entered.promise
+      const stopping = agents.stop(user.id, session.id)
+      release.resolve()
+      await stopping
+      const view = await agents.snapshot(user.id, session.id)
+      const answer = view.messages.at(-1)!
+      assert.ok(answer.role === 'assistant' && answer.status === 'stopped')
+      const part = answer.parts.find((item) => item.type === 'tool')
+      const row = view.trace.find((item) => item.kind === 'tool')
+      assert.ok(part?.type === 'tool')
+      if (outcome === 'stopped') {
+        assert.equal(part.status, 'stopped', format)
+        assert.equal(part.output, '工具执行已中断。')
+        assert.equal(row?.status, 'stopped')
+      } else {
+        assert.equal(part.status, 'error', outcome)
+        assert.equal(row?.status, 'error')
+        if (outcome === 'coded') assert.equal(part.output, '文件名称或格式无效。')
+        else {
+          // The original failure stays in the session log.
+          const result = (await agents.events(session.id)).find(
+            (event) => event.type === 'tool/result',
+          )
+          assert.ok(result?.type === 'tool/result' && result.data.message.isError)
+          assert.match(JSON.stringify(result.data.message.content), /EEXIST/)
+          assert.equal(result.data.error, undefined)
+        }
+      }
+      assert.deepEqual(store.artifacts(user.id, session.id), [])
+    }
+  } finally {
+    agents.files.create = create
+    await agents.close()
+    store.close()
+    assert.ok(
+      resolve(root).startsWith(resolve(tmpdir()) + sep) && root.includes('gczy-stop-tool-test-'),
+    )
     await rm(root, { recursive: true })
   }
 })

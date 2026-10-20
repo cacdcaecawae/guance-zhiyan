@@ -40,7 +40,7 @@ import {
   acceptsImages,
   connection,
   modelAdapter,
-  modelCatalog,
+  providerIds,
   validateSelection,
 } from './models.ts'
 import { qianwenSearch } from './qianwen-search.ts'
@@ -170,10 +170,10 @@ export class Agents {
     // 图片请求超出适配器预算时，记录旧图片的省略位置并重试；原始消息和图片仍保留。
     await ctx.plugin(ImageOffload)
     await ctx.plugin(CountedAttachmentStore, { dshHome: join(this.store.root, 'dsh') })
-    for (const provider of modelCatalog().providers)
+    for (const provider of providerIds)
       ctx.llm.registerAdapter(
-        [provider.id],
-        this.options.adapter ?? modelAdapter(provider.id, () => ctx.get('attachments')),
+        [provider],
+        this.options.adapter ?? modelAdapter(provider, () => ctx.get('attachments')),
       )
     ctx.on('session/event', (session, event) => {
       const run = this.active.get(session.id)

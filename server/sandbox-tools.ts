@@ -25,7 +25,7 @@ import { defineTool } from '@deepseek-ai/dsh-tools'
 import { HarnessError } from '@deepseek-ai/dsh-llm'
 import type { Sandbox, ExecutionHandlers, RunCommandOpts } from '@alibaba-group/opensandbox'
 import { Sandboxes, sandboxError } from './sandboxes.ts'
-import { Artifacts } from './artifacts.ts'
+import { Artifacts, rethrowStopped } from './artifacts.ts'
 
 /** All paths are Linux paths inside the execution environment, never host paths. */
 const cwd = (value?: string) =>
@@ -97,8 +97,9 @@ export class SessionSandbox {
       return posix.join('/workspace', path.slice(this.legacyCwd.length).replaceAll('\\', '/'))
     return cwd(path)
   }
+  /** Every sandbox operation; a stop arrives as its cancellation and is reported as ABORTED. */
   use<T>(signal: AbortSignal | undefined, work: (remote: Sandbox) => Promise<T>) {
-    return this.manager.use(this.userId, this.sessionId, signal, work)
+    return this.manager.use(this.userId, this.sessionId, signal, work).catch(rethrowStopped(signal))
   }
   stop() {
     return this.manager.stop(this.userId, this.sessionId)
@@ -483,7 +484,11 @@ export async function registerSandbox(ctx: Context, session: SessionSandbox, fil
       parameters: { path: { type: 'string', required: true } },
       output: { schema: { type: 'string' }, render: (_args, text) => [{ type: 'text', text }] },
       execute: async (args, exec) =>
-        JSON.stringify(await session.exportFile(args.path, files, exec.signal)),
+        JSON.stringify(
+          await session
+            .exportFile(args.path, files, exec.signal)
+            .catch(rethrowStopped(exec.signal)),
+        ),
     }),
   )
 }

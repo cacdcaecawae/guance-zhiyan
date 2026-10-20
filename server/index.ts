@@ -16,6 +16,7 @@ const origin = local
   : (process.env.APP_ORIGIN ?? 'http://localhost:5173')
 if (!Number.isInteger(port) || port < 1 || port > 65535 || new URL(origin).origin !== origin)
   throw new Error('PORT 或 APP_ORIGIN 配置无效。')
+modelCatalog() // MODEL_PROVIDERS 无效时启动即报错
 const store = new Store(resolve(process.env.DATA_DIR ?? 'server/data'))
 const disposeNetwork = await configureNetwork()
 process.env.DSH_HOME = resolve(store.root, 'dsh')

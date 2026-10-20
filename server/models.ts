@@ -37,26 +37,34 @@ const providers = [
     key: 'CAMPUS_API_KEY',
     baseEnv: 'CAMPUS_BASE_URL',
     base: 'http://10.27.66.12',
+    // 第一个是默认模型（评测采用的 qwen3.8-27b）
     models: [
-      { id: 'step-3.7-flash', name: 'Step 3.7 Flash' },
       { id: 'qwen3.8-27b', name: 'Qwen3.8 27B' },
+      { id: 'step-3.7-flash', name: 'Step 3.7 Flash' },
       { id: 'deepseek-v4-flash-0731-w8a8', name: 'DeepSeek V4 Flash（校内 W8A8）' },
     ],
   },
 ]
-export const defaultSelection: ModelSelection = {
-  provider: 'deepseek-official',
-  model: 'deepseek-flash',
-}
+/** Every provider has an adapter, so sessions that already chose one keep working. */
+export const providerIds = providers.map(({ id }) => id)
+/**
+ * Providers offered in the model picker: the ids in `MODEL_PROVIDERS` (comma-separated), for now
+ * only the campus models by default; the test host, which injects its adapter, offers all. The
+ * default is the first offered provider's first model.
+ */
 export function modelCatalog(testAdapter = false): ModelCatalog {
+  const listed = (process.env.MODEL_PROVIDERS?.trim() || 'campus').split(',').map((id) => id.trim())
+  const offered = providers.filter(({ id }) => testAdapter || listed.includes(id))
+  if (!offered.length)
+    throw new Error('MODEL_PROVIDERS 须列出至少一个供应商：' + providerIds.join('、'))
   return {
-    providers: providers.map(({ id, name, key, models }) => ({
+    providers: offered.map(({ id, name, key, models }) => ({
       id,
       name,
       models,
       configured: testAdapter || !!process.env[key]?.trim(),
     })),
-    defaultSelection,
+    defaultSelection: { provider: offered[0].id, model: offered[0].models[0].id },
   }
 }
 export function validateSelection(value: unknown): ModelSelection {
