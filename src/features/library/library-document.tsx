@@ -13,7 +13,8 @@ export function LibraryDocumentPage() {
   const { documentId = '' } = useParams()
   const location = useLocation()
   const back = (location.state as { from?: string } | null)?.from ?? '/library'
-  const target = decodeURIComponent(location.hash.slice(1))
+  // 片段编号是 UUID，不需要解码；地址片段不可信，编码无效时只是匹配不到片段
+  const target = location.hash.slice(1)
   const [loaded, retry] = useRequest(documentId, (signal) => readDocument(documentId, signal))
   useEffect(() => {
     if (loaded.status === 'done' && target)

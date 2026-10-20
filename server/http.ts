@@ -136,7 +136,8 @@ export function createApp(
               throw new HttpError(400, '文献分页参数无效。')
           }
           const titles = url.searchParams.getAll('q')
-          if (titles.length > 1 || (titles[0]?.length ?? 0) > 200)
+          // Same limit as content search: the page keeps the query when switching modes.
+          if (titles.length > 1 || (titles[0]?.length ?? 0) > 500)
             throw new HttpError(400, '文献标题检索词无效。')
           const title = titles[0] ?? ''
           const documents = library.list(

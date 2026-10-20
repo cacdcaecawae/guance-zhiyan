@@ -28,7 +28,9 @@ export function LibraryPage() {
   // 本页表单自己提交的地址；它重绘时不回写表单，免得覆盖重绘期间新输入的文字
   const submitted = useRef<string | null>(null)
   const show = (by: string | null, q: string, page = 1) => {
-    submitted.current = `${by === 'content' ? 'content' : 'title'}:${q}`
+    const key = `${by === 'content' ? 'content' : 'title'}:${q}`
+    // 只翻页时检索方式与检索词不变，地址重绘不会触发下面的同步，不留标记
+    if (key !== `${mode.id}:${query}`) submitted.current = key
     setParams({
       ...(by === 'content' && { by }),
       ...(q && { q }),
@@ -45,10 +47,10 @@ export function LibraryPage() {
   // 其他地址变化（前进 / 后退、侧栏链接）后把表单同步为地址里的值；不靠 key 重建表单，焦点留在原控件上
   const form = useRef<HTMLFormElement>(null)
   useEffect(() => {
-    if (submitted.current === `${mode.id}:${query}`) {
-      submitted.current = null
-      return
-    }
+    // 标记只抵消紧接着的一次重绘；无论是否匹配都清除，之后经历史回到同一检索时照常同步
+    const own = submitted.current === `${mode.id}:${query}`
+    submitted.current = null
+    if (own) return
     const fields = form.current!.elements as HTMLFormControlsCollection & {
       by: RadioNodeList
       q: HTMLInputElement

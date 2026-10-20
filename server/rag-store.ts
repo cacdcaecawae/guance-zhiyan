@@ -190,9 +190,10 @@ const passageColumns = `c.id, c.version_id AS versionId, v.document_id AS docume
 /** Current versions read through the covering title index only. */
 const CURRENT_TITLES = `rag_versions v INDEXED BY rag_versions_title
   JOIN rag_documents d ON d.id=v.document_id AND d.version_id=v.id`
+// Every word must match; the 500-character query limit bounds their number.
 // ponytail: substring match scans the title index (51k titles in ~5 ms); use FTS if it slows.
 const titleWords = (title: string) => {
-  const words = title.split(/\s+/).filter(Boolean).slice(0, 8)
+  const words = title.split(/\s+/).filter(Boolean)
   return { words, clause: words.map(() => 'instr(v.title, ?) > 0').join(' AND ') || '1' }
 }
 

@@ -68,16 +68,22 @@ test('library HTTP requires identity, publishes real pages safely and retains hi
     })
     // Title search keeps the same shape; the total counts the matches only.
     // Every space-separated word must appear in the title.
+    // However many words there are, each counts: the first eight below all appear in the title.
+    const nine = '测试 img src x onerror alert 1 ( 无关'
     for (const [query, total] of [
       [' 测试 ', 1],
       ['测试 img', 1],
       ['测试 无关', 0],
+      [nine, 0],
+      [nine.replace(' 无关', ''), 1],
     ] as const)
       assert.equal(
         (await (await get('/api/library?q=' + encodeURIComponent(query))).json()).total,
         total,
         query,
       )
+    // Title and content search accept the same length, so switching modes keeps a valid query.
+    assert.equal((await get('/api/library?q=' + 'x'.repeat(500))).status, 200)
     assert.deepEqual(await (await get('/api/library?q=%E6%97%A0%E5%85%B3')).json(), {
       total: 0,
       documents: [],
@@ -190,7 +196,7 @@ test('library HTTP requires identity, publishes real pages safely and retains hi
       '?limit=1&limit=2',
       '?offset=0&offset=1',
       '?q=a&q=b',
-      '?q=' + 'x'.repeat(201),
+      '?q=' + 'x'.repeat(501),
     ])
       assert.equal((await get('/api/library' + query)).status, 400, query)
     for (const query of ['?format=', '?format=html', '?format=xml', '?format=json&format=json'])

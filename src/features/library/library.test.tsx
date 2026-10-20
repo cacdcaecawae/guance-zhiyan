@@ -1,6 +1,6 @@
 import { render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { Link, MemoryRouter, Route, Routes } from 'react-router'
+import { Link, MemoryRouter, Route, Routes, useNavigate } from 'react-router'
 import { afterEach, expect, it, vi } from 'vitest'
 // 顶栏经侧栏引入主题模块，模块加载时即读取 matchMedia，jsdom 没有它
 vi.hoisted(() =>
@@ -50,11 +50,16 @@ const fetchMock = vi.fn(async (path: string) => {
 vi.stubGlobal('fetch', fetchMock)
 afterEach(() => fetchMock.mockClear())
 
+function Back() {
+  const navigate = useNavigate()
+  return <button onClick={() => navigate(-1)}>浏览器后退</button>
+}
 const open = (path: string) =>
   render(
     <MemoryRouter initialEntries={[path]}>
       {/* 模拟侧栏的“文献库”链接：页面不重新挂载时表单也随地址重置 */}
       <Link to="/library">侧栏文献库</Link>
+      <Back />
       <Routes>
         <Route path="/library" element={<LibraryPage />} />
         <Route path="/library/:documentId" element={<LibraryDocumentPage />} />
@@ -151,4 +156,25 @@ it('页面外的链接改变地址时，表单同步为地址里的检索方式�
   expect(await screen.findByText('共 51 篇文献')).toBeInTheDocument()
   expect(screen.getByRole('radio', { name: '按标题' })).toBeChecked()
   expect(screen.getByRole('searchbox', { name: '检索词' })).toHaveValue('')
+})
+
+it('翻页后经侧栏离开再后退，检索框恢复为该页的检索词', async () => {
+  const user = userEvent.setup()
+  open('/library')
+  await screen.findByText('共 51 篇文献')
+  await user.type(screen.getByRole('searchbox', { name: '检索词' }), '沧州{Enter}')
+  await user.click(await screen.findByRole('button', { name: '下一页' }))
+  expect(await screen.findByText('第 2 / 2 页')).toBeInTheDocument()
+  await user.click(screen.getByRole('link', { name: '侧栏文献库' }))
+  expect(await screen.findByText('共 51 篇文献')).toBeInTheDocument()
+  expect(screen.getByRole('searchbox', { name: '检索词' })).toHaveValue('')
+  await user.click(screen.getByRole('button', { name: '浏览器后退' }))
+  expect(await screen.findByText('第 2 / 2 页')).toBeInTheDocument()
+  expect(screen.getByRole('searchbox', { name: '检索词' })).toHaveValue('沧州')
+})
+
+it('片段定位的地址片段编码无效时忽略定位，照常显示文献', async () => {
+  open('/library/2561#%E0%A4%A')
+  expect(await screen.findByText('第 2 块原文')).toBeInTheDocument()
+  expect(document.querySelector('li[aria-current]')).toBeNull()
 })
