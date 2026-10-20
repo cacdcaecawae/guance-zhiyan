@@ -32,3 +32,4 @@ test-results
 .env.*
 !.env.example
 server/data/
+deploy/.update/

@@ -35,7 +35,7 @@ ssh -N -L 3001:127.0.0.1:3001 用户名@服务器    # 保持窗口打开，再�
      # EMBED_CMD="BGE_M3_DIR=$HOME/models/bge-m3 $HOME/embed-venv/bin/python server/rag/embed-server.py 8081"
      ```
    - `PATH`：node、pnpm 不在默认 PATH（如装在用户目录、由 systemd 启动）时补上。
-   - 需要覆盖 `server/.env` 的同名项（如 `PORT`、`DATA_DIR`）时也写在这里。
+   - 只能写 `PATH`、`QDRANT_BIN`、`QDRANT_STORAGE`、`EMBED_CMD`、`APP_MODE`、`LOG_DIR`。数据目录、端口等应用配置只写在 `server/.env`：网站与 `pnpm rag` 导入命令都只读那里，分两处写会让导入写进网站看不到的目录，所以 `deploy/.env` 出现应用配置时拒绝启动。相对路径按仓库根目录解析。
 5. **数据**：二选一。
    - 新导入：`pnpm rag import <文献.jsonl>`、`pnpm rag metadata <元数据.jsonl>`，见 RAG 说明。全库导入耗时很长，宜在有显卡的机器上完成。
    - 从已有部署迁移：停止两边服务后，**一起**复制 `DATA_DIR`（含 `app.sqlite`，全库约 15 GB）与 Qdrant 数据目录（或 Docker 卷），并保持 `EMBEDDING_URL`、`EMBEDDING_MODEL`、`EMBEDDING_DIMENSIONS`、`QDRANT_URL` 四项原样。向量集合名和索引完成标记由文献库编号（在 `DATA_DIR` 里）和这几项共同决定，任何一项变化都会被视为新索引，需要 `pnpm rag reindex` 全量重算。
@@ -49,13 +49,20 @@ deploy/guance.sh update           # 拉取 origin/main、安装依赖并构建�
 deploy/guance.sh stop             # 停止 run 启动的全部服务
 ```
 
-任一进程退出后 5 秒自动重启；停止时整组结束（向量服务由 shell 拉起的子进程也一并结束），20 秒内未退出的强制结束。日志在 `deploy/logs`（`run.log` 记录启停，另有每个服务一份），不自动轮转，长期运行时定期清理或交给 logrotate（`copytruncate`）。`update` 在工作区有未提交改动或任一步失败时不重启网站；构建直接覆盖 `dist/`，失败时先修复再重新 `update`。
+任一进程退出后，先结束它留在组里的子进程，5 秒后重启；停止时等每个服务的整个进程组退出（向量服务由 shell 拉起的子进程也算在内），20 秒内未退出的强制结束，确认全部结束才报告“已停止”。守护进程被强制结束时，`run` 拒绝重新启动以免抢端口，`stop` 清理它留下的进程；只认本脚本启动的进程（带 `GUANCE_ROOT` 标记），进程号文件过时、号码被别的程序复用时不会误杀。日志在 `deploy/logs`（`run.log` 记录启停，另有每个服务一份），不自动轮转，长期运行时定期清理或交给 logrotate（`copytruncate`）。`update` 先在临时工作树 `deploy/.update` 里安装依赖并构建，通过后才把正在使用的代码与依赖切到新版本、整体替换 `dist/` 并重启网站；构建失败时正在使用的代码、依赖和页面都不动，切换中途失败则退回原版本。工作区有未提交改动时拒绝更新，所以 systemd 单元、桌面启动文件等模板都复制后修改副本。
 
 ## 开机自启
 
-**Linux 服务器（systemd）**：按 `deploy/guance.service` 开头的注释修改仓库目录与运行账号后安装，之后用 `systemctl status|restart|stop guance` 管理，不再手动执行 `run`。用 Docker 运行 Qdrant 时，单元已排在 `docker.service` 之后。
+**Linux 服务器（systemd）**：在仓库根目录以运行服务的账号执行下面两行，安装时替换仓库目录与账号（不要改仓库里的模板），之后用 `systemctl status|restart|stop guance` 管理，不再手动执行 `run`：
 
-**Windows + WSL**：WSL 在没有 `wsl.exe` 进程时会空闲关机，从 SSH 或关掉的终端里启动的服务会随之结束。把 `deploy/start-wsl.cmd` 复制到桌面双击：它在隐藏窗口里常驻运行 `deploy/guance.sh run`，30 秒后显示状态，关闭提示窗口不影响服务。仓库不在 `~/guance-app` 或发行版不叫 Ubuntu 时，改文件里的 `REPO`、`DISTRO` 两行（该文件只能含英文字符：中文 Windows 的 `cmd` 在 UTF-8 代码页下会把含中文的行解析错）。开机自启：任务计划程序新建“用户登录时”触发、操作为运行该文件的任务。停止：`wsl -d Ubuntu -- bash -lc "~/guance-app/deploy/guance.sh stop"`。
+```bash
+sed "s#/srv/guance#$PWD#g; s#^User=guance#User=$USER#" deploy/guance.service | sudo tee /etc/systemd/system/guance.service
+sudo systemctl daemon-reload && sudo systemctl enable --now guance
+```
+
+用 Docker 运行 Qdrant 时，单元已排在 `docker.service` 之后。
+
+**Windows + WSL**：WSL 在没有 `wsl.exe` 进程时会空闲关机，从 SSH 或关掉的终端里启动的服务会随之结束。把 `deploy/start-wsl.cmd` 复制到桌面双击：它在隐藏窗口里常驻运行 `deploy/guance.sh run`，30 秒后显示状态，关闭提示窗口不影响服务。仓库不在 `~/guance-app` 或发行版不叫 Ubuntu 时，改桌面那份副本里的 `REPO`、`DISTRO` 两行（该文件只能含英文字符：中文 Windows 的 `cmd` 在 UTF-8 代码页下会把含中文的行解析错）。开机自启：任务计划程序新建“用户登录时”触发、操作为运行该文件的任务。停止：`wsl -d Ubuntu -- bash -lc "~/guance-app/deploy/guance.sh stop"`。
 
 ## 备份
 
@@ -63,13 +70,14 @@ deploy/guance.sh stop             # 停止 run 启动的全部服务
 
 ## 排查
 
-| `status` 显示    | 先看                                                                                |
-| ---------------- | ----------------------------------------------------------------------------------- |
-| 守护进程：未运行 | 没有启动，或已被关闭（WSL 是否空闲关机、终端是否被关掉）                            |
-| 网站：无响应     | `deploy/logs/app.log`；刚启动或刚更新时等十几秒                                     |
-| Qdrant：无响应   | `deploy/logs/qdrant.log`，或 `docker compose ... ps`；端口是否与 `QDRANT_URL` 一致  |
-| 向量服务：无响应 | `deploy/logs/embedding.log`；刚启动时要等模型加载完；显存不足时日志里有 OutOfMemory |
-| 校内模型：无响应 | 服务器是否在校园网内、能否访问 `CAMPUS_BASE_URL`；密钥是否有效                      |
+| `status` 显示        | 先看                                                                                |
+| -------------------- | ----------------------------------------------------------------------------------- |
+| 守护进程：未运行     | 没有启动，或已被关闭（WSL 是否空闲关机、终端是否被关掉）                            |
+| 守护进程：已异常退出 | 守护进程被强制结束，留下的进程仍在运行；执行 `deploy/guance.sh stop` 清理后再 `run` |
+| 网站：无响应         | `deploy/logs/app.log`；刚启动或刚更新时等十几秒                                     |
+| Qdrant：无响应       | `deploy/logs/qdrant.log`，或 `docker compose ... ps`；端口是否与 `QDRANT_URL` 一致  |
+| 向量服务：无响应     | `deploy/logs/embedding.log`；刚启动时要等模型加载完；显存不足时日志里有 OutOfMemory |
+| 校内模型：无响应     | 服务器是否在校园网内、能否访问 `CAMPUS_BASE_URL`；密钥是否有效                      |
 
 网站在 Qdrant 或向量服务不可用时照常启动，只是文献库检索会报错，恢复后无需重启网站。
 

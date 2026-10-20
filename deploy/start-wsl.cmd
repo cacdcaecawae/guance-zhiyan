@@ -1,6 +1,7 @@
 @echo off
 rem Start all Guance services in WSL (deploy/guance.sh run) in a hidden window; closing this window keeps them running.
-rem Copy to the desktop and double-click. Edit REPO / DISTRO below if the repo is not ~/guance-app or the distro is not Ubuntu.
+rem Copy to the desktop and double-click. Edit REPO / DISTRO below in that copy, not in the repository
+rem (local edits make deploy/guance.sh update refuse to run), if the repo is not ~/guance-app or the distro is not Ubuntu.
 rem Keep this file ASCII-only: cmd misparses lines with multi-byte characters under code page 65001. See docs/DEPLOY.md.
 set REPO=~/guance-app
 set DISTRO=Ubuntu
