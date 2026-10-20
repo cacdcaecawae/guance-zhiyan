@@ -1,7 +1,8 @@
 import { XIcon } from 'lucide-react'
-import { Link } from 'react-router'
+import { Link, useLocation } from 'react-router'
 import { Button } from '@/components/ui/button'
 import { LoadStatus } from '@/components/ui/load-status'
+import { documentHref } from '@/features/library/document-href'
 import { useRequest } from '@/lib/use-request'
 import { readPassage } from '@/services/library'
 import { headingPath } from './citations'
@@ -11,6 +12,7 @@ import { Markdown } from './markdown'
 export function PassagePreview({ id, onClose }: { id: string; onClose?: () => void }) {
   const [loaded, retry] = useRequest(id, (signal) => readPassage(id, signal))
   const passage = loaded.status === 'done' ? loaded.value : null
+  const location = useLocation()
   return (
     <div className="flex h-full min-h-0 flex-col bg-background">
       <div
@@ -20,8 +22,10 @@ export function PassagePreview({ id, onClose }: { id: string; onClose?: () => vo
         {passage && (
           <Button asChild variant="outline" size="sm" className="rounded-md">
             {/* 被替代的旧片段不在现行版本里，只打开整篇，不定位 */}
+            {/* 带上当前会话地址，文献页的返回链接回到这里而不是文献库列表 */}
             <Link
-              to={`/library/${encodeURIComponent(passage.documentId)}${passage.superseded ? '' : `#${passage.id}`}`}
+              to={documentHref(passage.documentId, passage.superseded ? undefined : passage.id)}
+              state={{ from: location.pathname }}
             >
               查看全文
             </Link>

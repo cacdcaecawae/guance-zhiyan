@@ -259,11 +259,29 @@ for (const supplier of ['deepseek-official', 'qianwen']) {
         await expect(pane.getByText(source.text)).toBeVisible()
         await pane.getByRole('link', { name: '查看全文' }).click()
         await expect(page).toHaveURL(
-          `${appOrigin}/library/${source.id}#${citationPath.split('/').at(-1)}`,
+          `${appOrigin}/library/document?id=${source.id}#${citationPath.split('/').at(-1)}`,
         )
         await expect(page.locator('li[aria-current="true"]')).toHaveText(new RegExp(source.text))
-        await page.goBack()
+        // Opened from a conversation, the document page leads back to it.
+        const conversation = new URL(page.url()).origin
+        await page.getByRole('link', { name: '返回研究' }).click()
+        await expect(page).toHaveURL(new RegExp(`^${conversation}/workspace/`))
         await expect(citation).toBeVisible()
+        // Keyboard: Enter opens the passage, Esc closes it and focus returns to the citation, in the
+        // wide side pane and in the narrow drawer.
+        for (const [width, panel] of [
+          [1280, page.getByRole('complementary', { name: '引用原文' })],
+          [390, page.getByRole('dialog', { name: '引用原文' })],
+        ] as const) {
+          await page.setViewportSize({ width, height: 800 })
+          await citation.focus()
+          await page.keyboard.press('Enter')
+          await expect(panel.getByText(source.text)).toBeVisible()
+          await page.keyboard.press('Escape')
+          await expect(panel).toBeHidden()
+          await expect(citation).toBeFocused()
+        }
+        await page.setViewportSize({ width: 1280, height: 720 })
         // Ctrl / ⌘-click still opens the standalone passage page in a new tab.
         const [original] = await Promise.all([
           page.context().waitForEvent('page'),

@@ -42,7 +42,7 @@ export function AppRouter() {
             <Route index element={<Navigate to="/workspace" replace />} />
             <Route path="/workspace/:sessionId?" element={<WorkspaceRoute />} />
             <Route path="/library" element={<LibraryPage />} />
-            <Route path="/library/:documentId" element={<LibraryDocumentPage />} />
+            <Route path="/library/document" element={<LibraryDocumentPage />} />
             <Route path="/outputs" element={<OutputsPage />} />
             <Route path="*" element={<Navigate to="/workspace" replace />} />
           </Route>

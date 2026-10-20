@@ -1,6 +1,6 @@
 import { ArrowLeftIcon } from 'lucide-react'
 import { useEffect } from 'react'
-import { Link, useLocation, useParams } from 'react-router'
+import { Link, useLocation, useSearchParams } from 'react-router'
 import { TopBar } from '@/app/shell'
 import { LoadStatus } from '@/components/ui/load-status'
 import { headingPath } from '@/features/workspace/citations'
@@ -10,7 +10,7 @@ import { readDocument } from '@/services/library'
 
 /** 一篇文献的现行版本，按原文顺序列出检索所用的全部片段；地址带 #片段编号 时定位并标出该片段。 */
 export function LibraryDocumentPage() {
-  const { documentId = '' } = useParams()
+  const documentId = useSearchParams()[0].get('id') ?? ''
   const location = useLocation()
   const back = (location.state as { from?: string } | null)?.from ?? '/library'
   // 片段编号是 UUID，不需要解码；地址片段不可信，编码无效时只是匹配不到片段
@@ -31,7 +31,7 @@ export function LibraryDocumentPage() {
             className="flex w-fit items-center gap-1 rounded-sm text-ui-caption text-foreground-subtle outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
           >
             <ArrowLeftIcon className="size-4" aria-hidden />
-            返回文献库
+            {back.startsWith('/workspace') ? '返回研究' : '返回文献库'}
           </Link>
           {!item ? (
             <LoadStatus

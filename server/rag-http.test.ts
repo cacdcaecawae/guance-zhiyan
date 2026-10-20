@@ -88,7 +88,7 @@ test('library HTTP requires identity, publishes real pages safely and retains hi
       total: 0,
       documents: [],
     })
-    const read = await (await get(`/api/library/documents/${document.id}`)).json()
+    const read = await (await get(`/api/library/document?id=${document.id}`)).json()
     assert.deepEqual(
       { ...read, passages: read.passages.map((passage: { id: string }) => passage.id) },
       {
@@ -101,10 +101,10 @@ test('library HTTP requires identity, publishes real pages safely and retains hi
       },
     )
     assert.equal(read.passages[0].text, first.chunks[0].text)
-    assert.equal((await get('/api/library/documents/missing')).status, 404)
-    assert.equal((await get('/api/library/documents/%E0%A4%A')).status, 400)
-    assert.equal((await get('/api/library/documents/' + 'x'.repeat(257))).status, 400)
-    assert.equal((await fetch(base + `/api/library/documents/${document.id}`)).status, 401)
+    assert.equal((await get('/api/library/document?id=missing')).status, 404)
+    for (const query of ['', '?id=', '?id=a&id=b', '?id=' + 'x'.repeat(257)])
+      assert.equal((await get('/api/library/document' + query)).status, 400, query)
+    assert.equal((await fetch(base + `/api/library/document?id=${document.id}`)).status, 401)
 
     // Content search runs the configured retrieval and returns the passages it ranked.
     const search = '/api/library/search?q='
@@ -176,12 +176,19 @@ test('library HTTP requires identity, publishes real pages safely and retains hi
     assert.ok(replaced.includes(first.versionId))
     assert.ok(replaced.includes('<dd><strong>已被新版本替代</strong>；此处为旧版本原文'))
     assert.ok((await (await get('/api/library')).text()).includes(replacement.versionId))
-    const updated = await (await get(`/api/library/documents/${document.id}`)).json()
+    const updated = await (await get(`/api/library/document?id=${document.id}`)).json()
     assert.equal(updated.versionId, replacement.versionId)
     assert.equal(updated.passages[0].id, replacement.chunks[0].id)
     const draft = library.stage({ ...document, id: 'never-published' })
     assert.equal((await get(`/api/library/passages/${draft.chunks[0].id}`)).status, 404)
-    assert.equal((await get('/api/library/documents/never-published')).status, 404)
+    assert.equal((await get('/api/library/document?id=never-published')).status, 404)
+    // Ids are free text: ones a path would normalize or misread still open exactly.
+    for (const id of ['.', '..', 'a/b', 'a%2Fb', '#?&=', 'policy-2026.10', ' 空 格 ']) {
+      const staged = library.stage({ id, title: '特殊编号', text: `编号 ${id} 的原文。` })
+      library.publish(staged.versionId, null)
+      const opened = await get('/api/library/document?' + new URLSearchParams({ id }))
+      assert.equal((await opened.json()).id, id, id)
+    }
 
     for (const query of [
       '?limit=0',
@@ -222,7 +229,7 @@ test('library HTTP requires identity, publishes real pages safely and retains hi
   }
 })
 
-test('a refreshed library page loads the app even when the document id has a dot; missing assets stay 404', async () => {
+test('library pages load the app on refresh; missing assets stay 404', async () => {
   const root = await mkdtemp(join(tmpdir(), 'gczy-rag-http-test-'))
   const dist = join(root, 'dist')
   await mkdir(join(dist, 'assets'), { recursive: true })
@@ -236,14 +243,14 @@ test('a refreshed library page loads the app even when the document id has a dot
   assert.ok(address && typeof address !== 'string')
   const base = `http://127.0.0.1:${address.port}`
   try {
-    // Document ids may contain dots (documentInput allows any text), which look like extensions.
-    for (const path of ['/library/policy-2026.10', '/library/2561', '/library'])
+    // A dotted document id stays in the query, so the page path never looks like a file.
+    for (const path of ['/library/document?id=policy-2026.10', '/library?q=a.b', '/library'])
       assert.equal(
         await (await fetch(base + path)).text(),
         '<!doctype html><title>app</title>',
         path,
       )
-    for (const path of ['/assets/missing.js', '/favicon.ico', '/library/a/b.js'])
+    for (const path of ['/assets/missing.js', '/favicon.ico'])
       assert.equal((await fetch(base + path)).status, 404, path)
   } finally {
     server.closeAllConnections()

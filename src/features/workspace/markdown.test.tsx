@@ -254,8 +254,24 @@ it('工作区里点击引用编号在侧栏打开原文，组合键点击仍交�
   expect(badge).toHaveAttribute('title', '文献编号 2561，查看原文')
   // fireEvent returns false when the default (navigation) was prevented
   expect(fireEvent.click(badge)).toBe(false)
-  expect(open).toHaveBeenCalledExactlyOnceWith(id)
+  expect(open).toHaveBeenCalledExactlyOnceWith(id, badge)
   expect(fireEvent.click(badge, { ctrlKey: true })).toBe(true)
   expect(fireEvent.click(badge, { button: 1 })).toBe(true)
   expect(open).toHaveBeenCalledOnce()
+})
+
+it('重绘时引用编号与表格保持同一个元素，焦点不丢', () => {
+  const text = `正文[原文](/api/library/passages/01234567-89ab-5def-a123-456789abcdef)
+
+| a |
+| - |
+| 1 |`
+  const { rerender } = render(<Markdown text={text} citations={citationOrder([text])} />)
+  const badge = screen.getByRole('link', { name: '原文 1' })
+  const table = screen.getByRole('table')
+  badge.focus()
+  rerender(<Markdown text={text} citations={citationOrder([text])} />)
+  expect(screen.getByRole('link', { name: '原文 1' })).toBe(badge)
+  expect(screen.getByRole('table')).toBe(table)
+  expect(badge).toHaveFocus()
 })

@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button'
 import { LoadStatus } from '@/components/ui/load-status'
 import { headingPath } from '@/features/workspace/citations'
 import { useRequest } from '@/lib/use-request'
+import { documentHref } from './document-href'
 import { LIBRARY_PAGE_SIZE, listDocuments, searchPassages } from '@/services/library'
 
 const MODES = [
@@ -21,8 +22,10 @@ export function LibraryPage() {
   const [params, setParams] = useSearchParams()
   const location = useLocation()
   const mode = params.get('by') === 'content' ? MODES[1] : MODES[0]
-  const query = params.get('q')?.trim() ?? ''
-  const page = Math.max(1, Math.floor(Number(params.get('page')) || 1))
+  // 地址可被随意改写：检索词截到接口上限；页码不是正整数、或大到偏移量超出安全整数时按第 1 页
+  const query = params.get('q')?.trim().slice(0, 500) ?? ''
+  const asked = Number(params.get('page'))
+  const page = Number.isSafeInteger(asked) && asked >= 1 && asked <= 1e9 ? asked : 1
   const scroller = useRef<HTMLDivElement>(null)
   const from = location.pathname + location.search
   // 本页表单自己提交的地址；它重绘时不回写表单，免得覆盖重绘期间新输入的文字
@@ -169,7 +172,7 @@ function TitleResults({
           {documents.map((item) => (
             <li key={item.id}>
               <Link
-                to={`/library/${encodeURIComponent(item.id)}`}
+                to={documentHref(item.id)}
                 state={{ from }}
                 className={`flex flex-col gap-0.5 px-2 py-2.5 ${listLink}`}
               >
@@ -183,9 +186,15 @@ function TitleResults({
           ))}
         </ul>
       )}
-      {pages > 1 && (
+      {/* 页码超出末页（改过地址或文献变少）时仍显示分页，“上一页”回到末页 */}
+      {(pages > 1 || page > 1) && (
         <nav aria-label="分页" className="flex items-center justify-center gap-3">
-          <Button variant="outline" size="sm" disabled={page <= 1} onClick={() => onPage(page - 1)}>
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={page <= 1}
+            onClick={() => onPage(Math.max(1, Math.min(page - 1, pages)))}
+          >
             上一页
           </Button>
           <span className="text-ui-sm text-foreground-subtle">
@@ -228,7 +237,7 @@ function ContentResults({ query, from }: { query: string; from: string }) {
           {hits.map((hit) => (
             <li key={hit.id}>
               <Link
-                to={`/library/${encodeURIComponent(hit.documentId)}#${hit.id}`}
+                to={documentHref(hit.documentId, hit.id)}
                 state={{ from }}
                 className={`flex flex-col gap-1 px-2 py-3 ${listLink}`}
               >

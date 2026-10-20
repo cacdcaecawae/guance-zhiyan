@@ -14,7 +14,7 @@ export const listDocuments = (title: string, page: number, signal?: AbortSignal)
   )
 
 export const readDocument = (id: string, signal?: AbortSignal) =>
-  request<LibraryDocument>(`/library/documents/${encodeURIComponent(id)}`, { signal })
+  request<LibraryDocument>(`/library/document?${new URLSearchParams({ id })}`, { signal })
 
 export const readPassage = (id: string, signal?: AbortSignal) =>
   request<LibraryPassage>(`/library/passages/${id}?format=json`, { signal })

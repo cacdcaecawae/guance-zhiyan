@@ -36,7 +36,7 @@ const fetchMock = vi.fn(async (path: string) => {
         },
       ],
     })
-  if (path === '/api/library/documents/2561')
+  if (path === '/api/library/document?id=2561')
     return Response.json({
       id: '2561',
       versionId: 'v1',
@@ -54,7 +54,7 @@ function Back() {
   const navigate = useNavigate()
   return <button onClick={() => navigate(-1)}>浏览器后退</button>
 }
-const open = (path: string) =>
+const open = (path: string | { pathname: string; search: string; state: unknown }) =>
   render(
     <MemoryRouter initialEntries={[path]}>
       {/* 模拟侧栏的“文献库”链接：页面不重新挂载时表单也随地址重置 */}
@@ -62,7 +62,8 @@ const open = (path: string) =>
       <Back />
       <Routes>
         <Route path="/library" element={<LibraryPage />} />
-        <Route path="/library/:documentId" element={<LibraryDocumentPage />} />
+        <Route path="/library/document" element={<LibraryDocumentPage />} />
+        <Route path="/workspace/:sessionId" element={<p>研究会话</p>} />
       </Routes>
     </MemoryRouter>,
   )
@@ -102,7 +103,7 @@ it('按标题检索、翻页，点开文献按顺序显示全部片段，返回�
 it('从引用进入时定位并标出被引片段', async () => {
   const scroll = vi.fn()
   Element.prototype.scrollIntoView = scroll
-  open(`/library/2561#${passage(1).id}`)
+  open(`/library/document?id=2561#${passage(1).id}`)
   const target = await screen.findByText('第 2 块原文')
   expect(target.closest('li')).toHaveAttribute('aria-current', 'true')
   expect(scroll).toHaveBeenCalledOnce()
@@ -110,7 +111,7 @@ it('从引用进入时定位并标出被引片段', async () => {
 
 it('读取失败时写明原因并可重试', async () => {
   const user = userEvent.setup()
-  open('/library/missing')
+  open('/library/document?id=missing')
   expect(await screen.findByRole('alert')).toHaveTextContent('没有找到文献。')
   await user.click(screen.getByRole('button', { name: '重试' }))
   expect(fetchMock).toHaveBeenCalledTimes(2)
@@ -174,7 +175,7 @@ it('翻页后经侧栏离开再后退，检索框恢复为该页的检索词', a
 })
 
 it('片段定位的地址片段编码无效时忽略定位，照常显示文献', async () => {
-  open('/library/2561#%E0%A4%A')
+  open('/library/document?id=2561#%E0%A4%A')
   expect(await screen.findByText('第 2 块原文')).toBeInTheDocument()
   expect(document.querySelector('li[aria-current]')).toBeNull()
 })
@@ -192,4 +193,54 @@ it('重绘前切到按内容又切回按标题，之后后退到按内容时单�
   await user.click(screen.getByRole('button', { name: '浏览器后退' }))
   expect(await screen.findByText(/与“政策”最相关/)).toBeInTheDocument()
   expect(screen.getByRole('radio', { name: '按内容' })).toBeChecked()
+})
+
+it('地址里的页码与检索词不可信：非正整数或过大的页码按第 1 页，检索词截到 500 字', async () => {
+  for (const page of ['Infinity', '1e309', '-3', '2.5', 'abc', '9007199254740993']) {
+    const view = open('/library?page=' + page)
+    await screen.findByText('共 51 篇文献')
+    expect(fetchMock).toHaveBeenLastCalledWith('/api/library?limit=50&offset=0', expect.anything())
+    view.unmount()
+  }
+  open('/library?q=' + '政'.repeat(600))
+  await screen.findByText(/标题含/)
+  expect(fetchMock).toHaveBeenLastCalledWith(
+    `/api/library?${new URLSearchParams({ q: '政'.repeat(500), limit: '50', offset: '0' })}`,
+    expect.anything(),
+  )
+})
+
+it('页码超出末页时仍有分页，上一页回到末页', async () => {
+  const user = userEvent.setup()
+  open('/library?page=9')
+  expect(await screen.findByText('第 9 / 2 页')).toBeInTheDocument()
+  await user.click(screen.getByRole('button', { name: '上一页' }))
+  expect(await screen.findByText('第 2 / 2 页')).toBeInTheDocument()
+})
+
+it('任意文献编号经链接原样传给接口，含“.”“..”“/”与百分号', async () => {
+  const user = userEvent.setup()
+  for (const id of ['.', '..', 'a/b', 'a%2Fb', '#?&=']) {
+    fetchMock.mockImplementationOnce(async () =>
+      Response.json({
+        total: 1,
+        documents: [{ id, title: `编号${id}`, sourceUrl: null, publishedAt: null }],
+      }),
+    )
+    const view = open('/library')
+    await user.click(await screen.findByRole('link', { name: new RegExp(`编号`) }))
+    await screen.findByRole('alert')
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      `/api/library/document?${new URLSearchParams({ id })}`,
+      expect.anything(),
+    )
+    view.unmount()
+  }
+})
+
+it('从会话的引用原文进入文献页时，返回链接回到该会话', async () => {
+  const user = userEvent.setup()
+  open({ pathname: '/library/document', search: '?id=2561', state: { from: '/workspace/s1' } })
+  await user.click(await screen.findByRole('link', { name: '返回研究' }))
+  expect(await screen.findByText('研究会话')).toBeInTheDocument()
 })

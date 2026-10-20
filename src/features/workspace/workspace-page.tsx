@@ -47,15 +47,23 @@ export function WorkspacePage({ sessionId }: { sessionId?: string }) {
     setPreviewId(null)
   }
   const openPassage = useCallback(
-    (id: string) => {
-      opener.current = document.activeElement as HTMLElement | null
+    (id: string, from: HTMLElement) => {
+      opener.current = from
       setPreviewId(null)
       setCited({ sessionId, id })
     },
     [sessionId],
   )
+  // 关闭引用原文后焦点回到点开它的引用编号（点击时记下，宽屏右栏与窄屏抽屉共用）；
+  // 编号在重绘中被替换时（如回答仍在生成）回到同一片段的第一个编号
+  const returnToCitation = () => {
+    const back = opener.current?.isConnected
+      ? opener.current
+      : document.querySelector<HTMLElement>(`a[data-passage="${cited?.id}"]`)
+    back?.focus()
+  }
   const closePassage = () => {
-    opener.current?.focus()
+    returnToCitation()
     setCited(null)
   }
   const createdSession = useRef<string | undefined>(undefined)
@@ -350,7 +358,15 @@ export function WorkspacePage({ sessionId }: { sessionId?: string }) {
               if (!open) setCited(null)
             }}
           >
-            <SheetContent side="right" title="引用原文" className="w-full max-w-lg">
+            <SheetContent
+              side="right"
+              title="引用原文"
+              className="w-full max-w-lg"
+              onCloseAutoFocus={(event) => {
+                event.preventDefault()
+                returnToCitation()
+              }}
+            >
               <PassagePreview id={passageId} />
             </SheetContent>
           </Sheet>

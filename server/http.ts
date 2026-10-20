@@ -96,9 +96,7 @@ export function createApp(
         try {
           data = await readFile(target)
         } catch {
-          // A missing file with an extension is a missing asset, except a library document page:
-          // document ids may contain dots (policy-2026.10), so that route always loads the app.
-          if (kind && !/^\/library\/[^/]+$/.test(path)) throw new HttpError(404, '页面不存在。')
+          if (kind) throw new HttpError(404, '页面不存在。')
           data = await readFile(resolve(root, 'index.html'))
           kind = '.html'
         }
@@ -175,14 +173,13 @@ export function createApp(
             })),
           })
         }
-        const document = /^\/api\/library\/documents\/([^/]+)$/.exec(path)
-        if (document) {
-          let id = ''
-          try {
-            id = decodeURIComponent(document[1])
-          } catch {}
-          if (!id || id.length > 256) throw new HttpError(400, '文献编号无效。')
-          return json(response, 200, library.document(id))
+        // The id travels as a query parameter: any id round-trips exactly, while in a path “.”,
+        // “..” (also %2E) are dot segments and a dotted id looks like a static file extension.
+        if (path === '/api/library/document') {
+          const ids = url.searchParams.getAll('id')
+          if (ids.length !== 1 || !ids[0] || ids[0].length > 256)
+            throw new HttpError(400, '文献编号无效。')
+          return json(response, 200, library.document(ids[0]))
         }
         const passageId =
           /^\/api\/library\/passages\/([0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})$/i.exec(path)
