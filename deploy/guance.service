@@ -1,0 +1,19 @@
+# Linux 服务器开机自启（systemd）。把 /srv/guance 和 guance 换成实际的仓库目录与运行账号后：
+#   sudo cp deploy/guance.service /etc/systemd/system/ && sudo systemctl daemon-reload
+#   sudo systemctl enable --now guance        # 之后用 systemctl status / stop / restart guance 管理
+# 由 systemd 管理时不要再手动执行 deploy/guance.sh run。node 不在 /usr/bin 等系统目录时，在 deploy/.env 设置 PATH。
+[Unit]
+Description=管策智研（Qdrant、向量服务与网站）
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+User=guance
+WorkingDirectory=/srv/guance
+ExecStart=/srv/guance/deploy/guance.sh run
+Restart=on-failure
+RestartSec=10
+TimeoutStopSec=40
+
+[Install]
+WantedBy=multi-user.target

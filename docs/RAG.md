@@ -5,7 +5,7 @@
 ## 本机准备
 
 1. 启动 Docker，在仓库根目录运行 `docker compose -p guance-rag-backend -f server/rag/compose.yaml up -d`。固定 Qdrant 1.19.1，仅绑定 `127.0.0.1:6333`，数据保存在 Compose 命名卷。
-2. 在 `server/.env` 配置 `EMBEDDING_URL`（完整 embeddings HTTP 地址）、`EMBEDDING_MODEL`、`EMBEDDING_DIMENSIONS`；需要认证时设置 `EMBEDDING_API_KEY`。本地模型服务和云端接口均可，但必须支持下述协议。模型、算力和学校连接方式尚未确定，本项目不自动下载模型。
+2. 在 `server/.env` 配置 `EMBEDDING_URL`（完整 embeddings HTTP 地址）、`EMBEDDING_MODEL`、`EMBEDDING_DIMENSIONS`；需要认证时设置 `EMBEDDING_API_KEY`。本地模型服务和云端接口均可，但必须支持下述协议；本机 BGE-M3 可用 `server/rag/embed-server.py`，与 Qdrant、网站一起由 `deploy/guance.sh` 启动，见 [部署说明](DEPLOY.md)。模型、算力和学校连接方式尚未确定，本项目不自动下载模型。
 3. `QDRANT_URL` 默认 `http://127.0.0.1:6333`；远程受保护服务可配置 `QDRANT_API_KEY`。变量全部只在后端读取。启用出站代理时，确保本机服务地址通过现有代理规则或 `NO_PROXY` 正确直连。
    可选：配置 `RERANK_URL`（完整 rerank 地址，如校内 `http://10.27.66.12/v1/rerank`）与 `RERANK_MODEL`（如 `qwen3-vl-reranker-8b`），需要认证时设置 `RERANK_API_KEY`，检索即在融合排序后对前 30 条重排、取前 8 条；重排失败或超时（20 秒）时按融合排序返回并记录日志。
 4. 准备 UTF-8 JSONL，运行 `pnpm rag import <文献.jsonl>`。每行一份文献，完成该文献的向量写入后才发布。随后配置回答模型密钥并运行 `pnpm chat`。

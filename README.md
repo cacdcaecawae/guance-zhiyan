@@ -18,7 +18,7 @@ https://github.com/user-attachments/assets/bbc5a421-5e4e-428d-893f-53bd93df0b66
 
 已接入管理员 JSONL 导入、Qdrant 向量与 SQLite 关键词混合检索、模型按需调用的文献库检索工具及原文片段引用。普通用户无需上传；文献库页面可按标题检索文献，或按内容（与模型同一套混合检索）查找原文片段，逐篇查看检索所用的全部片段，回答中的引用在右侧栏显示原文。跨会话成果归档尚未接入。自动化测试验证受控模型与协议响应，不能代替真实服务或全库效果验收。
 
-RAG 的配置、数据格式、导入、重建与备份见 [RAG 开发说明](docs/RAG.md)。未配置向量服务或文献库为空时不提供文献库工具，聊天照常；索引不完整或检索失败时工具明确报错，不以演示资料代替检索。
+RAG 的配置、数据格式、导入、重建与备份见 [RAG 开发说明](docs/RAG.md)。在服务器或 WSL 上一键启动、守护、更新全部服务（网站、Qdrant、向量服务）及开机自启见 [部署说明](docs/DEPLOY.md)。未配置向量服务或文献库为空时不提供文献库工具，聊天照常；索引不完整或检索失败时工具明确报错，不以演示资料代替检索。
 
 ## 本地开发
 
@@ -72,21 +72,22 @@ DeepSeek 与千问的模型按可识别图片声明并发送图片；所选端�
 
 官方联网搜索复用 DSH 工具，显式使用当前模型，保留独立 `DEEPSEEK_SEARCH_BASE_URL`；更改官方对话端点不会自动更改其搜索端点。千问搜索使用同一 `QIANWEN_BASE_URL` 下的 Messages 接口，按[平台联网搜索文档](https://platform.qianwenai.com/docs/developer-guides/tool-calling/web-search)附加所需 system 标识，关闭辅助搜索的思考；两家搜索均沿用 DSH 搜索默认值：最多 5 次原生搜索、4096 输出 tokens。没有实际搜索结果块或请求失败时显示工具失败。两家密钥独立，只放后端，不得写入 `VITE_` 环境变量。
 
-| 命令                              | 说明                                                              |
-| --------------------------------- | ----------------------------------------------------------------- |
-| `pnpm chat`                       | 构建并启动本机免登录聊天，仅监听回环地址                          |
-| `pnpm dev` / `pnpm dev:server`    | 前端 / 后端开发服务器                                             |
-| `pnpm build`                      | 前端类型检查与构建                                                |
-| `pnpm start`                      | 后端同时提供 `dist/` 与 `/api`；先完成认证接入并配置 `APP_ORIGIN` |
-| `pnpm preview`                    | 仅预览前端产物，不提供后端 API                                    |
-| `pnpm typecheck`                  | 前后端与测试的 TypeScript 检查                                    |
-| `pnpm test`                       | Vitest 与 Node 后端集成测试                                       |
-| `pnpm test:server`                | 单独运行后端集成测试                                              |
-| `pnpm test:sandbox`               | 对真实 OpenSandbox / Docker 验证执行隔离、持久化与停止            |
-| `pnpm test:rag`                   | 对本机真实 Qdrant 验证导入、检索与重建，使用受控测试向量          |
-| `pnpm test:e2e`                   | Playwright 自动启动测试后端与前端，无需模型密钥                   |
-| `pnpm lint` / `pnpm format:check` | Lint / 格式检查；`pnpm format` 自动格式化                         |
-| `pnpm check`                      | 格式、Lint、类型、单元及集成测试、构建、浏览器测试                |
+| 命令                              | 说明                                                                 |
+| --------------------------------- | -------------------------------------------------------------------- |
+| `pnpm chat`                       | 构建并启动本机免登录聊天，仅监听回环地址                             |
+| `pnpm dev` / `pnpm dev:server`    | 前端 / 后端开发服务器                                                |
+| `pnpm build`                      | 前端类型检查与构建                                                   |
+| `pnpm start`                      | 后端同时提供 `dist/` 与 `/api`；先完成认证接入并配置 `APP_ORIGIN`    |
+| `pnpm preview`                    | 仅预览前端产物，不提供后端 API                                       |
+| `pnpm typecheck`                  | 前后端与测试的 TypeScript 检查                                       |
+| `pnpm test`                       | Vitest 与 Node 后端集成测试                                          |
+| `pnpm test:server`                | 单独运行后端集成测试                                                 |
+| `pnpm test:sandbox`               | 对真实 OpenSandbox / Docker 验证执行隔离、持久化与停止               |
+| `pnpm test:rag`                   | 对本机真实 Qdrant 验证导入、检索与重建，使用受控测试向量             |
+| `pnpm test:e2e`                   | Playwright 自动启动测试后端与前端，无需模型密钥                      |
+| `pnpm lint` / `pnpm format:check` | Lint / 格式检查；`pnpm format` 自动格式化                            |
+| `pnpm check`                      | 格式、Lint、类型、单元及集成测试、构建、浏览器测试                   |
+| `bash deploy/test.sh`             | 部署脚本冒烟测试（Linux / WSL，需先构建；CI 在 `pnpm check` 后运行） |
 
 浏览器测试先构建前端，默认使用 3001、3002 与 4173 端口。3001 被其他任务占用时可设置 `E2E_BACKEND_PORT=33301`，其余测试端口仍需空闲；不要停止其他任务的服务。`tests/support/` 中的身份与模型替身只由测试入口加载，应用没有演示模式或测试身份配置开关。本机入口测试另起正式服务进程，将真实 DSH 适配器指向受控协议服务，验证免登录、多轮、刷新恢复、流式与停止；这不代表真实 DeepSeek 联调已完成。CI 在 PR 与主分支 push 时运行同样的 `pnpm check`。
 
