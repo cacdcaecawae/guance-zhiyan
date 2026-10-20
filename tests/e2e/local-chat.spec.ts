@@ -20,6 +20,8 @@ for (const supplier of ['deepseek-official', 'qianwen']) {
     let retrievals = 0
     let citationPath = ''
     let vectorPath = ''
+    let foldingStep = 0
+    const finishFolding = Promise.withResolvers<void>()
     const pointIds = new Set<string>()
     const query = '测试事项办理期限'
     const passagePath = (id: string) => `/api/library/passages/${id}`
@@ -105,25 +107,24 @@ for (const supplier of ['deepseek-official', 'qianwen']) {
       const emit = (event: { type: string; [key: string]: unknown }) =>
         response.write(`event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`)
       emit({ type: 'message_start', message: { usage: { input_tokens: 10, output_tokens: 0 } } })
-      if (!isResult(body.messages.at(-1))) {
-        // Retrieval is on demand: the model asks for a library search before answering.
+      const search = (index: number) => {
         expect(body.tools.map((tool: { name: string }) => tool.name)).toContain('library_search')
         emit({
           type: 'content_block_start',
-          index: 0,
+          index,
           content_block: {
             type: 'tool_use',
-            id: `toolu_${userTurns}`,
+            id: `toolu_${userTurns}_${index}`,
             name: 'library_search',
             input: {},
           },
         })
         emit({
           type: 'content_block_delta',
-          index: 0,
+          index,
           delta: { type: 'input_json_delta', partial_json: JSON.stringify({ query }) },
         })
-        emit({ type: 'content_block_stop', index: 0 })
+        emit({ type: 'content_block_stop', index })
         emit({
           type: 'message_delta',
           delta: { stop_reason: 'tool_use' },
@@ -131,12 +132,18 @@ for (const supplier of ['deepseek-official', 'qianwen']) {
         })
         emit({ type: 'message_stop' })
         response.end()
+      }
+      if (!isResult(body.messages.at(-1))) {
+        // Retrieval is on demand: the model asks for a library search before answering.
+        search(0)
         return
       }
       const toolResult = JSON.stringify(body.messages.at(-1))
       expect(toolResult).toContain(citationPath)
       expect(toolResult).toContain(source.text)
       expect(toolResult).toContain(vectorPath)
+      const folding = question.includes('折叠引用测试')
+      if (folding && foldingStep++ > 0) await finishFolding.promise
       emit({ type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } })
       emit({
         type: 'content_block_delta',
@@ -148,6 +155,10 @@ for (const supplier of ['deepseek-official', 'qianwen']) {
       })
       if (question.includes('停止测试')) return // Keep the real SSE transport open until cancellation.
       emit({ type: 'content_block_stop', index: 0 })
+      if (folding && foldingStep === 1) {
+        search(1)
+        return
+      }
       emit({
         type: 'message_delta',
         delta: { stop_reason: 'end_turn' },
@@ -307,6 +318,33 @@ for (const supplier of ['deepseek-official', 'qianwen']) {
         await page.getByRole('button', { name: '停止生成' }).click()
         await expect(page.getByRole('status')).toContainText('已停止')
         expect(retrievals).toBe(3)
+        // Complete a turn while its intermediate citation is open. The process then folds,
+        // so closing the preview must return to its visible summary, not the hidden citation.
+        const narrow = supplier === 'deepseek-official'
+        await page.setViewportSize({ width: narrow ? 390 : 1280, height: 800 })
+        await page.emulateMedia({ colorScheme: narrow ? 'light' : 'dark' })
+        await box.fill('折叠引用测试')
+        await box.press('Enter')
+        await expect(page.getByRole('article', { name: '回答' })).toHaveCount(4)
+        const answer = page.getByRole('article', { name: '回答', includeHidden: true }).last()
+        const intermediate = answer.getByRole('link', { name: '原文 1' }).first()
+        await expect(intermediate).toBeVisible()
+        await intermediate.focus()
+        await page.keyboard.press('Enter')
+        const preview = page.getByRole(narrow ? 'dialog' : 'complementary', { name: '引用原文' })
+        await expect(preview.getByText(source.text)).toBeVisible()
+        await preview
+          .getByRole('button', { name: narrow ? '关闭' : '关闭原文', exact: true })
+          .focus()
+        finishFolding.resolve()
+        const process = answer.locator('details').first()
+        await expect(process).toHaveJSProperty('open', false)
+        await page.keyboard.press('Escape')
+        await expect(preview).toBeHidden()
+        const summary = process.locator(':scope > summary')
+        await expect(summary).toBeFocused()
+        await page.keyboard.press('Enter')
+        await expect(intermediate).toBeVisible()
         expect(
           (
             await page.request.get(appOrigin + '/api/me', {

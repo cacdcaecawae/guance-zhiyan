@@ -57,9 +57,14 @@ export function WorkspacePage({ sessionId }: { sessionId?: string }) {
   // 关闭引用原文后焦点回到点开它的引用编号（点击时记下，宽屏右栏与窄屏抽屉共用）；
   // 编号在重绘中被替换时（如回答仍在生成）回到同一片段的第一个编号
   const returnToCitation = () => {
-    const back = opener.current?.isConnected
+    let back = opener.current?.isConnected
       ? opener.current
       : document.querySelector<HTMLElement>(`a[data-passage="${cited?.id}"]`)
+    // 阅读原文期间过程可能自动折叠：沿祖先找到最外层关闭的 details，焦点交给可见的展开按钮。
+    for (let parent = back?.parentElement; parent; parent = parent.parentElement) {
+      if (parent instanceof HTMLDetailsElement && !parent.open)
+        back = parent.querySelector('summary')
+    }
     back?.focus()
   }
   const closePassage = () => {
