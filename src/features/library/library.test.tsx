@@ -1,4 +1,4 @@
-import { render, screen, within } from '@testing-library/react'
+import { act, fireEvent, render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { Link, MemoryRouter, Route, Routes, useNavigate } from 'react-router'
 import { afterEach, expect, it, vi } from 'vitest'
@@ -177,4 +177,19 @@ it('片段定位的地址片段编码无效时忽略定位，照常显示文献'
   open('/library/2561#%E0%A4%A')
   expect(await screen.findByText('第 2 块原文')).toBeInTheDocument()
   expect(document.querySelector('li[aria-current]')).toBeNull()
+})
+
+it('重绘前切到按内容又切回按标题，之后后退到按内容时单选框随地址同步', async () => {
+  const user = userEvent.setup()
+  open('/library?q=' + encodeURIComponent('政策'))
+  await screen.findByText('标题含“政策”的文献共 51 篇')
+  // 两次点击放在同一个 act 里：中间不重绘，模拟会话很多、过渡重绘较慢时的快速切换
+  act(() => {
+    fireEvent.click(screen.getByRole('radio', { name: '按内容' }))
+    fireEvent.click(screen.getByRole('radio', { name: '按标题' }))
+  })
+  expect(await screen.findByText('标题含“政策”的文献共 51 篇')).toBeInTheDocument()
+  await user.click(screen.getByRole('button', { name: '浏览器后退' }))
+  expect(await screen.findByText(/与“政策”最相关/)).toBeInTheDocument()
+  expect(screen.getByRole('radio', { name: '按内容' })).toBeChecked()
 })

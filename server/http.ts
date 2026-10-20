@@ -96,7 +96,9 @@ export function createApp(
         try {
           data = await readFile(target)
         } catch {
-          if (kind) throw new HttpError(404, '页面不存在。')
+          // A missing file with an extension is a missing asset, except a library document page:
+          // document ids may contain dots (policy-2026.10), so that route always loads the app.
+          if (kind && !/^\/library\/[^/]+$/.test(path)) throw new HttpError(404, '页面不存在。')
           data = await readFile(resolve(root, 'index.html'))
           kind = '.html'
         }

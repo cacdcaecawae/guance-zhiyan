@@ -29,8 +29,9 @@ export function LibraryPage() {
   const submitted = useRef<string | null>(null)
   const show = (by: string | null, q: string, page = 1) => {
     const key = `${by === 'content' ? 'content' : 'title'}:${q}`
-    // 只翻页时检索方式与检索词不变，地址重绘不会触发下面的同步，不留标记
-    if (key !== `${mode.id}:${query}`) submitted.current = key
+    // 每次提交都覆盖标记：回到本次渲染的检索方式与检索词时（只翻页，或重绘前切走又切回）
+    // 重绘不会触发下面的同步，清空标记，免得上一份标记留到之后的历史导航
+    submitted.current = key === `${mode.id}:${query}` ? null : key
     setParams({
       ...(by === 'content' && { by }),
       ...(q && { q }),

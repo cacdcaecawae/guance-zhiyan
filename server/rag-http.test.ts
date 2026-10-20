@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { once } from 'node:events'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { basename, join, resolve, sep } from 'node:path'
 import { test } from 'node:test'
@@ -218,6 +218,39 @@ test('library HTTP requires identity, publishes real pages safely and retains hi
     store.close()
     assert.ok(resolve(root).startsWith(resolve(tmpdir()) + sep))
     assert.ok(basename(root).startsWith('gczy-rag-http-test-'))
+    await rm(root, { recursive: true })
+  }
+})
+
+test('a refreshed library page loads the app even when the document id has a dot; missing assets stay 404', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'gczy-rag-http-test-'))
+  const dist = join(root, 'dist')
+  await mkdir(join(dist, 'assets'), { recursive: true })
+  await writeFile(join(dist, 'index.html'), '<!doctype html><title>app</title>')
+  const store = new Store(join(root, 'data'))
+  const agents = new Agents(store)
+  const server = createApp(store, agents, { dist })
+  server.listen(0, '127.0.0.1')
+  await once(server, 'listening')
+  const address = server.address()
+  assert.ok(address && typeof address !== 'string')
+  const base = `http://127.0.0.1:${address.port}`
+  try {
+    // Document ids may contain dots (documentInput allows any text), which look like extensions.
+    for (const path of ['/library/policy-2026.10', '/library/2561', '/library'])
+      assert.equal(
+        await (await fetch(base + path)).text(),
+        '<!doctype html><title>app</title>',
+        path,
+      )
+    for (const path of ['/assets/missing.js', '/favicon.ico', '/library/a/b.js'])
+      assert.equal((await fetch(base + path)).status, 404, path)
+  } finally {
+    server.closeAllConnections()
+    await new Promise<void>((done) => server.close(() => done()))
+    await agents.close()
+    store.close()
+    assert.ok(resolve(root).startsWith(resolve(tmpdir()) + sep))
     await rm(root, { recursive: true })
   }
 })
