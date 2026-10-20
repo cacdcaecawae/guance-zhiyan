@@ -45,6 +45,7 @@ pnpm chat                              # 构建并启动本机聊天 http://127.
 | `QIANWEN_BASE_URL`         | 默认 `https://maas.qianwenaiapi.com/apps/anthropic`        |
 | `CAMPUS_API_KEY`           | 校内模型服务密钥（学校发放，仅校园网可达）                 |
 | `CAMPUS_BASE_URL`          | 默认 `http://10.27.66.12`，不含 `/v1`                      |
+| `MODEL_PROVIDERS`          | 下拉列出的供应商，逗号分隔，默认只有 `campus`              |
 | `DEEPSEEK_BASE_URL`        | 对话端点，默认 `https://api.deepseek.com/anthropic`        |
 | `DEEPSEEK_SEARCH_BASE_URL` | 独立搜索端点，默认 `https://api.deepseek.com/anthropic/v1` |
 | `APP_ORIGIN`               | 浏览器访问的准确来源，开发默认 `http://localhost:5173`     |
@@ -56,6 +57,8 @@ DeepSeek 与千问的模型按可识别图片声明并发送图片；所选端�
 历史图片超过适配器的图片数量或字节预算时，复用 DSH 图片省略恢复：最早的图片引用改为明确的文字占位后重试，轨迹中显示“图片上下文调整”。该选择在后续请求和重启后保留；会话中的原图仍可查看，图片存储用量不变。需要模型再次查看已省略的图片时，重新附图提问；不删除原图，也不启用文本摘要压缩。
 
 网页在输入框右下方的同一个下拉中按平台选择模型。发送成功后按会话保存选择，刷新和服务重启后恢复；生成期间禁止切换。切换供应商会将会话历史发送至所选平台，联网搜索也使用该平台与所选模型。密钥未配置时明确提示，不自动换供应商。模型由后端允许列表提供，不接受浏览器传入端点或密钥；原 `DEEPSEEK_MODEL` 配置已由网页选择替代。
+
+目前下拉中默认只列出校内模型，新会话默认 `qwen3.8-27b`（第一个列出供应商的第一个模型）；DeepSeek 官方与千问的接入保留，已选用它们的旧会话仍可继续，需要列出时设 `MODEL_PROVIDERS=deepseek-official,qianwen,campus`。
 
 | 供应商        | Flash                                           | Pro                    |
 | ------------- | ----------------------------------------------- | ---------------------- |

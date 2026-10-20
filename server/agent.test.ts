@@ -17,7 +17,7 @@ import { TestModel, textChunks, toolChunks } from '../tests/support/model.ts'
 import { Store } from './store.ts'
 import { Agents } from './agent.ts'
 import { createApp } from './http.ts'
-import { campusFetch, connection, modelAdapter } from './models.ts'
+import { campusFetch, connection, modelAdapter, modelCatalog, validateSelection } from './models.ts'
 
 test('existing SQLite sessions migrate without losing ownership and keep model selection on reopen', async () => {
   const root = await mkdtemp(join(tmpdir(), 'gczy-migration-test-'))
@@ -635,6 +635,37 @@ test('DeepSeek and Qianwen models accept images, campus models are text-only; of
     assert.deepEqual(info.inputModalities, provider === 'campus' ? ['text'] : ['text', 'image'])
     if (provider === 'campus') assert.equal(info.defaultMaxTokens, 32768)
     assert.equal(info.systemPromptUpdate, model === 'deepseek-flash' ? 'in-history' : undefined)
+  }
+})
+
+test('users are offered only the campus models by default; sessions on other providers keep working', () => {
+  const saved = process.env.MODEL_PROVIDERS
+  try {
+    delete process.env.MODEL_PROVIDERS
+    const ids = (catalog: ReturnType<typeof modelCatalog>) => catalog.providers.map(({ id }) => id)
+    assert.deepEqual(ids(modelCatalog()), ['campus'])
+    assert.deepEqual(modelCatalog().defaultSelection, { provider: 'campus', model: 'qwen3.8-27b' })
+    process.env.MODEL_PROVIDERS = 'qianwen, campus'
+    assert.deepEqual(ids(modelCatalog()), ['qianwen', 'campus'])
+    assert.deepEqual(modelCatalog().defaultSelection, {
+      provider: 'qianwen',
+      model: 'deepseek-v4.1-flash',
+    })
+    process.env.MODEL_PROVIDERS = 'unknown'
+    assert.throws(() => modelCatalog(), /MODEL_PROVIDERS/)
+    assert.deepEqual(ids(modelCatalog(true)), ['deepseek-official', 'qianwen', 'campus'])
+    assert.deepEqual(modelCatalog(true).defaultSelection, {
+      provider: 'deepseek-official',
+      model: 'deepseek-flash',
+    })
+    // A provider no longer offered still accepts the sessions that chose it.
+    assert.deepEqual(validateSelection({ provider: 'qianwen', model: 'deepseek-v4.1-flash' }), {
+      provider: 'qianwen',
+      model: 'deepseek-v4.1-flash',
+    })
+  } finally {
+    if (saved === undefined) delete process.env.MODEL_PROVIDERS
+    else process.env.MODEL_PROVIDERS = saved
   }
 })
 

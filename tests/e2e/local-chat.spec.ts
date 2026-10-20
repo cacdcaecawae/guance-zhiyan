@@ -192,6 +192,7 @@ for (const supplier of ['deepseek-official', 'qianwen']) {
           HOST: '0.0.0.0',
           APP_ORIGIN: 'http://unused.test',
           DATA_DIR: root,
+          MODEL_PROVIDERS: 'deepseek-official,qianwen,campus',
           DEEPSEEK_API_KEY: 'test-only',
           QIANWEN_API_KEY: 'qianwen-test-only',
           QIANWEN_BASE_URL: `http://127.0.0.1:${address.port}/qianwen`,
