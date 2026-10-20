@@ -28,6 +28,7 @@ const server = createApp(store, agents, {
   origin,
   dist: resolve('dist'),
   library: library.documents,
+  search: (query, signal) => library.retrieve(query, signal, undefined, 20),
   ...(local ? { authenticate: localAuthenticate(origin) } : {}),
 })
 server.listen(port, local ? '127.0.0.1' : (process.env.HOST ?? '127.0.0.1'), () => {

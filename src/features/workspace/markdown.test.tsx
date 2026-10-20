@@ -1,7 +1,7 @@
-import { render, screen } from '@testing-library/react'
-import { expect, it } from 'vitest'
+import { fireEvent, render, screen } from '@testing-library/react'
+import { expect, it, vi } from 'vitest'
 import type { AssistantMessage } from '@/types'
-import { citationOrder } from './citations'
+import { citationOrder, OpenPassage } from './citations'
 import { AnswerContent } from './execution-process'
 import { Markdown } from './markdown'
 
@@ -239,4 +239,39 @@ it('脚注不做页内跳转：正文标记显示为“注n”，不显示返回
   expect(screen.getAllByRole('link').map((link) => link.getAttribute('aria-label'))).toEqual([
     '原文 1',
   ])
+})
+
+it('工作区里点击引用编号在侧栏打开原文，组合键点击仍交给浏览器', () => {
+  const id = '01234567-89ab-5def-a123-456789abcdef'
+  const text = `正文[planid 2561·原文](/api/library/passages/${id.toUpperCase()})`
+  const open = vi.fn()
+  render(
+    <OpenPassage value={open}>
+      <Markdown text={text} citations={citationOrder([text])} />
+    </OpenPassage>,
+  )
+  const badge = screen.getByRole('link', { name: '原文 1' })
+  expect(badge).toHaveAttribute('title', '文献编号 2561，查看原文')
+  // fireEvent returns false when the default (navigation) was prevented
+  expect(fireEvent.click(badge)).toBe(false)
+  expect(open).toHaveBeenCalledExactlyOnceWith(id, badge)
+  expect(fireEvent.click(badge, { ctrlKey: true })).toBe(true)
+  expect(fireEvent.click(badge, { button: 1 })).toBe(true)
+  expect(open).toHaveBeenCalledOnce()
+})
+
+it('重绘时引用编号与表格保持同一个元素，焦点不丢', () => {
+  const text = `正文[原文](/api/library/passages/01234567-89ab-5def-a123-456789abcdef)
+
+| a |
+| - |
+| 1 |`
+  const { rerender } = render(<Markdown text={text} citations={citationOrder([text])} />)
+  const badge = screen.getByRole('link', { name: '原文 1' })
+  const table = screen.getByRole('table')
+  badge.focus()
+  rerender(<Markdown text={text} citations={citationOrder([text])} />)
+  expect(screen.getByRole('link', { name: '原文 1' })).toBe(badge)
+  expect(screen.getByRole('table')).toBe(table)
+  expect(badge).toHaveFocus()
 })

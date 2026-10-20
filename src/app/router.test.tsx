@@ -267,13 +267,15 @@ it.each([
   await open('/workspace/old')
   const closePreview = vi.fn()
   if (event.key === 'Escape') {
-    const { PreviewPane } = await import('@/features/workspace/file-preview')
+    const { FilePreview, PreviewPane } = await import('@/features/workspace/file-preview')
     vi.mocked(fetch).mockResolvedValueOnce(new Response('预览原文'))
     render(
-      <PreviewPane
-        file={{ id: 'preview', sessionId: 'old', name: '原文.txt', format: 'txt', size: 12 }}
-        onClose={closePreview}
-      />,
+      <PreviewPane label="文件预览" onClose={closePreview}>
+        <FilePreview
+          file={{ id: 'preview', sessionId: 'old', name: '原文.txt', format: 'txt', size: 12 }}
+          onClose={closePreview}
+        />
+      </PreviewPane>,
     )
     await screen.findByText('预览原文')
   }

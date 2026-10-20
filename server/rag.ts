@@ -288,7 +288,13 @@ export class KnowledgeLibrary {
     }
   }
 
-  async retrieve(query: string, signal?: AbortSignal, filter?: LibraryFilter): Promise<Passage[]> {
+  /** The `limit` best passages (8 reach the model; the library page shows more). */
+  async retrieve(
+    query: string,
+    signal?: AbortSignal,
+    filter?: LibraryFilter,
+    limit = 8,
+  ): Promise<Passage[]> {
     signal?.throwIfAborted()
     if (!query.trim() || query.length > 8000 || !query.isWellFormed())
       throw new Error('检索问题须为 1–8000 个有效字符。')
@@ -352,7 +358,7 @@ export class KnowledgeLibrary {
       const fused = passages.sort(
         (a, b) => scores.get(b.id)! - scores.get(a.id)! || a.id.localeCompare(b.id),
       )
-      const results = (await this.reorder(query, fused, signal)).slice(0, 8)
+      const results = (await this.reorder(query, fused, signal)).slice(0, limit)
       assertIndexed(generation)
       return results
     } catch (error) {

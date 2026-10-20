@@ -1,5 +1,5 @@
 import { CircleAlertIcon, DownloadIcon, PaperclipIcon } from 'lucide-react'
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router'
 import { TopBar } from '@/app/shell'
 import { Button } from '@/components/ui/button'
@@ -14,10 +14,12 @@ import {
   useResearch,
   watchSession,
 } from '@/services/research'
+import { OpenPassage } from './citations'
 import { Composer } from './composer'
 import { FilePreview, FormatBlock, PreviewPane } from './file-preview'
 import { MessageList } from './message-list'
 import { ModelPicker } from './model-picker'
+import { PassagePreview } from './passage-preview'
 import { Welcome } from './welcome'
 import { Trajectory } from './trajectory'
 import type { ImageAttachment, ModelSelection } from '@/types'
@@ -31,15 +33,43 @@ export function WorkspacePage({ sessionId }: { sessionId?: string }) {
   const admitting = useRef(false)
   const [reconnect, setReconnect] = useState(0)
   const [previewId, setPreviewId] = useState<string | null>(null)
+  // 右栏同一时间只显示一项：会话文件或引用原文；原文记下所属会话，切换会话后不再显示
+  const [cited, setCited] = useState<{ sessionId?: string; id: string } | null>(null)
+  const opener = useRef<HTMLElement | null>(null)
   const wide = useMediaQuery('(min-width: 1024px)')
   const navigate = useNavigate()
   const location = useLocation()
   // 从“新建研究”进入时直接聚焦输入框
   const focusComposer = !!(location.state as { focusComposer?: boolean } | null)?.focusComposer
-  // 关闭宽屏预览后把焦点还给对应的文件卡
+  // 关闭宽屏预览后把焦点还给对应的文件卡或引用编号
   const closePreview = () => {
     document.getElementById(`artifact-${previewId}`)?.focus()
     setPreviewId(null)
+  }
+  const openPassage = useCallback(
+    (id: string, from: HTMLElement) => {
+      opener.current = from
+      setPreviewId(null)
+      setCited({ sessionId, id })
+    },
+    [sessionId],
+  )
+  // 关闭引用原文后焦点回到点开它的引用编号（点击时记下，宽屏右栏与窄屏抽屉共用）；
+  // 编号在重绘中被替换时（如回答仍在生成）回到同一片段的第一个编号
+  const returnToCitation = () => {
+    let back = opener.current?.isConnected
+      ? opener.current
+      : document.querySelector<HTMLElement>(`a[data-passage="${cited?.id}"]`)
+    // 阅读原文期间过程可能自动折叠：沿祖先找到最外层关闭的 details，焦点交给可见的展开按钮。
+    for (let parent = back?.parentElement; parent; parent = parent.parentElement) {
+      if (parent instanceof HTMLDetailsElement && !parent.open)
+        back = parent.querySelector('summary')
+    }
+    back?.focus()
+  }
+  const closePassage = () => {
+    returnToCitation()
+    setCited(null)
   }
   const createdSession = useRef<string | undefined>(undefined)
   const mounted = useRef(false)
@@ -52,6 +82,7 @@ export function WorkspacePage({ sessionId }: { sessionId?: string }) {
   useEffect(() => watchSession(sessionId), [sessionId, reconnect])
   const session = current?.id === sessionId ? current : null
   const preview = session?.artifacts.find((file) => file.id === previewId)
+  const passageId = cited?.sessionId === sessionId ? cited?.id : undefined
   const busy = posting || !!session?.running
   const selection =
     chosen ??
@@ -214,60 +245,65 @@ export function WorkspacePage({ sessionId }: { sessionId?: string }) {
                   </Link>
                 </div>
               ) : session?.messages.length ? (
-                <MessageList
-                  sessionId={session.id}
-                  messages={session.messages}
-                  busy={busy}
-                  onRetry={(message) => {
-                    void retry(message.attemptId ?? message.id)
-                  }}
-                >
-                  {!!session?.artifacts.length && (
-                    <section aria-label="会话文件" className="mt-10">
-                      <h2 className="mb-3 flex items-center gap-2 font-serif text-ui-base font-semibold">
-                        <PaperclipIcon className="size-4 text-foreground-subtlest" aria-hidden />
-                        会话文件
-                        <span className="font-sans text-ui-sm font-normal text-foreground-subtlest">
-                          {session.artifacts.length} 个
-                        </span>
-                      </h2>
-                      {/* 文件卡片：朱红格式块 + 文件名，整卡可点开预览，与正文明显区分 */}
-                      <ul className="grid grid-cols-[repeat(auto-fill,minmax(16rem,1fr))] gap-3">
-                        {session.artifacts.map((file) => (
-                          <li
-                            key={file.id}
-                            className={`relative flex min-w-0 items-center gap-3 rounded-xl border p-3 transition-colors has-[button:focus-visible]:ring-2 has-[button:focus-visible]:ring-ring ${previewId === file.id ? 'border-brand bg-accent' : 'border-card-border bg-card hover:border-border-hover hover:bg-surface-hover'}`}
-                          >
-                            <FormatBlock format={file.format} />
-                            <div className="min-w-0 flex-1">
-                              <button
-                                type="button"
-                                id={`artifact-${file.id}`}
-                                aria-pressed={previewId === file.id}
-                                onClick={() => setPreviewId(previewId === file.id ? null : file.id)}
-                                className="block max-w-full truncate rounded-sm text-left text-ui-base font-medium outline-none after:absolute after:inset-0 after:rounded-xl"
-                              >
-                                {file.name}
-                              </button>
-                              <p className="text-ui-sm text-foreground-subtlest">
-                                {Math.ceil(file.size / 1024)} KB
-                                {previewId === file.id && ' · 预览中'}
-                              </p>
-                            </div>
-                            <a
-                              href={artifactUrl(file)}
-                              aria-label={`下载 ${file.name}`}
-                              title="下载"
-                              className="relative z-10 flex size-8 shrink-0 items-center justify-center rounded-md text-foreground-subtle outline-none transition-colors hover:bg-hover hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+                <OpenPassage value={openPassage}>
+                  <MessageList
+                    sessionId={session.id}
+                    messages={session.messages}
+                    busy={busy}
+                    onRetry={(message) => {
+                      void retry(message.attemptId ?? message.id)
+                    }}
+                  >
+                    {!!session?.artifacts.length && (
+                      <section aria-label="会话文件" className="mt-10">
+                        <h2 className="mb-3 flex items-center gap-2 font-serif text-ui-base font-semibold">
+                          <PaperclipIcon className="size-4 text-foreground-subtlest" aria-hidden />
+                          会话文件
+                          <span className="font-sans text-ui-sm font-normal text-foreground-subtlest">
+                            {session.artifacts.length} 个
+                          </span>
+                        </h2>
+                        {/* 文件卡片：朱红格式块 + 文件名，整卡可点开预览，与正文明显区分 */}
+                        <ul className="grid grid-cols-[repeat(auto-fill,minmax(16rem,1fr))] gap-3">
+                          {session.artifacts.map((file) => (
+                            <li
+                              key={file.id}
+                              className={`relative flex min-w-0 items-center gap-3 rounded-xl border p-3 transition-colors has-[button:focus-visible]:ring-2 has-[button:focus-visible]:ring-ring ${previewId === file.id ? 'border-brand bg-accent' : 'border-card-border bg-card hover:border-border-hover hover:bg-surface-hover'}`}
                             >
-                              <DownloadIcon className="size-4" />
-                            </a>
-                          </li>
-                        ))}
-                      </ul>
-                    </section>
-                  )}
-                </MessageList>
+                              <FormatBlock format={file.format} />
+                              <div className="min-w-0 flex-1">
+                                <button
+                                  type="button"
+                                  id={`artifact-${file.id}`}
+                                  aria-pressed={previewId === file.id}
+                                  onClick={() => {
+                                    setCited(null)
+                                    setPreviewId(previewId === file.id ? null : file.id)
+                                  }}
+                                  className="block max-w-full truncate rounded-sm text-left text-ui-base font-medium outline-none after:absolute after:inset-0 after:rounded-xl"
+                                >
+                                  {file.name}
+                                </button>
+                                <p className="text-ui-sm text-foreground-subtlest">
+                                  {Math.ceil(file.size / 1024)} KB
+                                  {previewId === file.id && ' · 预览中'}
+                                </p>
+                              </div>
+                              <a
+                                href={artifactUrl(file)}
+                                aria-label={`下载 ${file.name}`}
+                                title="下载"
+                                className="relative z-10 flex size-8 shrink-0 items-center justify-center rounded-md text-foreground-subtle outline-none transition-colors hover:bg-hover hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+                              >
+                                <DownloadIcon className="size-4" />
+                              </a>
+                            </li>
+                          ))}
+                        </ul>
+                      </section>
+                    )}
+                  </MessageList>
+                </OpenPassage>
               ) : (
                 <Welcome
                   onPick={(question) => {
@@ -297,7 +333,16 @@ export function WorkspacePage({ sessionId }: { sessionId?: string }) {
               </div>
             </div>
           </div>
-          {preview && wide && <PreviewPane file={preview} onClose={closePreview} />}
+          {preview && wide && (
+            <PreviewPane label="文件预览" onClose={closePreview}>
+              <FilePreview file={preview} onClose={closePreview} />
+            </PreviewPane>
+          )}
+          {passageId && wide && (
+            <PreviewPane label="引用原文" onClose={closePassage}>
+              <PassagePreview key={passageId} id={passageId} onClose={closePassage} />
+            </PreviewPane>
+          )}
         </div>
         {preview && !wide && (
           <Sheet
@@ -308,6 +353,26 @@ export function WorkspacePage({ sessionId }: { sessionId?: string }) {
           >
             <SheetContent side="right" title={`预览：${preview.name}`} className="w-full max-w-lg">
               <FilePreview file={preview} />
+            </SheetContent>
+          </Sheet>
+        )}
+        {passageId && !wide && (
+          <Sheet
+            open
+            onOpenChange={(open) => {
+              if (!open) setCited(null)
+            }}
+          >
+            <SheetContent
+              side="right"
+              title="引用原文"
+              className="w-full max-w-lg"
+              onCloseAutoFocus={(event) => {
+                event.preventDefault()
+                returnToCitation()
+              }}
+            >
+              <PassagePreview id={passageId} />
             </SheetContent>
           </Sheet>
         )}

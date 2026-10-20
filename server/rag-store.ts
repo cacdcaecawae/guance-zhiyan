@@ -187,6 +187,16 @@ const passageColumns = `c.id, c.version_id AS versionId, v.document_id AS docume
   v.title, v.source_url AS sourceUrl, v.published_at AS publishedAt,
   c.ordinal, c.start, c.end, c.heading, c.text`
 
+/** Current versions read through the covering title index only. */
+const CURRENT_TITLES = `rag_versions v INDEXED BY rag_versions_title
+  JOIN rag_documents d ON d.id=v.document_id AND d.version_id=v.id`
+// Every word must match; the 500-character query limit bounds their number.
+// ponytail: substring match scans the title index (51k titles in ~5 ms); use FTS if it slows.
+const titleWords = (title: string) => {
+  const words = title.split(/\s+/).filter(Boolean)
+  return { words, clause: words.map(() => 'instr(v.title, ?) > 0').join(' AND ') || '1' }
+}
+
 /** Immutable source versions keep old citations readable after a document is updated. */
 export class LibraryStore {
   store: Store
@@ -198,6 +208,8 @@ export class LibraryStore {
         text TEXT NOT NULL, source_url TEXT, published_at TEXT, created INTEGER NOT NULL
       );
       CREATE INDEX IF NOT EXISTS rag_versions_document ON rag_versions(document_id);
+      -- Library page: sort and filter by title without reading past each row's full text.
+      CREATE INDEX IF NOT EXISTS rag_versions_title ON rag_versions(title, document_id, id);
       CREATE TABLE IF NOT EXISTS rag_documents(
         id TEXT PRIMARY KEY, version_id TEXT NOT NULL REFERENCES rag_versions(id)
       );
@@ -514,7 +526,8 @@ export class LibraryStore {
       )
       .all(...ids) as unknown as Passage[]
   }
-  list(limit = 50, offset = 0) {
+  /** A page of current documents, optionally those whose title contains every word of `title`. */
+  list(limit = 50, offset = 0, title = '') {
     if (
       !Number.isInteger(limit) ||
       limit < 1 ||
@@ -523,15 +536,47 @@ export class LibraryStore {
       offset < 0
     )
       throw new HttpError(400, '文献分页参数无效。')
+    const { clause, words } = titleWords(title)
+    // Page through the title index first: source_url and published_at come after the full text in
+    // each row, so reading them for every document took 45 s on a cold 51k-document library.
     return this.store.db
       .prepare(
         `SELECT d.id, v.id AS versionId, v.title, v.source_url AS sourceUrl,
-      v.published_at AS publishedAt FROM rag_documents d JOIN rag_versions v ON v.id=d.version_id
-      ORDER BY v.title, d.id LIMIT ? OFFSET ?`,
+      v.published_at AS publishedAt FROM (SELECT v.id FROM ${CURRENT_TITLES} WHERE ${clause}
+      ORDER BY v.title, v.document_id LIMIT ? OFFSET ?) page
+      JOIN rag_versions v ON v.id=page.id JOIN rag_documents d ON d.id=v.document_id
+      ORDER BY v.title, d.id`,
       )
-      .all(limit, offset)
+      .all(...words, limit, offset)
   }
-  count() {
-    return Number(this.store.db.prepare('SELECT count(*) AS count FROM rag_documents').get()!.count)
+  count(title = '') {
+    const { clause, words } = titleWords(title)
+    const row = words.length
+      ? this.store.db
+          .prepare(`SELECT count(*) AS count FROM ${CURRENT_TITLES} WHERE ${clause}`)
+          .get(...words)
+      : this.store.db.prepare('SELECT count(*) AS count FROM rag_documents').get()
+    return Number(row!.count)
+  }
+  /** The current version of a document with its passages in order, for reading it in the library. */
+  document(id: string) {
+    const versionId = this.current(id)
+    if (!versionId) throw new HttpError(404, '没有找到文献。')
+    const version = this.store.db
+      .prepare(
+        'SELECT title, source_url AS sourceUrl, published_at AS publishedAt FROM rag_versions WHERE id=?',
+      )
+      .get(versionId)!
+    return {
+      id,
+      versionId,
+      ...version,
+      passages: this.chunks(versionId).map(({ id, ordinal, heading, text }) => ({
+        id,
+        ordinal,
+        heading,
+        text,
+      })),
+    }
   }
 }

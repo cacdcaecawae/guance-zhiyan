@@ -1,0 +1,246 @@
+import { act, fireEvent, render, screen, within } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
+import { Link, MemoryRouter, Route, Routes, useNavigate } from 'react-router'
+import { afterEach, expect, it, vi } from 'vitest'
+// 顶栏经侧栏引入主题模块，模块加载时即读取 matchMedia，jsdom 没有它
+vi.hoisted(() =>
+  vi.stubGlobal('matchMedia', () => ({
+    matches: false,
+    addEventListener() {},
+    removeEventListener() {},
+  })),
+)
+import { LibraryDocumentPage } from './library-document'
+import { LibraryPage } from './library-page'
+
+const passage = (n: number) => ({
+  id: `00000000-0000-5000-8000-00000000000${n}`,
+  ordinal: n,
+  heading: n ? '# 计划纲要 / ## 二、调整工业结构' : '',
+  text: `第 ${n + 1} 块原文`,
+})
+const fetchMock = vi.fn(async (path: string) => {
+  if (path.startsWith('/api/library?'))
+    return Response.json({
+      total: 51,
+      documents: [{ id: '2561', title: '沧州市“十五”计划', sourceUrl: null, publishedAt: null }],
+    })
+  if (path.startsWith('/api/library/search?'))
+    return Response.json({
+      passages: [
+        {
+          ...passage(1),
+          documentId: '2561',
+          title: '沧州市“十五”计划',
+          text: '## 二、调整工业结构\n\n　　化工产业原文\n1\\.5 倍',
+        },
+      ],
+    })
+  if (path === '/api/library/document?id=2561')
+    return Response.json({
+      id: '2561',
+      versionId: 'v1',
+      title: '沧州市“十五”计划',
+      sourceUrl: 'javascript:alert(1)',
+      publishedAt: '2001-03-01',
+      passages: [passage(0), passage(1)],
+    })
+  return Response.json({ error: '没有找到文献。' }, { status: 404 })
+})
+vi.stubGlobal('fetch', fetchMock)
+afterEach(() => fetchMock.mockClear())
+
+function Back() {
+  const navigate = useNavigate()
+  return <button onClick={() => navigate(-1)}>浏览器后退</button>
+}
+const open = (path: string | { pathname: string; search: string; state: unknown }) =>
+  render(
+    <MemoryRouter initialEntries={[path]}>
+      {/* 模拟侧栏的“文献库”链接：页面不重新挂载时表单也随地址重置 */}
+      <Link to="/library">侧栏文献库</Link>
+      <Back />
+      <Routes>
+        <Route path="/library" element={<LibraryPage />} />
+        <Route path="/library/document" element={<LibraryDocumentPage />} />
+        <Route path="/workspace/:sessionId" element={<p>研究会话</p>} />
+      </Routes>
+    </MemoryRouter>,
+  )
+
+it('按标题检索、翻页，点开文献按顺序显示全部片段，返回时保留检索词与页码', async () => {
+  const user = userEvent.setup()
+  open('/library')
+  expect(await screen.findByText('共 51 篇文献')).toBeInTheDocument()
+  expect(fetchMock).toHaveBeenLastCalledWith('/api/library?limit=50&offset=0', expect.anything())
+
+  await user.type(screen.getByRole('searchbox', { name: '检索词' }), ' 沧州 十五 {Enter}')
+  expect(await screen.findByText('标题含“沧州 十五”的文献共 51 篇')).toBeInTheDocument()
+  // 检索后表单不重建，焦点仍在检索框
+  expect(screen.getByRole('searchbox', { name: '检索词' })).toHaveFocus()
+  await user.click(screen.getByRole('button', { name: '下一页' }))
+  expect(await screen.findByText('第 2 / 2 页')).toBeInTheDocument()
+  expect(fetchMock).toHaveBeenLastCalledWith(
+    `/api/library?${new URLSearchParams({ q: '沧州 十五', limit: '50', offset: '50' })}`,
+    expect.anything(),
+  )
+
+  await user.click(screen.getByRole('link', { name: /沧州市“十五”计划/ }))
+  const passages = within(await screen.findByRole('list')).getAllByRole('listitem')
+  expect(passages.map((item) => item.textContent)).toEqual([
+    '片段 1第 1 块原文',
+    '片段 2 · 计划纲要 / 二、调整工业结构第 2 块原文',
+  ])
+  expect(screen.getByText(/文献编号 2561 · 发布于 2001-03-01 · 共 2 个片段/)).toBeInTheDocument()
+  // 来源不是 HTTP(S) 链接时不显示
+  expect(screen.queryByRole('link', { name: '原始来源' })).toBeNull()
+
+  await user.click(screen.getByRole('link', { name: '返回文献库' }))
+  expect(await screen.findByText('第 2 / 2 页')).toBeInTheDocument()
+  expect(screen.getByRole('searchbox', { name: '检索词' })).toHaveValue('沧州 十五')
+})
+
+it('从引用进入时定位并标出被引片段', async () => {
+  const scroll = vi.fn()
+  Element.prototype.scrollIntoView = scroll
+  open(`/library/document?id=2561#${passage(1).id}`)
+  const target = await screen.findByText('第 2 块原文')
+  expect(target.closest('li')).toHaveAttribute('aria-current', 'true')
+  expect(scroll).toHaveBeenCalledOnce()
+})
+
+it('读取失败时写明原因并可重试', async () => {
+  const user = userEvent.setup()
+  open('/library/document?id=missing')
+  expect(await screen.findByRole('alert')).toHaveTextContent('没有找到文献。')
+  await user.click(screen.getByRole('button', { name: '重试' }))
+  expect(fetchMock).toHaveBeenCalledTimes(2)
+})
+
+it('按内容检索调用混合检索，列出片段摘要，点开后定位到该片段；切回按标题保留检索词', async () => {
+  const user = userEvent.setup()
+  Element.prototype.scrollIntoView = vi.fn()
+  open('/library')
+  await screen.findByText('共 51 篇文献')
+  await user.click(screen.getByRole('radio', { name: '按内容' }))
+  expect(screen.getByRole('radio', { name: '按内容' })).toBeChecked()
+  await user.type(screen.getByRole('searchbox', { name: '检索词' }), '化工 发展重点{Enter}')
+  expect(
+    await screen.findByText('与“化工 发展重点”最相关的 1 个片段，按相关度从高到低排列'),
+  ).toBeInTheDocument()
+  expect(fetchMock).toHaveBeenLastCalledWith(
+    `/api/library/search?${new URLSearchParams({ q: '化工 发展重点' })}`,
+    expect.anything(),
+  )
+  const hit = screen.getByRole('link', { name: /沧州市“十五”计划/ })
+  expect(hit).toHaveTextContent('文献编号 2561 · 片段 2 · 计划纲要 / 二、调整工业结构')
+  // 摘要去掉与章节重复的标题行、转义符和多余空白
+  expect(hit).toHaveTextContent(/二、调整工业结构化工产业原文 1\.5 倍$/)
+  await user.click(hit)
+  expect((await screen.findByText('第 2 块原文')).closest('li')).toHaveAttribute(
+    'aria-current',
+    'true',
+  )
+  await user.click(screen.getByRole('link', { name: '返回文献库' }))
+  expect(await screen.findByRole('radio', { name: '按内容' })).toBeChecked()
+  expect(screen.getByRole('searchbox', { name: '检索词' })).toHaveValue('化工 发展重点')
+  await user.click(screen.getByRole('radio', { name: '按标题' }))
+  expect(await screen.findByText('标题含“化工 发展重点”的文献共 51 篇')).toBeInTheDocument()
+})
+
+it('页面外的链接改变地址时，表单同步为地址里的检索方式与检索词', async () => {
+  const user = userEvent.setup()
+  open('/library?by=content&q=' + encodeURIComponent('化工'))
+  expect(await screen.findByText(/与“化工”最相关/)).toBeInTheDocument()
+  expect(screen.getByRole('radio', { name: '按内容' })).toBeChecked()
+  await user.click(screen.getByRole('link', { name: '侧栏文献库' }))
+  expect(await screen.findByText('共 51 篇文献')).toBeInTheDocument()
+  expect(screen.getByRole('radio', { name: '按标题' })).toBeChecked()
+  expect(screen.getByRole('searchbox', { name: '检索词' })).toHaveValue('')
+})
+
+it('翻页后经侧栏离开再后退，检索框恢复为该页的检索词', async () => {
+  const user = userEvent.setup()
+  open('/library')
+  await screen.findByText('共 51 篇文献')
+  await user.type(screen.getByRole('searchbox', { name: '检索词' }), '沧州{Enter}')
+  await user.click(await screen.findByRole('button', { name: '下一页' }))
+  expect(await screen.findByText('第 2 / 2 页')).toBeInTheDocument()
+  await user.click(screen.getByRole('link', { name: '侧栏文献库' }))
+  expect(await screen.findByText('共 51 篇文献')).toBeInTheDocument()
+  expect(screen.getByRole('searchbox', { name: '检索词' })).toHaveValue('')
+  await user.click(screen.getByRole('button', { name: '浏览器后退' }))
+  expect(await screen.findByText('第 2 / 2 页')).toBeInTheDocument()
+  expect(screen.getByRole('searchbox', { name: '检索词' })).toHaveValue('沧州')
+})
+
+it('片段定位的地址片段编码无效时忽略定位，照常显示文献', async () => {
+  open('/library/document?id=2561#%E0%A4%A')
+  expect(await screen.findByText('第 2 块原文')).toBeInTheDocument()
+  expect(document.querySelector('li[aria-current]')).toBeNull()
+})
+
+it('重绘前切到按内容又切回按标题，之后后退到按内容时单选框随地址同步', async () => {
+  const user = userEvent.setup()
+  open('/library?q=' + encodeURIComponent('政策'))
+  await screen.findByText('标题含“政策”的文献共 51 篇')
+  // 两次点击放在同一个 act 里：中间不重绘，模拟会话很多、过渡重绘较慢时的快速切换
+  act(() => {
+    fireEvent.click(screen.getByRole('radio', { name: '按内容' }))
+    fireEvent.click(screen.getByRole('radio', { name: '按标题' }))
+  })
+  expect(await screen.findByText('标题含“政策”的文献共 51 篇')).toBeInTheDocument()
+  await user.click(screen.getByRole('button', { name: '浏览器后退' }))
+  expect(await screen.findByText(/与“政策”最相关/)).toBeInTheDocument()
+  expect(screen.getByRole('radio', { name: '按内容' })).toBeChecked()
+})
+
+it('地址里的页码与检索词不可信：非正整数或过大的页码按第 1 页，检索词截到 500 字', async () => {
+  for (const page of ['Infinity', '1e309', '-3', '2.5', 'abc', '9007199254740993']) {
+    const view = open('/library?page=' + page)
+    await screen.findByText('共 51 篇文献')
+    expect(fetchMock).toHaveBeenLastCalledWith('/api/library?limit=50&offset=0', expect.anything())
+    view.unmount()
+  }
+  open('/library?q=' + '政'.repeat(600))
+  await screen.findByText(/标题含/)
+  expect(fetchMock).toHaveBeenLastCalledWith(
+    `/api/library?${new URLSearchParams({ q: '政'.repeat(500), limit: '50', offset: '0' })}`,
+    expect.anything(),
+  )
+})
+
+it('页码超出末页时仍有分页，上一页回到末页', async () => {
+  const user = userEvent.setup()
+  open('/library?page=9')
+  expect(await screen.findByText('第 9 / 2 页')).toBeInTheDocument()
+  await user.click(screen.getByRole('button', { name: '上一页' }))
+  expect(await screen.findByText('第 2 / 2 页')).toBeInTheDocument()
+})
+
+it('任意文献编号经链接原样传给接口，含“.”“..”“/”与百分号', async () => {
+  const user = userEvent.setup()
+  for (const id of ['.', '..', 'a/b', 'a%2Fb', '#?&=']) {
+    fetchMock.mockImplementationOnce(async () =>
+      Response.json({
+        total: 1,
+        documents: [{ id, title: `编号${id}`, sourceUrl: null, publishedAt: null }],
+      }),
+    )
+    const view = open('/library')
+    await user.click(await screen.findByRole('link', { name: new RegExp(`编号`) }))
+    await screen.findByRole('alert')
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      `/api/library/document?${new URLSearchParams({ id })}`,
+      expect.anything(),
+    )
+    view.unmount()
+  }
+})
+
+it('从会话的引用原文进入文献页时，返回链接回到该会话', async () => {
+  const user = userEvent.setup()
+  open({ pathname: '/library/document', search: '?id=2561', state: { from: '/workspace/s1' } })
+  await user.click(await screen.findByRole('link', { name: '返回研究' }))
+  expect(await screen.findByText('研究会话')).toBeInTheDocument()
+})

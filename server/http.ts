@@ -6,7 +6,8 @@ import { Store, HttpError } from './store.ts'
 import { Agents } from './agent.ts'
 import { modelCatalog, validateSelection } from './models.ts'
 import { MIME } from './artifacts.ts'
-import type { LibraryStore } from './rag-store.ts'
+import { RAG_ERRORS, RagError } from './rag.ts'
+import type { LibraryStore, Passage } from './rag-store.ts'
 import { authenticate as defaultAuthenticate, type Authenticate } from './auth.ts'
 import { sessionChanges, type SessionFrame } from '../src/services/session-stream.ts'
 import type { Session } from '../src/types/index.ts'
@@ -50,6 +51,8 @@ export function createApp(
     origin?: string
     dist?: string
     library?: LibraryStore
+    /** Content search of the library page: the hybrid retrieval the model uses. */
+    search?: (query: string, signal: AbortSignal) => Promise<Passage[]>
   } = {},
 ) {
   const authenticate = options.authenticate ?? defaultAuthenticate
@@ -122,7 +125,7 @@ export function createApp(
       if (path === '/api/me' && request.method === 'GET') return json(response, 200, user)
       if (path === '/api/models' && request.method === 'GET')
         return json(response, 200, modelCatalog(!!agents.options.adapter))
-      if (path === '/api/library' || path.startsWith('/api/library/passages/')) {
+      if (path === '/api/library' || path.startsWith('/api/library/')) {
         if (request.method !== 'GET') throw new HttpError(405, '不支持该操作。')
         const library = options.library
         if (!library) throw new HttpError(503, '文献库尚未配置。')
@@ -132,11 +135,51 @@ export function createApp(
             if (values.length > 1 || (values.length === 1 && !/^\d+$/.test(values[0])))
               throw new HttpError(400, '文献分页参数无效。')
           }
+          const titles = url.searchParams.getAll('q')
+          // Same limit as content search: the page keeps the query when switching modes.
+          if (titles.length > 1 || (titles[0]?.length ?? 0) > 500)
+            throw new HttpError(400, '文献标题检索词无效。')
+          const title = titles[0] ?? ''
           const documents = library.list(
             Number(url.searchParams.get('limit') ?? 50),
             Number(url.searchParams.get('offset') ?? 0),
+            title,
           )
-          return json(response, 200, { total: library.count(), documents })
+          return json(response, 200, { total: library.count(title), documents })
+        }
+        if (path === '/api/library/search') {
+          const queries = url.searchParams.getAll('q')
+          const query = queries[0]?.trim() ?? ''
+          if (queries.length !== 1 || !query || query.length > 500 || !query.isWellFormed())
+            throw new HttpError(400, '检索内容须为 1–500 个有效字符。')
+          if (!options.search) throw new HttpError(503, RAG_ERRORS.RAG_NOT_CONFIGURED)
+          const abort = new AbortController()
+          response.on('close', () => abort.abort())
+          let passages: Passage[]
+          try {
+            passages = await options.search(query, abort.signal)
+          } catch (error) {
+            if (error instanceof RagError) throw new HttpError(503, error.message)
+            throw error
+          }
+          return json(response, 200, {
+            passages: passages.map(({ id, documentId, title, heading, text, ordinal }) => ({
+              id,
+              documentId,
+              title,
+              heading,
+              text,
+              ordinal,
+            })),
+          })
+        }
+        // The id travels as a query parameter: any id round-trips exactly, while in a path “.”,
+        // “..” (also %2E) are dot segments and a dotted id looks like a static file extension.
+        if (path === '/api/library/document') {
+          const ids = url.searchParams.getAll('id')
+          if (ids.length !== 1 || !ids[0] || ids[0].length > 256)
+            throw new HttpError(400, '文献编号无效。')
+          return json(response, 200, library.document(ids[0]))
         }
         const passageId =
           /^\/api\/library\/passages\/([0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})$/i.exec(path)
@@ -145,9 +188,9 @@ export function createApp(
         if (formats.length > 1 || (formats.length === 1 && formats[0] !== 'json'))
           throw new HttpError(400, '原文片段格式无效。')
         const passage = library.passage(passageId[1].toLowerCase())
-        if (formats[0] === 'json') return json(response, 200, passage)
         // Old citations stay readable after an update, but must not pass for the current text.
         const superseded = library.current(passage.documentId) !== passage.versionId
+        if (formats[0] === 'json') return json(response, 200, { ...passage, superseded })
         response.writeHead(200, {
           'Content-Type': 'text/html; charset=utf-8',
           'Content-Security-Policy':
