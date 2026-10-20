@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtemp, readFile, readdir, rm, chmod, stat, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, readdir, rm, chmod, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve, sep } from 'node:path'
 import { once } from 'node:events'
@@ -1266,7 +1266,7 @@ test('HTTP: only a signed-in question may take longer than 30 seconds to upload'
   }
 })
 
-test('a tool stopped mid-way shows as interrupted, while its coded failures still show as failed', async () => {
+test('a tool stopped mid-way shows as interrupted, while its real failures still show as failed', async () => {
   const root = await mkdtemp(join(tmpdir(), 'gczy-stop-tool-test-'))
   const store = new Store(root)
   const model = new TestModel()
@@ -1274,11 +1274,15 @@ test('a tool stopped mid-way shows as interrupted, while its coded failures stil
   const create = agents.files.create.bind(agents.files)
   try {
     const user = store.user('stop-tool', 'Test')
-    for (const [format, name] of [
-      ['md', '报告'],
-      ['docx', '报告'],
-      ['xlsx', '报告'],
-      ['md', ''], // FILE_INVALID_NAME: a coded failure stays a failure even when stopped
+    // A file where the I/O case creates a directory: a real EEXIST, not a cancellation.
+    const blocker = join(root, 'blocker')
+    await writeFile(blocker, '')
+    for (const [format, name, outcome] of [
+      ['md', '报告', 'stopped'],
+      ['docx', '报告', 'stopped'],
+      ['xlsx', '报告', 'stopped'],
+      ['md', '', 'coded'], // FILE_INVALID_NAME stays a failure even when stopped
+      ['md', '报告', 'io'], // so does a file system error at the moment of stopping
     ] as const) {
       const session = store.create(user.id)
       const entered = Promise.withResolvers<void>()
@@ -1287,6 +1291,7 @@ test('a tool stopped mid-way shows as interrupted, while its coded failures stil
       agents.files.create = async (...args) => {
         entered.resolve()
         await release.promise
+        if (outcome === 'io') await mkdir(blocker)
         return create(...args)
       }
       model.respond = (request) =>
@@ -1308,14 +1313,23 @@ test('a tool stopped mid-way shows as interrupted, while its coded failures stil
       const part = answer.parts.find((item) => item.type === 'tool')
       const row = view.trace.find((item) => item.kind === 'tool')
       assert.ok(part?.type === 'tool')
-      if (name) {
+      if (outcome === 'stopped') {
         assert.equal(part.status, 'stopped', format)
         assert.equal(part.output, '工具执行已中断。')
         assert.equal(row?.status, 'stopped')
       } else {
-        assert.equal(part.status, 'error')
-        assert.equal(part.output, '文件名称或格式无效。')
+        assert.equal(part.status, 'error', outcome)
         assert.equal(row?.status, 'error')
+        if (outcome === 'coded') assert.equal(part.output, '文件名称或格式无效。')
+        else {
+          // The original failure stays in the session log.
+          const result = (await agents.events(session.id)).find(
+            (event) => event.type === 'tool/result',
+          )
+          assert.ok(result?.type === 'tool/result' && result.data.message.isError)
+          assert.match(JSON.stringify(result.data.message.content), /EEXIST/)
+          assert.equal(result.data.error, undefined)
+        }
       }
       assert.deepEqual(store.artifacts(user.id, session.id), [])
     }

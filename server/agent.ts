@@ -135,12 +135,6 @@ export interface AgentOptions {
   library?: Library
 }
 
-/** A tool cut off by stopping the answer, recorded as DSH records one stopped after it started. */
-const STOPPED_TOOL = {
-  content: [{ type: 'text' as const, text: 'Error: tool call aborted' }],
-  error: { message: 'tool call aborted', info: { name: 'AbortError', code: 'ABORTED' } },
-}
-
 // ponytail: 固定 60 秒检索时限（单次问答目标 120 秒，留一半给作答）；需要按题型区分时再改成按问题估算。
 const SEARCH_BUDGET_MS = 60_000
 export class Agents {
@@ -428,14 +422,6 @@ export class Agents {
         ...(question ? [{ type: 'text' as const, text: question }] : []),
       ]
       const setup = async (ctx: Context, agent: AgentHandle['agent']) => {
-        // 停止时，工具因取消抛出的异常（取消原因或 AbortError）DSH 不记错误码，这里记为 ABORTED，显示“已中断”；
-        // 带错误码的失败（沙箱不可用、文件或检索错误）照常显示。工具超时不设 run.stopped，仍记超时。
-        ctx.on('tools/execute', async (_exec, next) => {
-          const result = await next()
-          return run.stopped && result.isError && !result.error?.info
-            ? { ...result, ...STOPPED_TOOL }
-            : result
-        })
         if (retry) {
           const target = retry
           let prepared = false
