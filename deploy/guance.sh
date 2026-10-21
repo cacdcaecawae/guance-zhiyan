@@ -2,9 +2,8 @@
 # 管策智研部署脚本（Linux / WSL，由 systemd 守护）。说明见 docs/DEPLOY.md。
 #   deploy/guance.sh install          生成 systemd 服务（Qdrant 与向量服务在 deploy/.env 配置了才装，网站总是装），设为开机自启并（重新）启动
 #   deploy/guance.sh status           各服务的运行状态、健康检查与代码版本
-#   deploy/guance.sh update [版本]    停网站 → 拉取并切换到该版本（默认 origin/main）→ 安装依赖 → 构建 → 启动网站；任一步失败网站保持停止
 #   deploy/guance.sh units <目录>     只把 systemd 单元生成到目录（检查用），不安装
-# 停止、重启与日志用 systemctl / journalctl，如 sudo systemctl restart guance-app、journalctl -u guance-app。
+# 停止、重启与日志用 systemctl / journalctl，如 sudo systemctl restart guance-app、journalctl -u guance-app；更新步骤见 docs/DEPLOY.md。
 # qdrant、embedding、app 是 systemd 调用的服务入口，也可在前台单独运行排查。
 # 进程配置在 deploy/.env（从 deploy/.env.example 复制）；模型密钥、端口、数据目录等应用配置只在 server/.env。
 set -uo pipefail
@@ -204,9 +203,6 @@ campus_ok() {
   fetch_with_key "$(setting CAMPUS_API_KEY)" -m 10 "$(setting CAMPUS_BASE_URL http://10.27.66.12 | sed 's#/*$##')/v1/models"
 }
 
-# update 失败时写下原因，status 在网站停着时显示
-update_failed=$(git rev-parse --git-path guance-update-failed 2>/dev/null)
-
 status() {
   local name
   if systemd_ready; then
@@ -219,9 +215,6 @@ status() {
     done
   else
     echo "systemd 未运行：各服务没有被守护"
-  fi
-  if [ -n "$update_failed" ] && [ -e "$update_failed" ] && ! systemctl is-active -q guance-app 2>/dev/null; then
-    echo "网站：已停止，上次更新失败——$(cat "$update_failed")"
   fi
   # 名称 单元 命令…
   check() {
@@ -240,48 +233,13 @@ status() {
   echo "代码版本：$(git log -1 --format='%h %s' 2>/dev/null)"
 }
 
-update() {
-  local ref=${1:-origin/main}
-  [ -n "$update_failed" ] || {
-    echo "不在 git 仓库中，无法更新。" >&2
-    exit 1
-  }
-  systemd_ready && [ "$(systemctl show -p LoadState --value guance-app 2>/dev/null)" = loaded ] || {
-    echo "网站服务未安装，先执行 deploy/guance.sh install。" >&2
-    exit 1
-  }
-  if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
-    echo "工作区有未提交的改动，先提交或撤销后再更新。" >&2
-    exit 1
-  fi
-  # 两次 update 同时运行会在同一工作区里交替切换代码、安装依赖
-  exec 8>"$(git rev-parse --git-path guance-update.lock)"
-  flock -n 8 || {
-    echo "另一次 update 正在进行。" >&2
-    exit 1
-  }
-  echo "停止与启动网站需要管理员权限（sudo systemctl stop / start guance-app）。"
-  sudo systemctl stop guance-app || exit 1
-  # 网站停着时切换代码、依赖与 dist/；任一步失败都不启动网站，以免运行代码、依赖与页面不一致的版本
-  if git fetch origin && git checkout -q --detach "$ref" && pnpm install --frozen-lockfile --prefer-offline && pnpm build; then
-    rm -f "$update_failed"
-    sudo systemctl start guance-app || exit 1
-    wait_app "已更新到 $(git log -1 --format='%h %s')，网站已启动。" || exit 1
-    return
-  fi
-  echo "$(date '+%F %T') 更新到 $ref 失败，代码现为 $(git log -1 --format=%h)，网站保持停止；修复后重新执行 deploy/guance.sh update，或确认代码与依赖无误后 sudo systemctl start guance-app。" |
-    tee "$update_failed" >&2
-  exit 1
-}
-
 case "${1:-}" in
   install) install_units ;;
   status) status ;;
-  update) update "${2:-}" ;;
   units) units "${2:?用法：deploy/guance.sh units <目录>}" ;;
   qdrant | embedding | app) "$1" ;;
   *)
-    sed -n '2,9p' "$SELF" | sed 's/^# \{0,1\}//'
+    sed -n '2,8p' "$SELF" | sed 's/^# \{0,1\}//'
     exit 2
     ;;
 esac

@@ -4,7 +4,7 @@
 # 拒绝、服务入口以 78 退出；直接运行各服务入口时的健康检查（向量服务按配置的维度检查、经出站代理才能访问时也正常）；
 # Qdrant 只监听本机且相对路径按仓库根目录解析；健康检查不在进程参数里暴露密钥；server/.env 的行尾注释、export 与空格写法
 # 按 Node 的规则读取。有 systemd 与免密 sudo、且本机没有已装的 guance-* 服务和 server/.env 时（如 CI），再真实安装：
-# 开机自启、加固选项生效且数据目录可写、崩溃后自动重启、update 的失败与成功、停止后不留进程。
+# 开机自启、加固选项生效且数据目录可写、崩溃后自动重启、停止后不留进程。
 set -euo pipefail
 cd "$(dirname "$(readlink -f "$0")")/.."
 if [ -f deploy/.env ]; then
@@ -63,7 +63,7 @@ printf '#!/bin/sh\nexec python3 %s qdrant\n' "$T/fake.py" >"$T/qdrant-bin"
 chmod +x "$T/qdrant-bin"
 # 两条命令：bash 不能直接 exec，python 成为 bash 的子进程且不理会 TERM，验证停止时结束整个控制组
 export EMBED_CMD="python3 $T/fake.py embedding 33481; true"
-installed= branch=
+installed=
 leftovers() { pgrep -f "$T/fake.py|server/index.ts --local" | wc -l; }
 healthy() { [ "$(grep -cE '^(网站|Qdrant|向量服务)：正常$' <<<"$1")" = 3 ]; }
 stop_direct() {
@@ -78,8 +78,6 @@ cleanup() {
     for unit in "${UNITS[@]}"; do sudo rm -f "/etc/systemd/system/$unit.service"; done
     sudo systemctl daemon-reload
   fi
-  # update 会把工作区切成分离的 HEAD：切回测试开始时的分支
-  [ -z "$branch" ] || git checkout -q "$branch"
   # 开始时已确认 deploy/.env 不存在；server/.env 只删本测试建的
   rm -f deploy/.env
   [ ! -e "$T/server-env" ] || rm -f server/.env
@@ -200,7 +198,7 @@ else
   : >"$T/server-env"
   printf '%s\n' "DATA_DIR=$T/sdata" "PORT=$PORT" "QDRANT_URL=$QDRANT_URL" "EMBEDDING_URL=$EMBEDDING_URL" \
     "EMBEDDING_MODEL=fake" "EMBEDDING_DIMENSIONS=2" "EMBEDDING_API_KEY=$EMBEDDING_API_KEY" >server/.env
-  # PATH 在原值前追加：服务里原值是 systemd 的默认 PATH，update 时是本 shell 的（pnpm 在那里）
+  # PATH 在原值前追加：服务里原值是 systemd 的默认 PATH，直接运行脚本时是本 shell 的
   printf '%s\n' "PATH=$(dirname "$(command -v node)"):\$PATH" "QDRANT_BIN=$QDRANT_BIN" \
     "QDRANT_STORAGE=$QDRANT_STORAGE" "EMBED_CMD=\"$EMBED_CMD\"" APP_MODE=local >deploy/.env
   unset DATA_DIR PORT QDRANT_URL EMBEDDING_URL EMBEDDING_MODEL EMBEDDING_DIMENSIONS EMBEDDING_API_KEY APP_MODE \
@@ -231,19 +229,6 @@ else
     sleep 1
   done
   [ "$new" != 0 ] && [ "$new" != "$old" ] || fail "网站退出后未重启"
-
-  echo "== update：失败时网站保持停止，status 显示原因"
-  before=$(git rev-parse HEAD)
-  branch=$(git symbolic-ref -q --short HEAD || echo "$before")
-  if out=$(bash $G update no-such-ref 2>&1); then fail "不存在的版本却更新成功：$out"; fi
-  [ "$(systemctl is-active guance-app)" != active ] || fail "更新失败后网站仍被启动"
-  [ "$(git rev-parse HEAD)" = "$before" ] || fail "切换失败后代码被改动"
-  grep -q '上次更新失败' <<<"$(bash $G status)" || fail "status 未显示更新失败"
-
-  echo "== update：成功时以新版本启动网站"
-  out=$(bash $G update HEAD 2>&1) || fail "更新到当前版本失败：$out"
-  [ "$(systemctl is-active guance-app)" = active ] || fail "更新后网站未运行"
-  ! grep -q '上次更新失败' <<<"$(bash $G status)" || fail "更新成功后仍显示上次失败"
 
   echo "== systemd：停止后不留进程（向量服务的子进程不理会 TERM）"
   sudo systemctl stop "${UNITS[@]}"

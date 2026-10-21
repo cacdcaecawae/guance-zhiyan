@@ -35,7 +35,7 @@ ssh -N -L 3001:127.0.0.1:3001 用户名@服务器    # 保持窗口打开，再�
      # EMBED_CMD="BGE_M3_DIR=$HOME/models/bge-m3 $HOME/embed-venv/bin/python server/rag/embed-server.py 8081"
      ```
    - `PATH`：systemd 启动的服务只有系统默认 PATH，node 装在用户目录等处时补上。
-   - 只能写 `PATH`、`QDRANT_BIN`、`QDRANT_STORAGE`、`EMBED_CMD`、`APP_MODE`。数据目录、端口等应用配置只写在 `server/.env`：网站与 `pnpm rag` 导入命令都只读那里，分两处写会让导入写进网站看不到的目录，所以 `deploy/.env` 出现应用配置、有语法错误、或 `APP_MODE` 不是 `local` / `server` 时拒绝安装和更新；已装的服务启动时同样检查，出错即停（不反复重启），`status` 显示原因。相对路径按仓库根目录解析。
+   - 只能写 `PATH`、`QDRANT_BIN`、`QDRANT_STORAGE`、`EMBED_CMD`、`APP_MODE`。数据目录、端口等应用配置只写在 `server/.env`：网站与 `pnpm rag` 导入命令都只读那里，分两处写会让导入写进网站看不到的目录，所以 `deploy/.env` 出现应用配置、有语法错误、或 `APP_MODE` 不是 `local` / `server` 时拒绝安装；已装的服务启动时同样检查，出错即停（不反复重启），`status` 显示原因。相对路径按仓库根目录解析。
 5. **数据**：二选一。
    - 新导入：`pnpm rag import <文献.jsonl>`、`pnpm rag metadata <元数据.jsonl>`，见 RAG 说明。全库导入耗时很长，宜在有显卡的机器上完成。
    - 从已有部署迁移：停止两边服务后，**一起**复制 `DATA_DIR`（含 `app.sqlite`，全库约 15 GB）与 Qdrant 数据目录（或 Docker 卷），并保持 `EMBEDDING_URL`、`EMBEDDING_MODEL`、`EMBEDDING_DIMENSIONS`、`QDRANT_URL` 四项原样。向量集合名和索引完成标记由文献库编号（在 `DATA_DIR` 里）和这几项共同决定，任何一项变化都会被视为新索引，需要 `pnpm rag reindex` 全量重算。数据目录不要放在 `/tmp`（服务有自己独立的 `/tmp`），也不要放在 `/usr`、`/etc` 下（服务对它们只读）。
@@ -45,15 +45,28 @@ ssh -N -L 3001:127.0.0.1:3001 用户名@服务器    # 保持窗口打开，再�
 
 ```bash
 deploy/guance.sh status                      # 各服务运行状态，网站、Qdrant、向量服务、校内模型是否正常，及代码版本
-deploy/guance.sh update                      # 停网站 → 拉取 origin/main → 安装依赖 → 构建 → 启动网站；可指定版本
 sudo systemctl restart guance-app            # 重启（停止用 stop；Qdrant、向量服务换成 guance-qdrant、guance-embedding）
 journalctl -u guance-app -f                  # 查看日志
 ```
 
 - **守护**：每个服务退出后 5 秒由 systemd 重启；停止时 systemd 结束服务的整个控制组（含向量服务由 shell 拉起的子进程），20 秒内未退出的强制结束。网站排在 Qdrant 与向量服务之后启动；它们不可用时网站照常运行，只是文献库检索报错，恢复后无需重启网站。
 - **加固**：各服务以安装账号运行，带 `NoNewPrivileges`（不能再提权）、`PrivateTmp`（独立 `/tmp`）、`ProtectSystem=full`（`/usr`、`/etc` 等只读）和 `UMask=0077`（新建文件只有本账号能读）。
-- **更新**：`update` 先停网站，在网站停着时切换代码、安装依赖、构建，全部成功才启动网站并等健康检查通过。任一步失败网站保持停止，`status` 显示失败原因；修好后重新执行 `update`，或确认代码与依赖无误后 `sudo systemctl start guance-app`。更新期间网站不可用（通常一两分钟）。工作区有未提交改动时拒绝更新；两次 `update` 不能同时进行。
 - **改配置**：改了 `server/.env` 或 `deploy/.env` 的值后重启对应服务；新填或清空 `QDRANT_BIN`、`EMBED_CMD` 后重新执行 `install`，以装上或停用、删除对应服务。卸载：`sudo systemctl disable --now guance-app guance-qdrant guance-embedding`，再删除 `/etc/systemd/system/guance-*.service`。
+
+## 更新
+
+在部署目录里依次执行，任一步失败就停在那里，修好再继续（网站在此期间停止，通常一两分钟）：
+
+```bash
+sudo systemctl stop guance-app
+git pull                                     # 或 git checkout <版本>
+pnpm install --frozen-lockfile
+pnpm build
+sudo systemctl start guance-app
+deploy/guance.sh status
+```
+
+退回旧版本：先记下更新前的提交（`git log -1`），`git checkout <原提交>` 后重复上面的安装、构建、启动三步。
 
 ## WSL
 
@@ -80,7 +93,7 @@ journalctl -u guance-app -f                  # 查看日志
 | ------------------------ | ------------------------------------------------------------------------------------------------------------ |
 | `guance-app：activating` | 正在启动，或启动失败后在 5 秒重启间隔中；反复出现时看 `journalctl -u guance-app`（如 node 不在 PATH）        |
 | `guance-app：failed`     | 配置有误（上方会列出原因）或 20 秒内停不下来；改正后 `sudo systemctl restart guance-app`                     |
-| `guance-app：inactive`   | 被手动停止，或更新失败（下一行显示原因）                                                                     |
+| `guance-app：inactive`   | 被手动停止（如更新中途）；确认代码已构建后 `sudo systemctl start guance-app`                                 |
 | `guance-qdrant：未安装`  | `deploy/.env` 没填 `QDRANT_BIN`，Qdrant 另行运行（如 Docker）；需要本机运行时填好后重新 `install`            |
 | 网站：无响应             | `journalctl -u guance-app`；刚启动或刚更新时等十几秒                                                         |
 | Qdrant：无响应           | `journalctl -u guance-qdrant`，或 `docker compose ... ps`；端口是否与 `QDRANT_URL` 一致                      |
@@ -92,7 +105,7 @@ journalctl -u guance-app -f                  # 查看日志
 
 ## 迁移到学校服务器前需要确认
 
-- 操作系统与权限：是否用 systemd；运行服务的账号能否使用 `sudo`（`install` 写入单元、`update` 停启网站时需要），或用 Docker 开机自启。
+- 操作系统与权限：是否用 systemd；运行服务的账号能否使用 `sudo`（`install` 写入单元、更新时停启网站需要），或用 Docker 开机自启。
 - 网络：服务器能否访问校内模型 `10.27.66.12`、能否访问 GitHub 与 npm（拉代码、装依赖）；访问者如何连到服务器（SSH 隧道，或待认证接入后的网址）。
 - 算力：有无 NVIDIA 显卡跑 BGE-M3；没有时检索查询仍可用但更慢（未实测具体耗时），全量导入不宜在这样的服务器上做，改为从已有部署迁移数据。
 - 磁盘：`DATA_DIR` 约 15 GB，另加 Qdrant 数据与备份空间。
