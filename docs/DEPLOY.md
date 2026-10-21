@@ -66,7 +66,7 @@ sudo systemctl start guance-app
 deploy/guance.sh status
 ```
 
-退回旧版本：先记下更新前的提交（`git log -1`），`git checkout <原提交>` 后重复上面的安装、构建、启动三步。
+退回旧版本：先记下更新前的提交（`git log -1`），`git checkout <原提交>` 后重复上面的安装、构建、启动三步。中途失败一时修不好、期间机器可能重启时，先 `sudo systemctl disable guance-app`，免得开机自启跑未构建完的版本；修好后 `sudo systemctl enable --now guance-app`。
 
 ## WSL
 
