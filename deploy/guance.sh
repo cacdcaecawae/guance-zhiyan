@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
-# 管策智研一键部署脚本（Linux / WSL）。说明见 docs/DEPLOY.md。
-#   deploy/guance.sh run              前台常驻：启动 Qdrant、向量服务（配置了才由本脚本启动）与网站，
-#                                     任一进程退出 5 秒后重启；Ctrl+C 或 SIGTERM 时全部停止。同一仓库只运行一份
-#   deploy/guance.sh status           守护进程、各服务健康检查与代码版本
-#   deploy/guance.sh update [版本]    在临时工作树中安装并构建（默认 origin/main），通过后暂停网站、切换并重启；失败则退回
-#   deploy/guance.sh stop             停止 run 启动的全部服务
+# 管策智研部署脚本（Linux / WSL，由 systemd 守护）。说明见 docs/DEPLOY.md。
+#   deploy/guance.sh install          生成 systemd 服务（Qdrant 与向量服务在 deploy/.env 配置了才装，网站总是装），设为开机自启并（重新）启动
+#   deploy/guance.sh status           各服务的运行状态、健康检查与代码版本
+#   deploy/guance.sh update [版本]    停网站 → 拉取并切换到该版本（默认 origin/main）→ 安装依赖 → 构建 → 启动网站；任一步失败网站保持停止
+#   deploy/guance.sh units <目录>     只把 systemd 单元生成到目录（检查用），不安装
+# 停止、重启与日志用 systemctl / journalctl，如 sudo systemctl restart guance-app、journalctl -u guance-app。
+# qdrant、embedding、app 是 systemd 调用的服务入口，也可在前台单独运行排查。
 # 进程配置在 deploy/.env（从 deploy/.env.example 复制）；模型密钥、端口、数据目录等应用配置只在 server/.env。
 set -uo pipefail
 SELF=$(readlink -f "$0")
@@ -12,7 +13,7 @@ SELF=$(readlink -f "$0")
 cd "$(dirname "$SELF")/.." || exit 1
 
 # deploy/.env 只放进程配置，且不导出给服务进程。应用配置若写在这里，网站与 pnpm rag 会用不同的数据目录等设置
-PROCESS_KEYS='PATH|QDRANT_BIN|QDRANT_STORAGE|EMBED_CMD|APP_MODE|LOG_DIR'
+PROCESS_KEYS='PATH|QDRANT_BIN|QDRANT_STORAGE|EMBED_CMD|APP_MODE'
 errors=()
 if [ -f deploy/.env ]; then
   misplaced=$(grep -E '^[[:space:]]*(export[[:space:]]+)?[A-Za-z_][A-Za-z0-9_]*=' deploy/.env |
@@ -26,16 +27,13 @@ case "${APP_MODE:-local}" in
   local | server) ;;
   *) errors+=("APP_MODE 只能是 local 或 server（现为 $APP_MODE）。") ;;
 esac
-# 配置有误时拒绝启动和更新；status 与 stop 照常执行，已在运行的服务始终能查看和停止
+[ -z "${QDRANT_BIN:-}" ] || [ -n "${QDRANT_STORAGE:-}" ] ||
+  errors+=("设置了 QDRANT_BIN 时须同时设置 QDRANT_STORAGE（Qdrant 数据目录）。")
+# 配置有误时 status 照常执行并显示问题；服务入口以 78 退出（单元里 RestartPreventExitStatus=78，systemd 不再反复重启）
 if [ ${#errors[@]} -gt 0 ]; then
   printf '%s\n' "${errors[@]}" >&2
-  case "${1:-}" in status | stop) ;; *) exit 1 ;; esac
+  case "${1:-}" in status) ;; qdrant | embedding | app) exit 78 ;; *) exit 1 ;; esac
 fi
-LOG_DIR=${LOG_DIR:-deploy/logs}
-mkdir -p "$LOG_DIR"
-SERVICES=(qdrant embedding app)
-
-log() { echo "$(date '+%F %T') $*" | tee -a "$LOG_DIR/run.log"; }
 
 # server/.env 的一项应用配置，用 Node 自己的解析（行尾注释、export、引号、等号两侧空格与网站读到的一致）；
 # 环境变量中已有时以它为准，与 node --env-file 一致
@@ -47,122 +45,136 @@ setting() {
   echo "${value:-${2:-}}"
 }
 
-# 进程组里是否还有本脚本启动、未退出的进程（僵尸进程不算）。服务以进程组运行，组长退出后子进程可能还在。
-# 本脚本启动的进程都带 GUANCE_ROOT=仓库目录：进程号文件可能过时、号码被别的程序复用，没有这个标记的组不算、也不会被结束
-group_alive() {
-  local pid
-  [ -n "$1" ] || return 1
-  for pid in $(ps -e -o pid=,pgid=,stat= | awk -v g="$1" '$2 == g && $3 !~ /^Z/ { print $1 }'); do
-    tr '\0' '\n' <"/proc/$pid/environ" 2>/dev/null | grep -qxF "GUANCE_ROOT=$PWD" && return 0
-  done
-  return 1
-}
-
-# 结束整个进程组：先 TERM，20 秒后仍有进程则 KILL，确认全部退出才返回成功
-end_group() {
-  group_alive "$1" || return 0
-  kill -TERM -- "-$1" 2>/dev/null
-  for _ in $(seq 20); do
-    group_alive "$1" || return 0
-    sleep 1
-  done
-  kill -KILL -- "-$1" 2>/dev/null
-  for _ in $(seq 5); do
-    group_alive "$1" || return 0
-    sleep 1
-  done
-  return 1
-}
-
-# 记录在案、仍有进程存活的组：守护进程自身的组（含各服务的守护子 shell）与各服务的组
-live_groups() {
-  local name pid
-  for name in run "${SERVICES[@]}"; do
-    pid=$(cat "$LOG_DIR/$name.pid" 2>/dev/null)
-    group_alive "$pid" && echo "$pid"
-  done
-}
-
-run() {
-  # 自成进程组，stop 才能连同守护子 shell 一起结束（终端前台与 systemd 下本来就是；从 wsl.exe 等非交互 shell 启动时不是）
-  # 同时带上 GUANCE_ROOT 重新执行，让守护进程自身也有标记（export 不会改变已启动进程的环境记录）
-  if [ "${GUANCE_ROOT:-}" != "$PWD" ]; then
-    if [ "$(ps -o pgid= $$ | tr -d ' ')" = $$ ]; then
-      GUANCE_ROOT=$PWD exec bash "$SELF" run
-    fi
-    GUANCE_ROOT=$PWD exec setsid bash "$SELF" run
-  fi
-  exec 9>"$LOG_DIR/run.lock"
-  if ! flock -n 9 || [ -n "$(live_groups)" ]; then
-    if kill -0 "$(cat "$LOG_DIR/run.pid" 2>/dev/null)" 2>/dev/null && group_alive "$(cat "$LOG_DIR/run.pid")"; then
-      echo "已在运行（PID $(cat "$LOG_DIR/run.pid")）。查看状态：deploy/guance.sh status"
-      exit 0
-    fi
-    echo "上次未正常停止的进程仍在运行，先执行 deploy/guance.sh stop。"
-    exit 1
-  fi
-  echo $$ >"$LOG_DIR/run.pid"
-  local subshells=()
-  # 名称 命令…：在独立进程组中运行，退出后结束组内残留进程、5 秒后重启；收到停止信号时结束整个进程组
-  supervise() {
-    local name=$1
-    shift
-    (
-      child=
-      sleeper=
-      trap 'kill "$sleeper" 2>/dev/null; end_group "$child"; exit 0' TERM INT
-      while :; do
-        # update 切换代码期间（有 $name.hold）不启动；停在这里时写 $name.held，update 据此确认不会再有新进程
-        while [ -e "$LOG_DIR/$name.hold" ]; do
-          : >"$LOG_DIR/$name.held"
-          sleep 1 &
-          sleeper=$!
-          wait "$sleeper"
-        done
-        rm -f "$LOG_DIR/$name.held"
-        log "启动 $name"
-        # 关闭锁的文件描述符：服务进程不持有单实例锁
-        setsid "$@" 9>&- >>"$LOG_DIR/$name.log" 2>&1 &
-        child=$!
-        echo "$child" >"$LOG_DIR/$name.pid"
-        wait "$child"
-        log "$name 已退出（退出码 $?），5 秒后重启"
-        # 组长退出后子进程可能还占着端口或显存，先结束再重启
-        end_group "$child"
-        # 后台 sleep 再 wait：等待期间收到停止信号时立即处理
-        sleep 5 &
-        sleeper=$!
-        wait "$sleeper"
-      done
-    ) &
-    subshells+=($!)
+# ---- 服务入口：exec 成服务进程本身，systemd 按控制组管理它和它的子进程 ----
+qdrant() {
+  [ -n "${QDRANT_BIN:-}" ] || {
+    echo "deploy/.env 未设置 QDRANT_BIN。" >&2
+    exit 78
   }
-  trap 'trap - TERM INT; log "正在停止"; kill "${subshells[@]}" 2>/dev/null; wait; rm -f "$LOG_DIR"/*.pid; log "已全部停止"; exit 0' TERM INT
-
-  if [ -n "${QDRANT_BIN:-}" ]; then
-    : "${QDRANT_STORAGE:?设置了 QDRANT_BIN 时须同时设置 QDRANT_STORAGE（Qdrant 数据目录）}"
-    # 下面切换到数据目录运行 Qdrant，相对路径先按仓库根目录解析成绝对路径；不含 / 的可执行文件名按 PATH 查找
-    local storage bin=$QDRANT_BIN port
-    storage=$(realpath -m "$QDRANT_STORAGE")
-    [[ $bin == */* ]] && bin=$(realpath -m "$bin")
-    port=$(setting QDRANT_URL http://127.0.0.1:6333)
-    port=${port##*:}
-    port=${port%%/*}
-    [[ $port =~ ^[0-9]+$ ]] || port=6333
-    mkdir -p "$storage"
-    # Qdrant 默认监听所有网卡且不设密钥，这里限定本机；工作目录放在数据目录，避免在仓库里生成文件
-    supervise qdrant env -C "$storage" QDRANT__SERVICE__HOST=127.0.0.1 \
-      QDRANT__SERVICE__HTTP_PORT="$port" QDRANT__SERVICE__GRPC_PORT=$((port + 1)) \
-      QDRANT__STORAGE__STORAGE_PATH="$storage" QDRANT__STORAGE__SNAPSHOTS_PATH="$storage/snapshots" \
-      QDRANT__TELEMETRY_DISABLED=true "$bin"
-  fi
-  [ -n "${EMBED_CMD:-}" ] && supervise embedding bash -c "$EMBED_CMD"
+  local storage bin=$QDRANT_BIN port
+  # 下面切换到数据目录运行 Qdrant，相对路径先按仓库根目录解析成绝对路径；不含 / 的可执行文件名按 PATH 查找
+  storage=$(realpath -m "$QDRANT_STORAGE")
+  [[ $bin == */* ]] && bin=$(realpath -m "$bin")
+  port=$(setting QDRANT_URL http://127.0.0.1:6333)
+  port=${port##*:}
+  port=${port%%/*}
+  [[ $port =~ ^[0-9]+$ ]] || port=6333
+  mkdir -p "$storage" && cd "$storage" || exit 1
+  # Qdrant 默认监听所有网卡且不设密钥，这里限定本机；工作目录放在数据目录，避免在仓库里生成文件
+  QDRANT__SERVICE__HOST=127.0.0.1 QDRANT__SERVICE__HTTP_PORT=$port QDRANT__SERVICE__GRPC_PORT=$((port + 1)) \
+    QDRANT__STORAGE__STORAGE_PATH=$storage QDRANT__STORAGE__SNAPSHOTS_PATH=$storage/snapshots \
+    QDRANT__TELEMETRY_DISABLED=true exec "$bin"
+}
+embedding() {
+  [ -n "${EMBED_CMD:-}" ] || {
+    echo "deploy/.env 未设置 EMBED_CMD。" >&2
+    exit 78
+  }
+  exec bash -c "$EMBED_CMD"
+}
+app() {
   local mode=()
   [ "${APP_MODE:-local}" = local ] && mode=(--local)
-  supervise app node --env-file-if-exists=server/.env --disable-warning=ExperimentalWarning \
-    server/index.ts "${mode[@]}"
-  log "已启动（$(git log -1 --format=%h 2>/dev/null)），日志在 $LOG_DIR；停止：Ctrl+C 或 deploy/guance.sh stop"
-  wait
+  exec node --env-file-if-exists=server/.env --disable-warning=ExperimentalWarning server/index.ts "${mode[@]}"
+}
+
+# 由 systemd 管理的服务：Qdrant、向量服务只在 deploy/.env 配置了运行方式时才有
+services() {
+  [ -z "${QDRANT_BIN:-}" ] || echo qdrant
+  [ -z "${EMBED_CMD:-}" ] || echo embedding
+  echo app
+}
+
+units() {
+  local dir=$1 name deps
+  case $PWD in
+    *[[:space:]\\\"\'%\$]*)
+      echo "仓库路径含空格或 \\ \" ' % \$ 等字符，不能直接写进 systemd 单元：$PWD" >&2
+      return 1
+      ;;
+  esac
+  mkdir -p "$dir" || return 1
+  deps=$(services | grep -vx app | sed 's/.*/guance-&.service/' | paste -sd ' ')
+  for name in $(services); do
+    {
+      echo '[Unit]'
+      case $name in
+        qdrant) echo "Description=管策智研 Qdrant 向量库（$PWD）" ;;
+        embedding) echo "Description=管策智研向量服务（$PWD）" ;;
+        app)
+          echo "Description=管策智研网站（$PWD）"
+          # 先起 Qdrant 与向量服务；它们不可用时网站照常运行，文献库检索报错，恢复后无需重启网站
+          [ -z "$deps" ] || printf 'After=%s\nWants=%s\n' "$deps" "$deps"
+          ;;
+      esac
+      cat <<EOF
+
+[Service]
+User=$(id -un)
+WorkingDirectory=$PWD
+ExecStart=$PWD/deploy/guance.sh $name
+Restart=always
+RestartSec=5
+# 配置有误时入口以 78 退出：不再反复重启，status 会显示原因
+RestartPreventExitStatus=78
+# 停止时 systemd 结束整个控制组（含子进程）；20 秒内未退出的强制结束
+TimeoutStopSec=20
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=full
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    } >"$dir/guance-$name.service"
+  done
+}
+
+# 等网站健康检查通过，最长 60 秒；成功时输出第一个参数
+wait_app() {
+  local url
+  url="http://127.0.0.1:$(setting PORT 3001)/api/health"
+  for _ in $(seq 30); do
+    if curl -fsS -m 5 "$url" >/dev/null 2>&1; then
+      echo "$1"
+      return 0
+    fi
+    sleep 2
+  done
+  echo "网站 60 秒内未就绪（可能仍在启动），查看 journalctl -u guance-app 与 deploy/guance.sh status。" >&2
+  return 1
+}
+
+systemd_ready() {
+  [ -d /run/systemd/system ] && command -v systemctl >/dev/null
+}
+
+install_units() {
+  local dir name all=(qdrant embedding app) wanted
+  systemd_ready || {
+    echo "本机没有运行 systemd，无法安装服务；WSL 先按 docs/DEPLOY.md 打开 systemd。" >&2
+    exit 1
+  }
+  dir=$(mktemp -d)
+  units "$dir" || exit 1
+  wanted=$(services | sed 's/.*/guance-&/' | tr '\n' ' ')
+  echo "以下步骤需要管理员权限（sudo）：写入 /etc/systemd/system/ 下的 $wanted单元，设为开机自启并（重新）启动。"
+  # deploy/.env 去掉了 QDRANT_BIN 或 EMBED_CMD 时，之前装的对应服务一并停用并删除
+  for name in "${all[@]}"; do
+    if [ ! -e "$dir/guance-$name.service" ] && [ -e "/etc/systemd/system/guance-$name.service" ]; then
+      sudo systemctl disable --now "guance-$name" && sudo rm "/etc/systemd/system/guance-$name.service" || exit 1
+    fi
+  done
+  # shellcheck disable=SC2086 # 单元名不含空格
+  if ! { sudo install -m 644 "$dir"/*.service /etc/systemd/system/ && sudo systemctl daemon-reload &&
+    sudo systemctl enable $wanted && sudo systemctl restart $wanted; }; then
+    rm -rf "$dir"
+    echo "安装失败（见上面的报错）。" >&2
+    exit 1
+  fi
+  rm -rf "$dir"
+  wait_app "已安装并启动：$wanted（开机自启）。查看状态：deploy/guance.sh status" || exit 1
 }
 
 # 带可选密钥的 GET / POST：密钥用内建 printf 经管道交给 curl，不出现在任何进程的参数里
@@ -175,150 +187,101 @@ fetch_with_key() {
     curl -fsS "$@"
   fi
 }
-# 用网站自己的配置读取与向量客户端发同样的请求（含维度、密钥），并按网站的规则校验返回的条数与维度
+# 用网站自己的网络设置（出站代理）、配置读取与向量客户端发同样的请求（含维度、密钥），并按网站的规则校验返回的条数与维度
 embedding_ok() {
   node --env-file-if-exists=server/.env --disable-warning=ExperimentalWarning --input-type=module -e "
+    import { configureNetwork } from './server/network.ts'
     import { ragConfig } from './server/rag.ts'
     import { Embeddings } from './server/rag-embedding.ts'
-    await new Embeddings(ragConfig().embedding).embed(['健康检查'], undefined, 0)"
+    const disposeNetwork = await configureNetwork()
+    try {
+      await new Embeddings(ragConfig().embedding).embed(['健康检查'], undefined, 0)
+    } finally {
+      await disposeNetwork()
+    }"
 }
 campus_ok() {
   fetch_with_key "$(setting CAMPUS_API_KEY)" -m 10 "$(setting CAMPUS_BASE_URL http://10.27.66.12 | sed 's#/*$##')/v1/models"
 }
 
+# update 失败时写下原因，status 在网站停着时显示
+update_failed=$(git rev-parse --git-path guance-update-failed 2>/dev/null)
+
 status() {
-  local pid
-  pid=$(cat "$LOG_DIR/run.pid" 2>/dev/null)
-  if group_alive "$pid" && kill -0 "$pid" 2>/dev/null; then
-    echo "守护进程：运行中（PID $pid）"
-  elif [ -n "$(live_groups)" ]; then
-    echo "守护进程：已异常退出，仍有遗留进程，执行 deploy/guance.sh stop 清理"
+  local name
+  if systemd_ready; then
+    for name in qdrant embedding app; do
+      if [ "$(systemctl show -p LoadState --value "guance-$name" 2>/dev/null)" = loaded ]; then
+        echo "guance-$name：$(systemctl is-active "guance-$name")"
+      else
+        echo "guance-$name：未安装"
+      fi
+    done
   else
-    echo "守护进程：未运行"
+    echo "systemd 未运行：各服务没有被守护"
   fi
+  if [ -n "$update_failed" ] && [ -e "$update_failed" ] && ! systemctl is-active -q guance-app 2>/dev/null; then
+    echo "网站：已停止，上次更新失败——$(cat "$update_failed")"
+  fi
+  # 名称 单元 命令…
   check() {
-    local name=$1
-    shift
-    if "$@" >/dev/null 2>&1; then echo "$name：正常"; else echo "$name：无响应（日志：$LOG_DIR）"; fi
+    local label=$1 unit=$2
+    shift 2
+    if "$@" >/dev/null 2>&1; then echo "$label：正常"; else echo "$label：无响应（由本机管理时看 journalctl -u $unit）"; fi
   }
-  [ ! -e "$LOG_DIR/app.hold" ] ||
-    echo "网站：已暂停（更新中，或更新中断、退回失败，见 $LOG_DIR/run.log；确认代码与依赖无误后删除 $LOG_DIR/app.hold 恢复）"
-  check 网站 curl -fsS -m 5 "http://127.0.0.1:$(setting PORT 3001)/api/health"
-  check Qdrant curl -fsS -m 5 "$(setting QDRANT_URL http://127.0.0.1:6333 | sed 's#/*$##')/readyz"
+  check 网站 guance-app curl -fsS -m 5 "http://127.0.0.1:$(setting PORT 3001)/api/health"
+  check Qdrant guance-qdrant curl -fsS -m 5 "$(setting QDRANT_URL http://127.0.0.1:6333 | sed 's#/*$##')/readyz"
   if [ -z "$(setting EMBEDDING_URL)" ]; then
     echo "向量服务：未配置（server/.env 的 EMBEDDING_URL 为空，文献库不可用）"
   else
-    check 向量服务 embedding_ok
+    check 向量服务 guance-embedding embedding_ok
   fi
-  [ -n "$(setting CAMPUS_API_KEY)" ] && check 校内模型 campus_ok
+  [ -n "$(setting CAMPUS_API_KEY)" ] && check 校内模型 - campus_ok
   echo "代码版本：$(git log -1 --format='%h %s' 2>/dev/null)"
 }
 
 update() {
-  local ref=${1:-origin/main} stage=deploy/.update previous target
+  local ref=${1:-origin/main}
+  [ -n "$update_failed" ] || {
+    echo "不在 git 仓库中，无法更新。" >&2
+    exit 1
+  }
+  systemd_ready && [ "$(systemctl show -p LoadState --value guance-app 2>/dev/null)" = loaded ] || {
+    echo "网站服务未安装，先执行 deploy/guance.sh install。" >&2
+    exit 1
+  }
   if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
-    echo "工作区有未提交的改动，先提交或撤销后再更新（模板文件请复制后修改副本，不要改仓库里的）。"
+    echo "工作区有未提交的改动，先提交或撤销后再更新。" >&2
     exit 1
   fi
-  previous=$(git rev-parse HEAD)
-  git worktree remove --force "$stage" 2>/dev/null
-  git worktree prune
-  # 先在临时工作树里安装并构建，失败时正在使用的代码、依赖与 dist/ 都不动
-  if ! { git fetch origin && git worktree add -q --detach "$stage" "$ref" &&
-    (cd "$stage" && pnpm install --frozen-lockfile --prefer-offline && pnpm build); }; then
-    git worktree remove --force "$stage" 2>/dev/null
-    log "更新到 $ref 失败（构建未通过），仍为 $(git log -1 --format=%h)，网站未重启"
+  # 两次 update 同时运行会在同一工作区里交替切换代码、安装依赖
+  exec 8>"$(git rev-parse --git-path guance-update.lock)"
+  flock -n 8 || {
+    echo "另一次 update 正在进行。" >&2
     exit 1
-  fi
-  target=$(git -C "$stage" rev-parse HEAD)
-  # 构建通过后切换代码、依赖与 dist/。期间网站必须停着且不被守护进程重启，否则跑的版本可能与代码、页面不一致
-  if ! pause_app; then
-    git worktree remove --force "$stage"
-    rm -f "$LOG_DIR/app.hold"
-    log "更新到 $ref 失败：未能暂停网站，仍为 $(git log -1 --format=%h)"
-    exit 1
-  fi
-  if git checkout -q --detach "$target" && pnpm install --frozen-lockfile --prefer-offline && swap_dist "$stage/dist"; then
-    git worktree remove --force "$stage"
-    rm -f "$LOG_DIR/app.hold"
-    log "已更新到 $(git log -1 --format='%h %s')"
-    group_alive "$(cat "$LOG_DIR/run.pid" 2>/dev/null)" && echo "网站正在以新版本启动。" ||
-      echo "服务未在运行，执行 deploy/guance.sh run 启动。"
+  }
+  echo "停止与启动网站需要管理员权限（sudo systemctl stop / start guance-app）。"
+  sudo systemctl stop guance-app || exit 1
+  # 网站停着时切换代码、依赖与 dist/；任一步失败都不启动网站，以免运行代码、依赖与页面不一致的版本
+  if git fetch origin && git checkout -q --detach "$ref" && pnpm install --frozen-lockfile --prefer-offline && pnpm build; then
+    rm -f "$update_failed"
+    sudo systemctl start guance-app || exit 1
+    wait_app "已更新到 $(git log -1 --format='%h %s')，网站已启动。" || exit 1
     return
   fi
-  git worktree remove --force "$stage" 2>/dev/null
-  if git checkout -q --detach "$previous" && pnpm install --frozen-lockfile --prefer-offline; then
-    rm -f "$LOG_DIR/app.hold"
-    log "切换到 $ref 失败，已退回 $(git log -1 --format=%h)，网站以原版本重新启动"
-  else
-    # 不恢复网站：依赖可能不完整，启动的会是混合版本
-    log "切换到 $ref 失败，且未能退回 ${previous:0:7}：依赖可能不完整，网站保持暂停；修复后删除 $LOG_DIR/app.hold 恢复"
-  fi
+  echo "$(date '+%F %T') 更新到 $ref 失败，代码现为 $(git log -1 --format=%h)，网站保持停止；修复后重新执行 deploy/guance.sh update，或确认代码与依赖无误后 sudo systemctl start guance-app。" |
+    tee "$update_failed" >&2
   exit 1
 }
 
-# 暂停网站：标记 app.hold 让守护进程不再启动它，结束正在运行的网站，直到守护进程停在暂停处（写出 app.held）
-pause_app() {
-  rm -f "$LOG_DIR/app.held"
-  : >"$LOG_DIR/app.hold"
-  # 守护进程未运行：没有会启动网站的进程，标记本身就挡住此后启动的 run
-  group_alive "$(cat "$LOG_DIR/run.pid" 2>/dev/null)" || return 0
-  # 守护进程在网站退出、等过重启间隔后才回到暂停处，约 6 秒；每轮都结束一次当前网站，覆盖标记前刚好启动的那个
-  for _ in $(seq 30); do
-    end_group "$(cat "$LOG_DIR/app.pid" 2>/dev/null)" || return 1
-    [ -e "$LOG_DIR/app.held" ] && return 0
-    sleep 1
-  done
-  return 1
-}
-
-# 用新页面整体替换 dist/；失败时放回原页面
-swap_dist() {
-  rm -rf dist.old || return 1
-  if [ -e dist ]; then mv dist dist.old || return 1; fi
-  if mv "$1" dist; then
-    rm -rf dist.old
-    return 0
-  fi
-  [ ! -e dist.old ] || mv dist.old dist || log "未能放回原页面，请手动把 dist.old 改名为 dist"
-  return 1
-}
-
-stop() {
-  local pid groups group failed= running=
-  pid=$(cat "$LOG_DIR/run.pid" 2>/dev/null)
-  if group_alive "$pid" && kill -0 "$pid" 2>/dev/null; then
-    running=1
-    # 守护进程收到 TERM 后逐个结束各服务进程组，最长约 25 秒
-    kill -TERM "$pid"
-    for _ in $(seq 40); do
-      kill -0 "$pid" 2>/dev/null || break
-      sleep 1
-    done
-  fi
-  # 守护进程异常退出、或停止后仍有残留时，直接结束记录在案的各进程组（守护进程的组在前，先结束会重启服务的子 shell）
-  groups=$(live_groups)
-  if [ -z "$groups" ]; then
-    rm -f "$LOG_DIR"/*.pid
-    [ -n "$running" ] && echo "已停止。" || echo "未在运行。"
-    return
-  fi
-  for group in $groups; do end_group "$group" || failed=1; done
-  if [ -n "$failed" ] || [ -n "$(live_groups)" ]; then
-    echo "仍有进程未能结束（进程组：$(live_groups | tr '\n' ' ')），请查看 $LOG_DIR/run.log。"
-    exit 1
-  fi
-  rm -f "$LOG_DIR"/*.pid
-  echo "已停止（并结束了遗留进程）。"
-}
-
 case "${1:-}" in
-  run) run ;;
+  install) install_units ;;
   status) status ;;
   update) update "${2:-}" ;;
-  stop) stop ;;
+  units) units "${2:?用法：deploy/guance.sh units <目录>}" ;;
+  qdrant | embedding | app) "$1" ;;
   *)
-    sed -n '2,8p' "$SELF" | sed 's/^# \{0,1\}//'
+    sed -n '2,9p' "$SELF" | sed 's/^# \{0,1\}//'
     exit 2
     ;;
 esac

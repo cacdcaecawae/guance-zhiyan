@@ -1,28 +1,31 @@
 #!/usr/bin/env bash
-# deploy/guance.sh 冒烟测试（Linux / WSL，CI 中运行）：用替身代替 Qdrant 与向量服务，网站用真实入口（需先 pnpm build）。
-# 覆盖：deploy/.env 写了应用配置、有语法错误或 APP_MODE 无效时拒绝启动，而 status、stop 照常可用；启动与健康检查
-# （向量服务按配置的维度检查）；Qdrant 只监听本机且相对路径按仓库根目录解析；健康检查不在进程参数里暴露密钥；
-# server/.env 的行尾注释、export 与空格写法按 Node 的规则读取；进程退出后自动重启、重复启动被拒；守护进程异常结束
-# （含各服务都在重启等待中）后的清理；停止时等整个进程组退出（组长先退、子进程不理会 TERM）；进程号被别的程序复用时
-# 不误杀；以及在 git 仓库中时 update 的构建失败、切换依赖期间网站退出、替换页面失败与成功路径。
+# deploy/guance.sh 冒烟测试（Linux / WSL，CI 中运行；需先 pnpm build）。Qdrant 与向量服务用替身，网站用真实入口。
+# 总是测：生成的 systemd 单元通过 systemd-analyze verify；deploy/.env 写了应用配置、有语法错误或 APP_MODE 无效时 install
+# 拒绝、服务入口以 78 退出；直接运行各服务入口时的健康检查（向量服务按配置的维度检查、经出站代理才能访问时也正常）；
+# Qdrant 只监听本机且相对路径按仓库根目录解析；健康检查不在进程参数里暴露密钥；server/.env 的行尾注释、export 与空格写法
+# 按 Node 的规则读取。有 systemd 与免密 sudo、且本机没有已装的 guance-* 服务和 server/.env 时（如 CI），再真实安装：
+# 开机自启、加固选项生效且数据目录可写、崩溃后自动重启、update 的失败与成功、停止后不留进程。
 set -euo pipefail
 cd "$(dirname "$(readlink -f "$0")")/.."
-ROOT=$PWD
 if [ -f deploy/.env ]; then
   echo "deploy/.env 存在（已部署的仓库），不在这里运行测试。" >&2
   exit 1
 fi
-T=$(mktemp -d)
+# 不放在 /tmp：单元带 PrivateTmp=yes，服务看到的是自己的 /tmp
+mkdir -p "$HOME/.cache"
+T=$(mktemp -d "$HOME/.cache/guance-smoke.XXXXXX")
 G=deploy/guance.sh
+UNITS=(guance-qdrant guance-embedding guance-app)
 # 应用配置经环境变量传入（优先于 server/.env，网站与 status 一致）；Qdrant 路径故意写成相对仓库根目录的形式
-export LOG_DIR=$T/logs DATA_DIR=$T/data PORT=33411 QDRANT_URL=http://127.0.0.1:33433 \
+export DATA_DIR=$T/data PORT=33411 QDRANT_URL=http://127.0.0.1:33433 \
   EMBEDDING_URL=http://127.0.0.1:33481/embeddings EMBEDDING_MODEL=fake EMBEDDING_DIMENSIONS=2 \
   EMBEDDING_API_KEY=secret-test-key-1234 APP_MODE=local \
   QDRANT_STORAGE=$(realpath --relative-to=. "$T/qdrant") QDRANT_BIN=$(realpath --relative-to=. "$T/qdrant-bin")
 cat >"$T/fake.py" <<'EOF'
-# 替身：Qdrant（记下收到的配置）或向量服务（返回固定向量，响应前停 2 秒，便于检查进程参数；忽略 SIGTERM）
-import json, os, signal, sys, time
-from http.server import BaseHTTPRequestHandler, HTTPServer
+# 替身：Qdrant（记下收到的配置）或向量服务（返回固定 2 维向量，响应前停 2 秒，便于检查进程参数；忽略 SIGTERM；
+# 兼作 HTTP 代理：CONNECT 隧道一律接到自己，用于“只能经代理访问”的向量服务）
+import json, os, select, signal, socket, sys, time
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 kind = sys.argv[1]
 if kind == "qdrant":
     json.dump({k: v for k, v in os.environ.items() if k.startswith("QDRANT__")} | {"cwd": os.getcwd()},
@@ -33,79 +36,127 @@ else:
     signal.signal(signal.SIGTERM, signal.SIG_IGN)
 class H(BaseHTTPRequestHandler):
     def reply(self, body):
-        self.send_response(200); self.end_headers(); self.wfile.write(body)
+        self.send_response(200); self.send_header("Content-Length", str(len(body))); self.end_headers()
+        self.wfile.write(body)
     def do_GET(self):
         self.reply(b"ok")
     def do_POST(self):
+        self.rfile.read(int(self.headers.get("Content-Length", 0)))
         time.sleep(2)
         self.reply(json.dumps({"data": [{"index": 0, "embedding": [1, 0]}]}).encode())
+    def do_CONNECT(self):
+        up = socket.create_connection(("127.0.0.1", port))
+        self.send_response(200); self.end_headers()
+        ends = [self.connection, up]
+        while True:
+            ready, _, _ = select.select(ends, [], [], 30)
+            if not ready: return
+            for end in ready:
+                data = end.recv(65536)
+                if not data: return
+                (up if end is self.connection else self.connection).sendall(data)
     def log_message(self, *a):
         pass
-HTTPServer((host, port), H).serve_forever()
+ThreadingHTTPServer((host, port), H).serve_forever()
 EOF
 printf '#!/bin/sh\nexec python3 %s qdrant\n' "$T/fake.py" >"$T/qdrant-bin"
 chmod +x "$T/qdrant-bin"
-# 两条命令：bash 不能直接 exec，python 成为 bash 的子进程且不理会 TERM，验证停止时等整个进程组退出
+# 两条命令：bash 不能直接 exec，python 成为 bash 的子进程且不理会 TERM，验证停止时结束整个控制组
 export EMBED_CMD="python3 $T/fake.py embedding 33481; true"
+installed=
 leftovers() { pgrep -f "$T/fake.py|server/index.ts --local" | wc -l; }
 healthy() { [ "$(grep -cE '^(网站|Qdrant|向量服务)：正常$' <<<"$1")" = 3 ]; }
+stop_direct() {
+  local pid
+  for pid in $(cat "$T/direct.pids" 2>/dev/null); do kill -KILL -- "-$pid" 2>/dev/null || true; done
+  rm -f "$T/direct.pids"
+}
+cleanup() {
+  stop_direct
+  if [ -n "$installed" ]; then
+    sudo systemctl disable --now "${UNITS[@]}" >/dev/null 2>&1 || true
+    for unit in "${UNITS[@]}"; do sudo rm -f "/etc/systemd/system/$unit.service"; done
+    sudo systemctl daemon-reload
+  fi
+  # 开始时已确认 deploy/.env 不存在；server/.env 只删本测试建的
+  rm -f deploy/.env
+  [ ! -e "$T/server-env" ] || rm -f server/.env
+  rm -rf "$T"
+}
+trap cleanup EXIT
 fail() {
   echo "失败：$*" >&2
-  tail -n 20 "$LOG_DIR"/*.log >&2 || true
-  # 开始时已确认 deploy/.env 不存在；server/.env 只删本测试建的
-  rm -f deploy/.env "$LOG_DIR/app.hold"
-  [ ! -e "$T/server-env" ] || rm -f server/.env
-  bash $G stop >/dev/null || true
+  tail -n 20 "$T"/*.log >&2 2>/dev/null || true
+  [ -z "$installed" ] || sudo -n journalctl -n 40 --no-pager "${UNITS[@]/#/-u}" >&2 || true
   exit 1
 }
-start() {
-  setsid bash $G run >>"$T/run.out" 2>&1 </dev/null &
-  disown
+wait_healthy() {
   local status=
   for _ in $(seq 60); do
-    status=$(bash $G status) || true
+    status=$(bash $G status 2>&1) || true
     healthy "$status" && return 0
     sleep 2
   done
   echo "$status"
-  fail "60 秒内网站、Qdrant、向量服务未全部正常"
+  fail "$1：60 秒内网站、Qdrant、向量服务未全部正常"
 }
-wait_app() {
-  for _ in $(seq 60); do
-    curl -fs "http://127.0.0.1:$PORT/api/health" >/dev/null && return 0
-    sleep 2
+# 直接运行三个服务入口（不经 systemd），各自成一个进程组以便结束
+start_direct() {
+  local name
+  for name in qdrant embedding app; do
+    setsid bash $G $name >>"$T/$name.log" 2>&1 </dev/null &
+    echo $! >>"$T/direct.pids"
+    disown
   done
-  fail "$1"
+  wait_healthy "直接运行服务入口"
 }
-clean_after_stop() {
-  sleep 6 # 超过重启间隔：若有守护子 shell 遗留，会把服务重新拉起
-  [ "$(leftovers)" = 0 ] || fail "$1：仍有进程 $(pgrep -af "$T/fake.py|server/index.ts --local")"
-}
-# deploy/.env 为第一个参数时 run 应立即退出、不启动任何服务，并给出第二个参数中的提示（timeout 只防测试卡住）
+# deploy/.env 为第一个参数时 install 应拒绝并给出第二个参数中的提示，服务入口以 78 退出（timeout 只防测试卡住）
 refused() {
   printf '%s\n' "$1" >deploy/.env
-  local out
-  out=$(timeout 60 bash $G run 2>&1) && fail "deploy/.env 为 $1 时仍启动"
-  rm deploy/.env
+  local out code=0
+  out=$(timeout 60 bash $G install 2>&1) && fail "deploy/.env 为 $1 时 install 仍执行"
   grep -q "$2" <<<"$out" || fail "deploy/.env 为 $1 时未提示 $2：$out"
-  [ -z "$(ls "$LOG_DIR"/*.pid 2>/dev/null)" ] || fail "deploy/.env 为 $1 时仍启动了服务"
+  timeout 60 bash $G app >/dev/null 2>&1 || code=$?
+  [ "$code" = 78 ] || fail "deploy/.env 为 $1 时网站入口退出码为 $code（应为 78）"
+  rm deploy/.env
 }
 
-echo "== deploy/.env 写了应用配置、有语法错误或 APP_MODE 无效时拒绝启动"
+echo "== deploy/.env 写了应用配置、有语法错误或 APP_MODE 无效时拒绝"
 refused DATA_DIR=/elsewhere 'DATA_DIR 移到 server/.env'
 refused 'EMBED_CMD="unterminated' 'deploy/.env 读取失败'
 refused APP_MODE=locla 'APP_MODE 只能是 local 或 server'
 
-echo "== 启动与健康检查"
-start
+echo "== 生成的 systemd 单元"
+bash $G units "$T/units"
+[ "$(ls "$T/units")" = "$(printf '%s.service\n' guance-app guance-embedding guance-qdrant)" ] ||
+  fail "单元不全：$(ls "$T/units")"
+for unit in "$T"/units/*.service; do
+  for line in Restart=always RestartSec=5 RestartPreventExitStatus=78 NoNewPrivileges=yes PrivateTmp=yes \
+    ProtectSystem=full UMask=0077 "ExecStart=$PWD/deploy/guance.sh"; do
+    grep -q "^$line" "$unit" || fail "$(basename "$unit") 缺少 $line"
+  done
+done
+grep -qx 'Wants=guance-qdrant.service guance-embedding.service' "$T/units/guance-app.service" ||
+  fail "网站未依赖 Qdrant 与向量服务"
+if command -v systemd-analyze >/dev/null; then
+  systemd-analyze verify "$T"/units/*.service || fail "systemd-analyze verify 未通过"
+else
+  echo "（没有 systemd-analyze，跳过 verify）"
+fi
+
+echo "== 直接运行服务入口：健康检查"
+start_direct
 grep -q "\"QDRANT__SERVICE__HOST\": \"127.0.0.1\"" "$T/qdrant/env.json" || fail "Qdrant 未限定监听本机"
 grep -q "\"QDRANT__SERVICE__HTTP_PORT\": \"33433\"" "$T/qdrant/env.json" || fail "Qdrant 端口未取自 QDRANT_URL"
 grep -q "\"cwd\": \"$T/qdrant\"" "$T/qdrant/env.json" || fail "Qdrant 相对路径未按仓库根目录解析"
-grep -q '已在运行' <<<"$(bash $G run)" || fail "重复启动未被拒绝"
 # 替身固定返回 2 维；配置成 3 维时网站的请求会失败，健康检查也必须报错
 # 先取输出再匹配：直接接管道时 grep -q 提前退出，status 收到 SIGPIPE，pipefail 下整条管道失败、fail 不会执行
 out=$(EMBEDDING_DIMENSIONS=3 bash $G status)
 grep -q '^向量服务：正常$' <<<"$out" && fail "维度与向量服务不符时仍报告正常"
+# 向量服务的主机名只有代理能解析：网站经 configureNetwork 走代理能取到向量，健康检查也必须走同一代理
+out=$(HTTP_PROXY=http://127.0.0.1:33481 NO_PROXY=127.0.0.1,localhost \
+  EMBEDDING_URL=http://guance-embed.invalid:33481/embeddings bash $G status)
+grep -q '^向量服务：正常$' <<<"$out" || fail "只能经代理访问的向量服务被报告为无响应：$out"
 
 echo "== 健康检查期间密钥不出现在任何进程的参数里"
 bash $G status >/dev/null &
@@ -115,45 +166,10 @@ sleep 1
 echo "$EMBEDDING_API_KEY" >"$T/secret"
 exposed=$(grep -lFf "$T/secret" /proc/[0-9]*/cmdline 2>/dev/null || true)
 [ -z "$exposed" ] || fail "密钥出现在进程参数中：$(for f in $exposed; do tr '\0' ' ' <"$f"; echo; done)"
-
 wait $checker || true
-
-echo "== 网站被强制结束后自动重启"
-old=$(cat "$LOG_DIR/app.pid")
-kill -9 "$old"
-for _ in $(seq 60); do
-  new=$(cat "$LOG_DIR/app.pid" 2>/dev/null) || true
-  [ "$new" != "$old" ] && curl -fs "http://127.0.0.1:$PORT/api/health" >/dev/null && break
-  sleep 2
-done
-[ "$new" != "$old" ] || fail "网站退出后未重启"
-
-echo "== 守护进程在各服务都处于重启等待时被强制结束"
-for name in qdrant embedding app; do kill -KILL -- "-$(cat "$LOG_DIR/$name.pid")"; done
+stop_direct
 sleep 1
-kill -9 "$(cat "$LOG_DIR/run.pid")"
-grep -q '先执行 deploy/guance.sh stop' <<<"$(bash $G run)" || fail "守护进程异常结束后未拒绝重新启动"
-grep -q '遗留进程' <<<"$(bash $G status)" || fail "status 未提示遗留进程"
-bash $G stop | grep -q '已停止' || fail "stop 未完成清理"
-clean_after_stop "清理遗留的守护子 shell 后"
-
-echo "== 正常停止，deploy/.env 写错时也能查看和停止：等向量服务进程组整体退出（组长先退，子进程不理会 TERM）"
-start
-echo "DATA_DIR=/elsewhere" >deploy/.env
-grep -q '^守护进程：运行中' <<<"$(bash $G status 2>/dev/null)" || fail "deploy/.env 写错后 status 不可用"
-stopped=$(bash $G stop 2>/dev/null) || fail "deploy/.env 写错后 stop 失败：$stopped"
-rm deploy/.env
-[ "$stopped" = "已停止。" ] || fail "stop 输出异常：$stopped"
-clean_after_stop "正常停止后"
-[ -z "$(ls "$LOG_DIR"/*.pid 2>/dev/null)" ] || fail "停止后仍有进程号文件"
-
-echo "== 进程号被别的程序复用时，stop 不误杀"
-setsid sleep 120 &
-stranger=$!
-echo "$stranger" >"$LOG_DIR/app.pid"
-grep -q '未在运行' <<<"$(bash $G stop)" || fail "把无关进程当成了本服务"
-kill -0 "$stranger" 2>/dev/null || fail "无关进程被结束"
-kill "$stranger"
+[ "$(leftovers)" = 0 ] || fail "结束直接运行的服务后仍有进程"
 
 if [ -e server/.env ]; then
   echo "== 跳过 server/.env 写法测试（已有 server/.env）"
@@ -165,80 +181,68 @@ else
   saved=("QDRANT_URL=$QDRANT_URL" "PORT=$PORT" "EMBEDDING_MODEL=$EMBEDDING_MODEL")
   unset QDRANT_URL PORT EMBEDDING_MODEL
   rm -f "$T/qdrant/env.json"
-  start
+  start_direct
   grep -q "\"QDRANT__SERVICE__HTTP_PORT\": \"33433\"" "$T/qdrant/env.json" || fail "Qdrant 端口与网站读到的 QDRANT_URL 不一致"
-  bash $G stop >/dev/null
-  clean_after_stop "server/.env 写法测试后"
+  stop_direct
   rm server/.env "$T/server-env"
   export "${saved[@]}"
 fi
 
-if git rev-parse --is-inside-work-tree >/dev/null 2>&1 && [ -z "$(git status --porcelain --untracked-files=no)" ]; then
-  echo "== update：构建失败时不动正在使用的代码"
-  start
-  before=$(git rev-parse HEAD)
-  old=$(cat "$LOG_DIR/app.pid")
-  if bash $G update no-such-ref; then fail "不存在的版本却更新成功"; fi
-  [ "$(git rev-parse HEAD)" = "$before" ] && [ "$(cat "$LOG_DIR/app.pid")" = "$old" ] ||
-    fail "更新失败后代码或网站被改动"
-
-  # 替身 pnpm 与 mv：只在下面几次 update 时放在 PATH 最前，有标记文件时注入一次故障
-  mkdir "$T/inject"
-  cat >"$T/inject/pnpm" <<EOF
-#!/usr/bin/env bash
-# 在正在使用的工作区里安装依赖时：网站恰好退出（模拟崩溃），停 7 秒（超过重启间隔），记下网站进程数后报失败
-if [ "\$PWD" = "$ROOT" ] && [ "\$1" = install ] && [ -e "$T/fail-install" ]; then
-  rm "$T/fail-install"
-  kill -9 "\$(cat "$LOG_DIR/app.pid")" 2>/dev/null
-  sleep 7
-  pgrep -fc "server/index.ts --local" >"$T/apps-during-install" || true
-  exit 1
-fi
-exec $(command -v pnpm) "\$@"
-EOF
-  cat >"$T/inject/mv" <<EOF
-#!/usr/bin/env bash
-# 把新页面移到 dist/ 的那一步失败一次
-if [ -e "$T/fail-mv" ] && [[ "\$*" == *deploy/.update/dist* ]]; then
-  rm "$T/fail-mv"
-  exit 1
-fi
-exec $(command -v mv) "\$@"
-EOF
-  chmod +x "$T/inject/pnpm" "$T/inject/mv"
-
-  echo "== update：切换依赖期间网站退出时不被重启，失败后退回并以原版本恢复"
-  : >"$T/fail-install"
-  if PATH=$T/inject:$PATH bash $G update HEAD; then fail "切换依赖失败却报告更新成功"; fi
-  [ "$(cat "$T/apps-during-install" 2>/dev/null)" = 0 ] ||
-    fail "切换依赖期间网站被重新启动（$(cat "$T/apps-during-install" 2>/dev/null || echo 未注入故障)）"
-  [ "$(git rev-parse HEAD)" = "$before" ] || fail "切换失败后代码未退回"
-  wait_app "切换失败退回后网站未恢复"
-
-  echo "== update：替换页面失败时报告失败，放回原页面并退回代码"
-  : >dist/.smoke-marker
-  : >"$T/fail-mv"
-  if PATH=$T/inject:$PATH bash $G update HEAD; then fail "替换页面失败却报告更新成功"; fi
-  [ -e dist/.smoke-marker ] || fail "替换页面失败后原页面未放回"
-  [ "$(git rev-parse HEAD)" = "$before" ] || fail "替换页面失败后代码未退回"
-  wait_app "替换页面失败后网站未恢复"
-  rm dist/.smoke-marker
-
-  echo "== update：成功时切换并以新版本重启网站"
-  old=$(cat "$LOG_DIR/app.pid")
-  bash $G update HEAD || fail "更新到当前版本失败"
-  for _ in $(seq 60); do
-    new=$(cat "$LOG_DIR/app.pid" 2>/dev/null) || true
-    [ "$new" != "$old" ] && curl -fs "http://127.0.0.1:$PORT/api/health" >/dev/null && break
-    sleep 2
-  done
-  [ "$new" != "$old" ] || fail "更新后网站未重启"
-  [ ! -e deploy/.update ] || fail "更新后临时工作树未清理"
-  [ ! -e "$LOG_DIR/app.hold" ] || fail "更新后网站仍处于暂停"
-  bash $G stop >/dev/null
-  clean_after_stop "更新测试后"
+if ! { [ -d /run/systemd/system ] && sudo -n true 2>/dev/null; }; then
+  echo "== 跳过 systemd 安装测试（需要运行中的 systemd 与免密 sudo）"
+elif [ -e server/.env ] || ls /etc/systemd/system/guance-*.service >/dev/null 2>&1; then
+  echo "== 跳过 systemd 安装测试（本机已有 server/.env 或已装的 guance-* 服务）"
 else
-  echo "== 跳过 update 测试（不在 git 工作区，或工作区有改动）"
+  echo "== systemd：安装后开机自启、加固选项生效、数据目录可写"
+  # 服务不继承本 shell 的环境：应用配置写进 server/.env，进程配置写进 deploy/.env（node 不在 systemd 的默认 PATH 时补上）
+  : >"$T/server-env"
+  printf '%s\n' "DATA_DIR=$T/sdata" "PORT=$PORT" "QDRANT_URL=$QDRANT_URL" "EMBEDDING_URL=$EMBEDDING_URL" \
+    "EMBEDDING_MODEL=fake" "EMBEDDING_DIMENSIONS=2" "EMBEDDING_API_KEY=$EMBEDDING_API_KEY" >server/.env
+  printf '%s\n' "PATH=$(dirname "$(command -v node)"):/usr/local/bin:/usr/bin:/bin" "QDRANT_BIN=$QDRANT_BIN" \
+    "QDRANT_STORAGE=$QDRANT_STORAGE" "EMBED_CMD=\"$EMBED_CMD\"" APP_MODE=local >deploy/.env
+  unset DATA_DIR PORT QDRANT_URL EMBEDDING_URL EMBEDDING_MODEL EMBEDDING_DIMENSIONS EMBEDDING_API_KEY APP_MODE \
+    QDRANT_BIN QDRANT_STORAGE EMBED_CMD
+  rm -f "$T/qdrant/env.json"
+  installed=1
+  out=$(bash $G install) || fail "install 失败：$out"
+  grep -q '已安装并启动' <<<"$out" || fail "install 未报告启动：$out"
+  for unit in "${UNITS[@]}"; do
+    [ "$(systemctl is-enabled "$unit")" = enabled ] || fail "$unit 未设为开机自启"
+    hardening=$(systemctl show -p NoNewPrivileges,PrivateTmp,ProtectSystem,UMask "$unit" | sort | paste -sd ' ')
+    [ "$hardening" = "NoNewPrivileges=yes PrivateTmp=yes ProtectSystem=full UMask=0077" ] ||
+      fail "$unit 的加固选项未生效：$hardening"
+  done
+  wait_healthy "安装后"
+  out=$(bash $G status)
+  [ "$(grep -c '^guance-[a-z]*：active$' <<<"$out")" = 3 ] || fail "status 未显示三个服务运行中：$out"
+  [ -e "$T/sdata/app.sqlite" ] || fail "网站未能写入数据目录"
+  [ "$(stat -c %a "$T/qdrant/env.json")" = 600 ] || fail "Qdrant 未能写入数据目录，或 UMask 未生效"
+  [ "$(stat -c %U "$T/qdrant/env.json")" = "$(id -un)" ] || fail "服务未以安装账号运行"
+
+  echo "== systemd：网站被强制结束后自动重启"
+  old=$(systemctl show -p MainPID --value guance-app)
+  kill -9 "$old"
+  for _ in $(seq 30); do
+    new=$(systemctl show -p MainPID --value guance-app)
+    [ "$new" != 0 ] && [ "$new" != "$old" ] && curl -fs "http://127.0.0.1:33411/api/health" >/dev/null && break
+    sleep 1
+  done
+  [ "$new" != 0 ] && [ "$new" != "$old" ] || fail "网站退出后未重启"
+
+  echo "== update：失败时网站保持停止，status 显示原因"
+  before=$(git rev-parse HEAD)
+  if out=$(bash $G update no-such-ref 2>&1); then fail "不存在的版本却更新成功：$out"; fi
+  [ "$(systemctl is-active guance-app)" != active ] || fail "更新失败后网站仍被启动"
+  [ "$(git rev-parse HEAD)" = "$before" ] || fail "切换失败后代码被改动"
+  grep -q '上次更新失败' <<<"$(bash $G status)" || fail "status 未显示更新失败"
+
+  echo "== update：成功时以新版本启动网站"
+  out=$(bash $G update HEAD 2>&1) || fail "更新到当前版本失败：$out"
+  [ "$(systemctl is-active guance-app)" = active ] || fail "更新后网站未运行"
+  ! grep -q '上次更新失败' <<<"$(bash $G status)" || fail "更新成功后仍显示上次失败"
+
+  echo "== systemd：停止后不留进程（向量服务的子进程不理会 TERM）"
+  sudo systemctl stop "${UNITS[@]}"
+  [ "$(leftovers)" = 0 ] || fail "停止后仍有进程：$(pgrep -af "$T/fake.py|server/index.ts --local")"
 fi
-rm -rf "$T"
 echo "deploy/guance.sh 冒烟测试通过"

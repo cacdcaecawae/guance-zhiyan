@@ -26,7 +26,7 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm exec playwright install --with-deps chromium
       - run: pnpm check
-      # 部署脚本冒烟测试：沿用上一步构建的 dist/，Qdrant 与向量服务用替身
+      # 部署脚本冒烟测试：沿用上一步构建的 dist/，Qdrant 与向量服务用替身；运行器有 systemd 与免密 sudo，含真实安装
       - run: bash deploy/test.sh
       - name: Upload Playwright diagnostics
         if: failure()
