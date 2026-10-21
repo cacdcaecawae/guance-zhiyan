@@ -22,8 +22,9 @@ MAX_BODY = MAX_INPUTS * MAX_TOKENS * 16
 # 本服务的模型名，须与 server/.env 的 EMBEDDING_MODEL 一致：索引按这个名字记录用的是哪个模型，名字对不上的请求一律拒绝
 MODEL = os.environ.get("EMBEDDING_MODEL") or "bge-m3"
 # 请求体先读完、校验通过，才占推理名额：迟迟不发完正文的连接不占名额。同时在读请求体的连接最多 READERS 个，
-# 正文须在 BODY_SECONDS 内读完，每次读写套接字也最多等这么久（Handler.timeout），超时即断开连接。
-# 网站每批约 150 KB，本机回环几毫秒读完，32 MiB 的上限也远用不到 10 秒；排队等显卡不计入这个时限。
+# 每次读下一块前检查正文读取是否已超过 BODY_SECONDS，单次套接字读写也以 BODY_SECONDS 为超时。
+# 已开始的读取可继续等待；若这一块读完正文就接受，因此正文读取总耗时可能接近两倍 BODY_SECONDS。
+# 等待读取名额最多 BODY_SECONDS；排队等显卡不计入正文读取时间。
 # 请求体内存最多 (READERS + MAX_PENDING) × MAX_BODY
 BODY_SECONDS = 10
 # 同时在处理（含排队等显卡）的请求数上限，超出时返回 503（网站对 5xx 退避重试）。
@@ -49,7 +50,7 @@ def body_length(value):
 
 
 def read_body(rfile, length):
-    """在 BODY_SECONDS 内读完 length 字节：一点点地发、拖过时限的连接抛 TimeoutError。"""
+    """分块读取 length 字节；每块读取前检查累计时限，已开始的读取由套接字超时约束。"""
     deadline = time.monotonic() + BODY_SECONDS
     parts, left = [], length
     while left:
@@ -64,7 +65,7 @@ def read_body(rfile, length):
 
 
 class Handler(BaseHTTPRequestHandler):
-    timeout = BODY_SECONDS  # 每次读写套接字最多等这么久：请求头或正文迟迟不发完的连接被断开
+    timeout = BODY_SECONDS  # 单次套接字读写超时；正文累计时间由 read_body 在各块之间检查
 
     def reply(self, status, body):
         data = json.dumps(body).encode()
