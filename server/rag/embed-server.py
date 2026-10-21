@@ -16,7 +16,9 @@ import torch
 from transformers import AutoModel, AutoTokenizer
 
 DIMENSIONS = 1024
-MAX_TOKENS = 2048  # 片段最长 1600 字，远低于此；超出截断
+# BGE-M3 支持的最长输入。片段最长 1600 字，通常远短于此；但 OCR 杂字、少见符号、长网址按字节拆分时
+# 词元数可能超过字数，按字数估计的较小上限会悄悄截掉片段后半部分
+MAX_TOKENS = 8192
 MAX_INPUTS = 256
 
 device = "cuda" if torch.cuda.is_available() else "cpu"

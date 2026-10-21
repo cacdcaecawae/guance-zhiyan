@@ -3,7 +3,7 @@
 #   deploy/guance.sh run              前台常驻：启动 Qdrant、向量服务（配置了才由本脚本启动）与网站，
 #                                     任一进程退出 5 秒后重启；Ctrl+C 或 SIGTERM 时全部停止。同一仓库只运行一份
 #   deploy/guance.sh status           守护进程、各服务健康检查与代码版本
-#   deploy/guance.sh update [版本]    在临时工作树中安装并构建（默认 origin/main），成功后才切换并重启网站
+#   deploy/guance.sh update [版本]    在临时工作树中安装并构建（默认 origin/main），通过后暂停网站、切换并重启；失败则退回
 #   deploy/guance.sh stop             停止 run 启动的全部服务
 # 进程配置在 deploy/.env（从 deploy/.env.example 复制）；模型密钥、端口、数据目录等应用配置只在 server/.env。
 set -uo pipefail
@@ -13,15 +13,23 @@ cd "$(dirname "$SELF")/.." || exit 1
 
 # deploy/.env 只放进程配置，且不导出给服务进程。应用配置若写在这里，网站与 pnpm rag 会用不同的数据目录等设置
 PROCESS_KEYS='PATH|QDRANT_BIN|QDRANT_STORAGE|EMBED_CMD|APP_MODE|LOG_DIR'
+errors=()
 if [ -f deploy/.env ]; then
   misplaced=$(grep -E '^[[:space:]]*(export[[:space:]]+)?[A-Za-z_][A-Za-z0-9_]*=' deploy/.env |
     grep -vE "^[[:space:]]*(export[[:space:]]+)?($PROCESS_KEYS)=" | sed -E 's/^[[:space:]]*(export[[:space:]]+)?//; s/=.*//')
-  if [ -n "$misplaced" ]; then
-    echo "deploy/.env 只放进程配置（${PROCESS_KEYS//|/、}）；请把 $(echo $misplaced | tr ' ' '、') 移到 server/.env。" >&2
-    exit 1
-  fi
-  . deploy/.env
+  [ -z "$misplaced" ] ||
+    errors+=("deploy/.env 只放进程配置（${PROCESS_KEYS//|/、}）；请把 $(echo $misplaced | tr ' ' '、') 移到 server/.env。")
+  . deploy/.env || errors+=("deploy/.env 读取失败（见上面的报错），请改正后再执行。")
   export PATH
+fi
+case "${APP_MODE:-local}" in
+  local | server) ;;
+  *) errors+=("APP_MODE 只能是 local 或 server（现为 $APP_MODE）。") ;;
+esac
+# 配置有误时拒绝启动和更新；status 与 stop 照常执行，已在运行的服务始终能查看和停止
+if [ ${#errors[@]} -gt 0 ]; then
+  printf '%s\n' "${errors[@]}" >&2
+  case "${1:-}" in status | stop) ;; *) exit 1 ;; esac
 fi
 LOG_DIR=${LOG_DIR:-deploy/logs}
 mkdir -p "$LOG_DIR"
@@ -29,11 +37,13 @@ SERVICES=(qdrant embedding app)
 
 log() { echo "$(date '+%F %T') $*" | tee -a "$LOG_DIR/run.log"; }
 
-# server/.env 的一项应用配置（取最后一处，去掉首尾引号）；环境变量中已有时以它为准，与 node --env-file 一致
+# server/.env 的一项应用配置，用 Node 自己的解析（行尾注释、export、引号、等号两侧空格与网站读到的一致）；
+# 环境变量中已有时以它为准，与 node --env-file 一致
 setting() {
   local value
   value=$(printenv "$1") ||
-    value=$(sed -n "s/^$1=//p" server/.env 2>/dev/null | tail -n 1 | sed "s/^[\"']//; s/[\"']\$//")
+    value=$(node -e 'try { process.stdout.write(require("node:util").parseEnv(
+      require("node:fs").readFileSync("server/.env", "utf8"))[process.argv[1]] ?? "") } catch {}' "$1")
   echo "${value:-${2:-}}"
 }
 
@@ -102,6 +112,14 @@ run() {
       sleeper=
       trap 'kill "$sleeper" 2>/dev/null; end_group "$child"; exit 0' TERM INT
       while :; do
+        # update 切换代码期间（有 $name.hold）不启动；停在这里时写 $name.held，update 据此确认不会再有新进程
+        while [ -e "$LOG_DIR/$name.hold" ]; do
+          : >"$LOG_DIR/$name.held"
+          sleep 1 &
+          sleeper=$!
+          wait "$sleeper"
+        done
+        rm -f "$LOG_DIR/$name.held"
         log "启动 $name"
         # 关闭锁的文件描述符：服务进程不持有单实例锁
         setsid "$@" 9>&- >>"$LOG_DIR/$name.log" 2>&1 &
@@ -157,9 +175,12 @@ fetch_with_key() {
     curl -fsS "$@"
   fi
 }
+# 用网站自己的配置读取与向量客户端发同样的请求（含维度、密钥），并按网站的规则校验返回的条数与维度
 embedding_ok() {
-  fetch_with_key "$(setting EMBEDDING_API_KEY)" -m 60 -H 'Content-Type: application/json' \
-    -d "{\"model\":\"$(setting EMBEDDING_MODEL)\",\"input\":[\"健康检查\"]}" "$(setting EMBEDDING_URL)"
+  node --env-file-if-exists=server/.env --disable-warning=ExperimentalWarning --input-type=module -e "
+    import { ragConfig } from './server/rag.ts'
+    import { Embeddings } from './server/rag-embedding.ts'
+    await new Embeddings(ragConfig().embedding).embed(['健康检查'], undefined, 0)"
 }
 campus_ok() {
   fetch_with_key "$(setting CAMPUS_API_KEY)" -m 10 "$(setting CAMPUS_BASE_URL http://10.27.66.12 | sed 's#/*$##')/v1/models"
@@ -180,6 +201,8 @@ status() {
     shift
     if "$@" >/dev/null 2>&1; then echo "$name：正常"; else echo "$name：无响应（日志：$LOG_DIR）"; fi
   }
+  [ ! -e "$LOG_DIR/app.hold" ] ||
+    echo "网站：已暂停（更新中，或更新中断、退回失败，见 $LOG_DIR/run.log；确认代码与依赖无误后删除 $LOG_DIR/app.hold 恢复）"
   check 网站 curl -fsS -m 5 "http://127.0.0.1:$(setting PORT 3001)/api/health"
   check Qdrant curl -fsS -m 5 "$(setting QDRANT_URL http://127.0.0.1:6333 | sed 's#/*$##')/readyz"
   if [ -z "$(setting EMBEDDING_URL)" ]; then
@@ -192,7 +215,7 @@ status() {
 }
 
 update() {
-  local ref=${1:-origin/main} stage=deploy/.update previous
+  local ref=${1:-origin/main} stage=deploy/.update previous target
   if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
     echo "工作区有未提交的改动，先提交或撤销后再更新（模板文件请复制后修改副本，不要改仓库里的）。"
     exit 1
@@ -207,27 +230,58 @@ update() {
     log "更新到 $ref 失败（构建未通过），仍为 $(git log -1 --format=%h)，网站未重启"
     exit 1
   fi
-  # 构建通过后切换：代码与依赖切到新版本，失败则退回原版本；dist/ 最后整体替换
-  if ! { git checkout -q --detach "$(git -C "$stage" rev-parse HEAD)" && pnpm install --frozen-lockfile --prefer-offline; }; then
-    git worktree remove --force "$stage" 2>/dev/null
-    if git checkout -q --detach "$previous" && pnpm install --frozen-lockfile --prefer-offline; then
-      log "切换到 $ref 失败，已退回 $(git log -1 --format=%h)，网站未重启"
-    else
-      log "切换到 $ref 失败，且未能退回 ${previous:0:7}：依赖可能不完整，修复前不要重启网站"
-    fi
+  target=$(git -C "$stage" rev-parse HEAD)
+  # 构建通过后切换代码、依赖与 dist/。期间网站必须停着且不被守护进程重启，否则跑的版本可能与代码、页面不一致
+  if ! pause_app; then
+    git worktree remove --force "$stage"
+    rm -f "$LOG_DIR/app.hold"
+    log "更新到 $ref 失败：未能暂停网站，仍为 $(git log -1 --format=%h)"
     exit 1
   fi
-  rm -rf dist.old && { [ ! -d dist ] || mv dist dist.old; } && mv "$stage/dist" dist && rm -rf dist.old
-  git worktree remove --force "$stage"
-  log "已更新到 $(git log -1 --format='%h %s')"
-  local pid
-  pid=$(cat "$LOG_DIR/app.pid" 2>/dev/null)
-  if group_alive "$(cat "$LOG_DIR/run.pid" 2>/dev/null)" && group_alive "$pid"; then
-    kill -TERM -- "-$pid"
-    echo "网站将在约 5 秒后以新版本重启。"
-  else
-    echo "服务未在运行，执行 deploy/guance.sh run 启动。"
+  if git checkout -q --detach "$target" && pnpm install --frozen-lockfile --prefer-offline && swap_dist "$stage/dist"; then
+    git worktree remove --force "$stage"
+    rm -f "$LOG_DIR/app.hold"
+    log "已更新到 $(git log -1 --format='%h %s')"
+    group_alive "$(cat "$LOG_DIR/run.pid" 2>/dev/null)" && echo "网站正在以新版本启动。" ||
+      echo "服务未在运行，执行 deploy/guance.sh run 启动。"
+    return
   fi
+  git worktree remove --force "$stage" 2>/dev/null
+  if git checkout -q --detach "$previous" && pnpm install --frozen-lockfile --prefer-offline; then
+    rm -f "$LOG_DIR/app.hold"
+    log "切换到 $ref 失败，已退回 $(git log -1 --format=%h)，网站以原版本重新启动"
+  else
+    # 不恢复网站：依赖可能不完整，启动的会是混合版本
+    log "切换到 $ref 失败，且未能退回 ${previous:0:7}：依赖可能不完整，网站保持暂停；修复后删除 $LOG_DIR/app.hold 恢复"
+  fi
+  exit 1
+}
+
+# 暂停网站：标记 app.hold 让守护进程不再启动它，结束正在运行的网站，直到守护进程停在暂停处（写出 app.held）
+pause_app() {
+  rm -f "$LOG_DIR/app.held"
+  : >"$LOG_DIR/app.hold"
+  # 守护进程未运行：没有会启动网站的进程，标记本身就挡住此后启动的 run
+  group_alive "$(cat "$LOG_DIR/run.pid" 2>/dev/null)" || return 0
+  # 守护进程在网站退出、等过重启间隔后才回到暂停处，约 6 秒；每轮都结束一次当前网站，覆盖标记前刚好启动的那个
+  for _ in $(seq 30); do
+    end_group "$(cat "$LOG_DIR/app.pid" 2>/dev/null)" || return 1
+    [ -e "$LOG_DIR/app.held" ] && return 0
+    sleep 1
+  done
+  return 1
+}
+
+# 用新页面整体替换 dist/；失败时放回原页面
+swap_dist() {
+  rm -rf dist.old || return 1
+  if [ -e dist ]; then mv dist dist.old || return 1; fi
+  if mv "$1" dist; then
+    rm -rf dist.old
+    return 0
+  fi
+  [ ! -e dist.old ] || mv dist.old dist || log "未能放回原页面，请手动把 dist.old 改名为 dist"
+  return 1
 }
 
 stop() {
