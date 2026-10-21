@@ -4,6 +4,7 @@
 自检（不需要模型与 torch）：python server/rag/embed-server.py --self-check
 依赖：torch（有 NVIDIA 显卡时装对应 CUDA 版）、transformers。模型需事先下载，本项目不自动下载。
 后端配置：EMBEDDING_URL=http://127.0.0.1:8081/embeddings EMBEDDING_MODEL=bge-m3 EMBEDDING_DIMENSIONS=1024
+模型名默认 bge-m3，请求里的 model 不同时返回 400；后端用别的名字时，启动本服务前设同名环境变量 EMBEDDING_MODEL。
 只取稠密向量（CLS + L2 归一化，与 BGE-M3 官方 dense 用法一致），不做稀疏 / 多向量。只监听 127.0.0.1。
 """
 import gc, json, os, sys, threading
@@ -18,6 +19,13 @@ MAX_INPUTS = 256
 # 一个词元常为 1–2 个汉字，JSON 里每字 3 字节（转义写法时 6 字节），按每词元 16 字节估，共 32 MiB；
 # 网站实际每批 32 条、每条不超过 1600 字，约 150 KB
 MAX_BODY = MAX_INPUTS * MAX_TOKENS * 16
+# 本服务的模型名，须与 server/.env 的 EMBEDDING_MODEL 一致：索引按这个名字记录用的是哪个模型，名字对不上的请求一律拒绝
+MODEL = os.environ.get("EMBEDDING_MODEL") or "bge-m3"
+
+
+def model_ok(body):
+    """请求的 model 与本服务一致（不带 model 视为一致）。"""
+    return body.get("model", MODEL) == MODEL
 
 
 def body_length(value):
@@ -30,6 +38,7 @@ def body_length(value):
 
 
 if sys.argv[1:] == ["--self-check"]:
+    assert model_ok({"model": MODEL}) and model_ok({}) and not model_ok({"model": MODEL + "-x"}), "模型名不符未被拒绝"
     assert body_length("0") == 0 and body_length(str(MAX_BODY)) == MAX_BODY
     for bad in (None, "", "-1", "1e3", "+5", " 5", "²"):
         try:
@@ -117,6 +126,8 @@ class Handler(BaseHTTPRequestHandler):
                 raise ValueError("input 须为 1–256 条非空文本")
             if body.get("dimensions", DIMENSIONS) != DIMENSIONS:
                 raise ValueError(f"BGE-M3 只支持 {DIMENSIONS} 维")
+            if not model_ok(body):
+                raise ValueError(f"本服务的模型名是 {MODEL}，请求的是 {body.get('model')!r}，请核对 EMBEDDING_MODEL")
         except (ValueError, KeyError, TypeError, json.JSONDecodeError) as error:
             return self.reply(400, {"error": str(error)})
         try:
@@ -124,7 +135,7 @@ class Handler(BaseHTTPRequestHandler):
                 vectors = embed(texts)
         except Exception as error:  # 推理失败（如显存不足）明确返回 500，而不是直接断开连接
             return self.reply(500, {"error": f"向量计算失败：{type(error).__name__}"})
-        self.reply(200, {"object": "list", "model": "bge-m3", "data": [{"object": "embedding", "index": i, "embedding": v} for i, v in enumerate(vectors)]})
+        self.reply(200, {"object": "list", "model": MODEL, "data": [{"object": "embedding", "index": i, "embedding": v} for i, v in enumerate(vectors)]})
 
     def log_message(self, *args):
         pass

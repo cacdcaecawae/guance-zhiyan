@@ -29,17 +29,16 @@ ssh -N -L 3001:127.0.0.1:3001 用户名@服务器    # 保持窗口打开，再�
 3. **应用配置**：复制 `server/.env.example` 为 `server/.env`，至少填写 `CAMPUS_API_KEY`；文献库填写 `EMBEDDING_URL`、`EMBEDDING_MODEL`、`EMBEDDING_DIMENSIONS`、`QDRANT_URL`（见 [RAG 开发说明](RAG.md)）。`chmod 600 server/.env`。密钥只在这里，由网站用 `node --env-file` 读取，不写进 systemd 单元，也不出现在任何进程的参数里。
 4. **进程配置**：复制 `deploy/.env.example` 为 `deploy/.env`，按需填写：
    - `QDRANT_BIN`、`QDRANT_STORAGE`：由本机运行 Qdrant 可执行文件（[官方发布页](https://github.com/qdrant/qdrant/releases) 下载，版本与 `server/rag/compose.yaml` 一致）；用 Docker 时留空，改为执行一次 `docker compose -p guance-rag-backend -f server/rag/compose.yaml up -d`，容器随 Docker 自启。
-   - `EMBED_CMD`：由本机运行向量服务。BGE-M3 需要 Python 3、`torch`（有 NVIDIA 显卡时装对应 CUDA 版，CPU 也能运行但导入慢）与 `transformers`，模型 `BAAI/bge-m3` 需事先下载到本机目录，本项目不自动下载：
+   - `EMBED_CMD`：由本机运行向量服务。BGE-M3 需要 Python 3、`torch`（有 NVIDIA 显卡时装对应 CUDA 版，CPU 也能运行但导入慢）与 `transformers`，模型 `BAAI/bge-m3` 需事先下载到本机目录，本项目不自动下载。`server/.env` 的 `EMBEDDING_MODEL` 填 `bge-m3`：向量服务拒绝模型名不同的请求，免得索引记下的模型与实际不符：
      ```bash
      python3 -m venv ~/embed-venv && ~/embed-venv/bin/pip install torch transformers
      # EMBED_CMD="BGE_M3_DIR=$HOME/models/bge-m3 $HOME/embed-venv/bin/python server/rag/embed-server.py 8081"
      ```
    - `PATH`：systemd 启动的服务只有系统默认 PATH，node 装在用户目录等处时补上。
    - 只能写 `PATH`、`QDRANT_BIN`、`QDRANT_STORAGE`、`EMBED_CMD`、`APP_MODE`。数据目录、端口等应用配置只写在 `server/.env`：网站与 `pnpm rag` 导入命令都只读那里，分两处写会让导入写进网站看不到的目录，所以 `deploy/.env` 出现应用配置、有语法错误、或 `APP_MODE` 不是 `local` / `server` 时拒绝安装；已装的服务启动时同样检查，出错即停（不反复重启），`status` 显示原因。相对路径按仓库根目录解析。
-5. **数据**：二选一。
-   - 新导入：`pnpm rag import <文献.jsonl>`、`pnpm rag metadata <元数据.jsonl>`，见 RAG 说明。全库导入耗时很长，宜在有显卡的机器上完成。
-   - 从已有部署迁移：停止两边服务后，**一起**复制 `DATA_DIR`（含 `app.sqlite`，全库约 15 GB）与 Qdrant 数据目录（或 Docker 卷），并保持 `EMBEDDING_URL`、`EMBEDDING_MODEL`、`EMBEDDING_DIMENSIONS`、`QDRANT_URL` 四项原样。向量集合名和索引完成标记由文献库编号（在 `DATA_DIR` 里）和这几项共同决定，任何一项变化都会被视为新索引，需要 `pnpm rag reindex` 全量重算。数据目录不要放在 `/tmp`（服务有自己独立的 `/tmp`），也不要放在 `/usr`、`/etc` 下（服务对它们只读）。
+5. **从已有部署迁移数据**（新导入跳过这一步）：先停止原部署的服务（本机已装过服务时本机也停），再**一起**复制 `DATA_DIR`（含 `app.sqlite`，全库约 15 GB）与 Qdrant 数据目录（或 Docker 卷），并保持 `EMBEDDING_URL`、`EMBEDDING_MODEL`、`EMBEDDING_DIMENSIONS`、`QDRANT_URL` 四项原样。向量集合名和索引完成标记由文献库编号（在 `DATA_DIR` 里）和这几项共同决定，任何一项变化都会被视为新索引，需要 `pnpm rag reindex` 全量重算。数据目录不要放在 `/tmp`（服务有自己独立的 `/tmp`），也不要放在 `/usr`、`/etc` 下（服务对它们只读）。
 6. **安装服务**：在仓库根目录，以运行服务的账号（不必是 root）执行 `deploy/guance.sh install`。它生成 `guance-app`（以及配置了的 `guance-qdrant`、`guance-embedding`）单元，经 `sudo` 写入 `/etc/systemd/system/`，设为开机自启并启动，等这些服务都在运行且各自的健康检查（与 `status` 相同）通过才报告成功：最多等约 3 分钟（向量服务加载模型较慢），有服务启动后即退出时立即报出是哪一个并以失败结束。仓库里没有单元模板文件，不需要改任何仓库文件。
+7. **新导入数据**（迁移过来的跳过这一步）：导入要调用 Qdrant 与向量服务，所以在上一步之后、`deploy/guance.sh status` 显示两者正常时再执行 `pnpm rag import <文献.jsonl>`、`pnpm rag metadata <元数据.jsonl>`（见 RAG 说明），网站不必停。全库导入耗时很长，宜在有显卡的机器上完成。
 
 ## 日常命令
 
@@ -52,6 +51,10 @@ journalctl -u guance-app -f                  # 查看日志
 - **守护**：每个服务退出后 5 秒由 systemd 重启；停止时 systemd 结束服务的整个控制组（含向量服务由 shell 拉起的子进程），20 秒内未退出的强制结束。网站排在 Qdrant 与向量服务之后启动；它们不可用时网站照常运行，只是文献库检索报错，恢复后无需重启网站。
 - **加固**：各服务以安装账号运行，带 `NoNewPrivileges`（不能再提权）、`PrivateTmp`（独立 `/tmp`）、`ProtectSystem=full`（`/usr`、`/etc` 等只读）和 `UMask=0077`（新建文件只有本账号能读）。
 - **改配置**：改了 `server/.env` 或 `deploy/.env` 的值后重启对应服务；新填或清空 `QDRANT_BIN`、`EMBED_CMD` 后重新执行 `install`，以装上或停用、删除对应服务。卸载：`sudo systemctl disable --now guance-app guance-qdrant guance-embedding`，再删除 `/etc/systemd/system/guance-*.service`。
+
+## 切换文献库
+
+用哪个文献库由 `server/.env` 的 `DATA_DIR` 决定：改成另一个数据目录，再 `sudo systemctl restart guance-app`。每个数据目录在 Qdrant 里有自己的一组向量，同一个 Qdrant 可以同时存几个库的向量，切换不用重算。迁移时把要用的数据目录和整个 Qdrant 数据目录一起复制。同一数据目录复制出的副本沿用同一个文献库标识、共用同一组向量，不要同时对两份副本执行导入或重建（见 [RAG 说明](RAG.md)中 `pnpm rag reindex` 一段）。
 
 ## 更新
 
