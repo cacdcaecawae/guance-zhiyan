@@ -7,7 +7,7 @@
 模型名默认 bge-m3，请求里的 model 不同时返回 400；后端用别的名字时，启动本服务前设同名环境变量 EMBEDDING_MODEL。
 只取稠密向量（CLS + L2 归一化，与 BGE-M3 官方 dense 用法一致），不做稀疏 / 多向量。只监听 127.0.0.1。
 """
-import gc, json, os, sys, threading, traceback
+import gc, http.client, json, os, socket, sys, threading, time, traceback
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 DIMENSIONS = 1024
@@ -21,10 +21,17 @@ MAX_INPUTS = 256
 MAX_BODY = MAX_INPUTS * MAX_TOKENS * 16
 # 本服务的模型名，须与 server/.env 的 EMBEDDING_MODEL 一致：索引按这个名字记录用的是哪个模型，名字对不上的请求一律拒绝
 MODEL = os.environ.get("EMBEDDING_MODEL") or "bge-m3"
-# 同时在处理（含排队等显卡）的请求数上限，在读取请求体之前占位，超出时返回 503（网站对 5xx 退避重试）。
-# 校内目标 10 人并发、每次检索一个查询向量，再加导入批次，16 足够；最坏占用 16 × MAX_BODY 的请求体内存
+# 请求体先读完、校验通过，才占推理名额：迟迟不发完正文的连接不占名额。同时在读请求体的连接最多 READERS 个，
+# 正文须在 BODY_SECONDS 内读完，每次读写套接字也最多等这么久（Handler.timeout），超时即断开连接。
+# 网站每批约 150 KB，本机回环几毫秒读完，32 MiB 的上限也远用不到 10 秒；排队等显卡不计入这个时限。
+# 请求体内存最多 (READERS + MAX_PENDING) × MAX_BODY
+BODY_SECONDS = 10
+# 同时在处理（含排队等显卡）的请求数上限，超出时返回 503（网站对 5xx 退避重试）。
+# 校内目标 10 人并发、每次检索一个查询向量，再加导入批次，16 足够
 MAX_PENDING = 16
+READERS = 2 * MAX_PENDING
 slots = threading.BoundedSemaphore(MAX_PENDING)
+reading = threading.BoundedSemaphore(READERS)
 
 
 def model_ok(body):
@@ -41,7 +48,83 @@ def body_length(value):
     return int(value)
 
 
-if sys.argv[1:] == ["--self-check"]:
+def read_body(rfile, length):
+    """在 BODY_SECONDS 内读完 length 字节：一点点地发、拖过时限的连接抛 TimeoutError。"""
+    deadline = time.monotonic() + BODY_SECONDS
+    parts, left = [], length
+    while left:
+        if time.monotonic() > deadline:
+            raise TimeoutError("请求体读取超时")
+        part = rfile.read1(min(left, 1 << 16))
+        if not part:
+            raise ConnectionError("连接在请求体读完前关闭")
+        parts.append(part)
+        left -= len(part)
+    return b"".join(parts)
+
+
+class Handler(BaseHTTPRequestHandler):
+    timeout = BODY_SECONDS  # 每次读写套接字最多等这么久：请求头或正文迟迟不发完的连接被断开
+
+    def reply(self, status, body):
+        data = json.dumps(body).encode()
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
+    def do_POST(self):
+        if self.path.rstrip("/") not in ("/embeddings", "/v1/embeddings"):
+            return self.reply(404, {"error": "not found"})
+        try:
+            length = body_length(self.headers.get("Content-Length"))
+        except OverflowError as error:
+            return self.reply(413, {"error": str(error)})
+        except ValueError as error:
+            return self.reply(400, {"error": str(error)})
+        if not reading.acquire(timeout=BODY_SECONDS):
+            return self.reply(503, {"error": f"同时上传请求体的连接已达 {READERS} 个，请稍后重试"})
+        try:
+            raw = read_body(self.rfile, length)
+        except OSError:  # 超时或对方断开：无从回复，直接断开
+            self.close_connection = True
+            return
+        finally:
+            reading.release()
+        try:
+            body = json.loads(raw)
+            texts = body["input"]
+            if isinstance(texts, str):
+                texts = [texts]
+            if not (isinstance(texts, list) and 0 < len(texts) <= MAX_INPUTS and all(isinstance(t, str) and t.strip() for t in texts)):
+                raise ValueError("input 须为 1–256 条非空文本")
+            if body.get("dimensions", DIMENSIONS) != DIMENSIONS:
+                raise ValueError(f"BGE-M3 只支持 {DIMENSIONS} 维")
+            if not model_ok(body):
+                raise ValueError(f"本服务的模型名是 {MODEL}，请求的是 {body.get('model')!r}，请核对 EMBEDDING_MODEL")
+        except (ValueError, KeyError, TypeError, json.JSONDecodeError) as error:
+            return self.reply(400, {"error": str(error)})
+        if not slots.acquire(blocking=False):
+            return self.reply(503, {"error": f"同时处理的请求已达 {MAX_PENDING} 个，请稍后重试"})
+        try:
+            with lock:
+                vectors = embed(texts)
+        except Exception as error:  # 推理失败（如显存不足）明确返回 500，而不是直接断开连接
+            # 类型、信息与调用栈写 stderr（systemd 下进 journalctl）；只记条数，不记请求正文
+            print(f"向量计算失败（{len(texts)} 条）：", file=sys.stderr)
+            traceback.print_exc()
+            return self.reply(500, {"error": f"向量计算失败：{type(error).__name__}"})
+        finally:
+            slots.release()
+        self.reply(200, {"object": "list", "model": MODEL, "data": [{"object": "embedding", "index": i, "embedding": v} for i, v in enumerate(vectors)]})
+
+    def log_message(self, *args):
+        pass
+
+
+def self_check():
+    global BODY_SECONDS, embed, lock
     assert model_ok({"model": MODEL}) and model_ok({}) and not model_ok({"model": MODEL + "-x"}), "模型名不符未被拒绝"
     assert all(slots.acquire(blocking=False) for _ in range(MAX_PENDING)), "并发占位不足 MAX_PENDING"
     assert not slots.acquire(blocking=False), "超过 MAX_PENDING 的请求未被拒绝"
@@ -56,9 +139,35 @@ if sys.argv[1:] == ["--self-check"]:
         raise AssertionError(f"Content-Length {bad!r} 未被拒绝")
     try:
         body_length(str(MAX_BODY + 1))
+        raise AssertionError("超过上限的 Content-Length 未被拒绝")
     except OverflowError:
-        sys.exit(print("embed-server 自检通过"))
-    raise AssertionError("超过上限的 Content-Length 未被拒绝")
+        pass
+    # 真实 HTTP 路径（替身推理）：MAX_PENDING + 4 个连接只发请求头、不发正文，正常请求照样成功；这些连接超时后被断开
+    BODY_SECONDS = Handler.timeout = 1
+    embed = lambda texts: [[0.0] * DIMENSIONS for _ in texts]
+    lock = threading.Lock()
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    port = server.server_address[1]
+    slow = [socket.create_connection(("127.0.0.1", port)) for _ in range(MAX_PENDING + 4)]
+    for s in slow:
+        s.sendall(b"POST /embeddings HTTP/1.0\r\nContent-Length: 100\r\n\r\n")
+    time.sleep(0.3)
+    c = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+    c.request("POST", "/embeddings", json.dumps({"input": ["健康检查"], "model": MODEL}).encode())
+    assert c.getresponse().status == 200, "正文没发完的连接占住了推理名额"
+    for s in slow:
+        s.settimeout(5)
+        try:
+            closed = s.recv(1) == b""
+        except ConnectionResetError:
+            closed = True
+        assert closed, "正文没发完的连接超时后未被断开"
+    print("embed-server 自检通过")
+
+
+if sys.argv[1:] == ["--self-check"]:
+    sys.exit(self_check())
 
 MODEL_DIR = os.environ.get("BGE_M3_DIR")
 if not MODEL_DIR or not os.path.isdir(MODEL_DIR):
@@ -105,59 +214,6 @@ def embed(texts):
             out[j] = v
         i += len(part)
     return out
-
-
-class Handler(BaseHTTPRequestHandler):
-    def reply(self, status, body):
-        data = json.dumps(body).encode()
-        self.send_response(status)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(data)))
-        self.end_headers()
-        self.wfile.write(data)
-
-    def do_POST(self):
-        if self.path.rstrip("/") not in ("/embeddings", "/v1/embeddings"):
-            return self.reply(404, {"error": "not found"})
-        if not slots.acquire(blocking=False):
-            return self.reply(503, {"error": f"同时处理的请求已达 {MAX_PENDING} 个，请稍后重试"})
-        try:
-            self.handle_embeddings()
-        finally:
-            slots.release()
-
-    def handle_embeddings(self):
-        try:
-            length = body_length(self.headers.get("Content-Length"))
-        except OverflowError as error:
-            return self.reply(413, {"error": str(error)})
-        except ValueError as error:
-            return self.reply(400, {"error": str(error)})
-        try:
-            body = json.loads(self.rfile.read(length))
-            texts = body["input"]
-            if isinstance(texts, str):
-                texts = [texts]
-            if not (isinstance(texts, list) and 0 < len(texts) <= MAX_INPUTS and all(isinstance(t, str) and t.strip() for t in texts)):
-                raise ValueError("input 须为 1–256 条非空文本")
-            if body.get("dimensions", DIMENSIONS) != DIMENSIONS:
-                raise ValueError(f"BGE-M3 只支持 {DIMENSIONS} 维")
-            if not model_ok(body):
-                raise ValueError(f"本服务的模型名是 {MODEL}，请求的是 {body.get('model')!r}，请核对 EMBEDDING_MODEL")
-        except (ValueError, KeyError, TypeError, json.JSONDecodeError) as error:
-            return self.reply(400, {"error": str(error)})
-        try:
-            with lock:
-                vectors = embed(texts)
-        except Exception as error:  # 推理失败（如显存不足）明确返回 500，而不是直接断开连接
-            # 类型、信息与调用栈写 stderr（systemd 下进 journalctl）；只记条数，不记请求正文
-            print(f"向量计算失败（{len(texts)} 条）：", file=sys.stderr)
-            traceback.print_exc()
-            return self.reply(500, {"error": f"向量计算失败：{type(error).__name__}"})
-        self.reply(200, {"object": "list", "model": MODEL, "data": [{"object": "embedding", "index": i, "embedding": v} for i, v in enumerate(vectors)]})
-
-    def log_message(self, *args):
-        pass
 
 
 port = int(sys.argv[1]) if len(sys.argv) > 1 else 8081

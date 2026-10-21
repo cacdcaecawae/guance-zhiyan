@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # deploy/guance.sh 冒烟测试（Linux / WSL，CI 中运行；需先 pnpm build）。Qdrant 与向量服务用替身，网站用真实入口。
 # 总是测：生成的 systemd 单元通过 systemd-analyze verify；deploy/.env 写了应用配置、有语法错误或 APP_MODE 无效时 install
-# 拒绝、服务入口以 78 退出；没有 dist/ 时 install 拒绝；向量服务自检（embed-server.py --self-check）；直接运行各服务入口时的健康检查
-# （向量服务按配置的维度检查；向量服务与校内模型只能经出站代理访问时也正常；Qdrant 密钥错误时报失败）；
+# 拒绝、服务入口以 78 退出；没有 dist/ 时 install 拒绝；向量服务自检（embed-server.py --self-check，含正文没发完的连接
+# 不占推理名额）；直接运行各服务入口时的健康检查（向量服务按配置的维度检查；向量服务与校内模型只能经出站代理访问时也正常；
+# Qdrant 密钥错误时报失败；Qdrant 与校内模型的地址跳转到别处时报失败且不把密钥发过去）；
 # Qdrant 只监听本机且相对路径按仓库根目录解析；健康检查不在进程参数里暴露密钥；server/.env 的行尾注释、export 与空格写法
 # 按 Node 的规则读取。有 systemd 与免密 sudo、且本机没有已装的 guance-* 服务和 server/.env 时（如 CI），再真实安装：
 # Qdrant 起不来时 install 报失败；开机自启、加固选项生效且数据目录可写、崩溃后自动重启、停止后不留进程。
@@ -25,7 +26,8 @@ export DATA_DIR=$T/data PORT=33411 QDRANT_URL=http://127.0.0.1:33433 \
 cat >"$T/fake.py" <<'EOF'
 # 替身：Qdrant（记下收到的配置；设了 FAKE_QDRANT_KEY 时 /collections 要求 api-key 相符）或向量服务（返回固定 2 维向量，
 # 响应前停 2 秒，便于检查进程参数；忽略 SIGTERM；兼作校内模型的 /v1/models 与 HTTP 代理：CONNECT 隧道一律接到自己，
-# 用于“只能经代理访问”的向量服务与校内模型）
+# 用于“只能经代理访问”的向量服务与校内模型）。redirect 一律 302 跳到参数给的另一地址，sink 在另一个回环地址
+# 上记下收到的请求头，用于检查带密钥的健康检查不跟随跨地址跳转
 import json, os, select, signal, socket, sys, time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 kind = sys.argv[1]
@@ -34,13 +36,19 @@ if kind == "qdrant":
               open(os.environ["QDRANT__STORAGE__STORAGE_PATH"] + "/env.json", "w"))
     host, port = os.environ["QDRANT__SERVICE__HOST"], int(os.environ["QDRANT__SERVICE__HTTP_PORT"])
 else:
-    host, port = "127.0.0.1", int(sys.argv[2])
+    host, port = "127.0.0.2" if kind == "sink" else "127.0.0.1", int(sys.argv[2])
     signal.signal(signal.SIGTERM, signal.SIG_IGN)
 class H(BaseHTTPRequestHandler):
     def reply(self, body):
         self.send_response(200); self.send_header("Content-Length", str(len(body))); self.end_headers()
         self.wfile.write(body)
     def do_GET(self):
+        if kind == "redirect":
+            self.send_response(302); self.send_header("Location", sys.argv[3] + self.path)
+            self.send_header("Content-Length", "0"); self.end_headers()
+            return
+        if kind == "sink":
+            open(sys.argv[3], "a").write(str(self.headers))
         if self.path.startswith("/collections") and self.headers.get("api-key") != os.environ.get("FAKE_QDRANT_KEY", self.headers.get("api-key")):
             self.send_response(401); self.send_header("Content-Length", "0"); self.end_headers()
             return
@@ -138,7 +146,7 @@ out=$(timeout 60 bash $G install 2>&1) && fail "没有 dist/ 时 install 仍执�
 grep -q 'pnpm build' <<<"$out" || fail "没有 dist/ 时未提示 pnpm build：$out"
 mv "$T/dist" dist
 
-echo "== 向量服务自检：请求体长度、模型名、并发上限"
+echo "== 向量服务自检：请求体长度、模型名、并发上限、正文没发完的连接"
 python3 server/rag/embed-server.py --self-check || fail "embed-server.py 自检未通过"
 
 echo "== 生成的 systemd 单元"
@@ -177,6 +185,22 @@ grep -q '^校内模型：正常$' <<<"$out" || fail "只能经代理访问的校
 # /readyz 不要密钥；健康检查须用需要鉴权的接口，Qdrant 密钥错误时报失败
 out=$(QDRANT_API_KEY=wrong-key bash $G status)
 grep -q '^Qdrant：正常$' <<<"$out" && fail "Qdrant 密钥错误时仍报告正常"
+# Qdrant 与校内模型的地址 302 跳到另一回环地址：健康检查不跟随，报失败，跳转目标收不到密钥
+for args in "redirect 33491 http://127.0.0.2:33492" "sink 33492 $T/sink.log"; do
+  setsid python3 "$T/fake.py" $args >>"$T/redirect.log" 2>&1 </dev/null &
+  echo $! >>"$T/direct.pids"
+  disown
+done
+for _ in $(seq 50); do
+  curl -so /dev/null http://127.0.0.1:33491/ && curl -so /dev/null http://127.0.0.2:33492/ && break
+  sleep 0.2
+done
+: >"$T/sink.log"
+out=$(QDRANT_URL=http://127.0.0.1:33491 CAMPUS_BASE_URL=http://127.0.0.1:33491 CAMPUS_API_KEY=campus-test-key-9012 bash $G status)
+grep -q '^Qdrant：正常$' <<<"$out" && fail "Qdrant 地址跳转到别处时仍报告正常"
+grep -q '^校内模型：正常$' <<<"$out" && fail "校内模型地址跳转到别处时仍报告正常"
+printf '%s\n' "$QDRANT_API_KEY" campus-test-key-9012 >"$T/redirect-secret"
+! grep -qFf "$T/redirect-secret" "$T/sink.log" || fail "健康检查跟随跳转，把密钥发给了跳转目标"
 
 echo "== 健康检查期间密钥不出现在任何进程的参数里"
 CAMPUS_BASE_URL=http://127.0.0.1:33481 CAMPUS_API_KEY=campus-test-key-9012 bash $G status >/dev/null &

@@ -197,7 +197,9 @@ install_units() {
 # 健康检查：status 与 install 共用
 app_ok() { curl -fsS -m 5 "http://127.0.0.1:$(setting PORT 3001)/api/health"; }
 # 在网站自己的配置读取与网络设置（出站代理）下执行一段请求：只能经代理访问的服务也与网站看到的一致；
-# 密钥只在这个 node 进程里读取，不出现在任何进程的参数里
+# 密钥只在这个 node 进程里读取，不出现在任何进程的参数里。带密钥的请求都不跟随跳转（redirect: "error"，与网站的
+# Qdrant、向量服务、模型客户端相同）：fetch 跨地址跳转时会保留 api-key、x-api-key 这类自定义头，跟随就会把密钥发到
+# 跳转目标，目标返回 200 时还会误报正常；遇到跳转就按配置有误报失败
 app_request() {
   node --env-file-if-exists=server/.env --disable-warning=ExperimentalWarning --input-type=module -e "
     import { configureNetwork } from './server/network.ts'
@@ -214,7 +216,7 @@ qdrant_ok() {
       const key = process.env.QDRANT_API_KEY?.trim()
       const url = (process.env.QDRANT_URL?.trim() || "http://127.0.0.1:6333").replace(/\/+$/, "")
       const response = await fetch(url + "/collections", {
-        headers: key ? { "api-key": key } : {}, signal: AbortSignal.timeout(5000) })
+        headers: key ? { "api-key": key } : {}, redirect: "error", signal: AbortSignal.timeout(5000) })
       if (!response.ok) throw new Error("HTTP " + response.status)'
 }
 # 与网站同样的向量请求（含维度、密钥），并按网站的规则校验返回的条数与维度
@@ -230,7 +232,7 @@ campus_ok() {
       const { connection } = await import("./server/models.ts")
       const { baseURL, apiKey } = connection({ provider: "campus", model: "" })
       const response = await fetch(baseURL + "/v1/models", {
-        headers: { authorization: "Bearer " + apiKey, "x-api-key": apiKey }, signal: AbortSignal.timeout(10000) })
+        headers: { authorization: "Bearer " + apiKey, "x-api-key": apiKey }, redirect: "error", signal: AbortSignal.timeout(10000) })
       if (!response.ok) throw new Error("HTTP " + response.status)'
 }
 
