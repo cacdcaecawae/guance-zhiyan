@@ -97,6 +97,8 @@ export async function rerank<T extends { text: string }>(
       ...(config.apiKey ? { Authorization: `Bearer ${config.apiKey}` } : {}),
     },
     body: JSON.stringify({ model: config.model, query, documents: items.map((item) => item.text) }),
+    // Like the Qdrant and embedding clients: a redirect is a misconfiguration, never follow it with the key.
+    redirect: 'error',
     signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
   })
   if (!response.ok) {
