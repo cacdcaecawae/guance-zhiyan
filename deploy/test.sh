@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # deploy/guance.sh 冒烟测试（Linux / WSL，CI 中运行；需先 pnpm build）。Qdrant 与向量服务用替身，网站用真实入口。
 # 总是测：生成的 systemd 单元通过 systemd-analyze verify；deploy/.env 写了应用配置、有语法错误或 APP_MODE 无效时 install
-# 拒绝、服务入口以 78 退出；直接运行各服务入口时的健康检查（向量服务按配置的维度检查、经出站代理才能访问时也正常）；
+# 拒绝、服务入口以 78 退出；向量服务请求体长度检查（embed-server.py --self-check）；直接运行各服务入口时的健康检查（向量服务按配置的维度检查、经出站代理才能访问时也正常）；
 # Qdrant 只监听本机且相对路径按仓库根目录解析；健康检查不在进程参数里暴露密钥；server/.env 的行尾注释、export 与空格写法
 # 按 Node 的规则读取。有 systemd 与免密 sudo、且本机没有已装的 guance-* 服务和 server/.env 时（如 CI），再真实安装：
 # Qdrant 起不来时 install 报失败；开机自启、加固选项生效且数据目录可写、崩溃后自动重启、停止后不留进程。
@@ -125,6 +125,9 @@ echo "== deploy/.env 写了应用配置、有语法错误或 APP_MODE 无效时�
 refused DATA_DIR=/elsewhere 'DATA_DIR 移到 server/.env'
 refused 'EMBED_CMD="unterminated' 'deploy/.env 读取失败'
 refused APP_MODE=locla 'APP_MODE 只能是 local 或 server'
+
+echo "== 向量服务在读取前拒绝缺失、非法或超过上限的请求体长度"
+python3 server/rag/embed-server.py --self-check || fail "embed-server.py 自检未通过"
 
 echo "== 生成的 systemd 单元"
 bash $G units "$T/units"

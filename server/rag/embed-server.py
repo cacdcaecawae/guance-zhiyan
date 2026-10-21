@@ -1,6 +1,7 @@
 """本机 BGE-M3 向量服务，兼容 server/rag-embedding.ts 使用的 OpenAI /embeddings 协议。
 
 用法：BGE_M3_DIR=<BAAI/bge-m3 模型目录> python server/rag/embed-server.py [端口，默认 8081]
+自检（不需要模型与 torch）：python server/rag/embed-server.py --self-check
 依赖：torch（有 NVIDIA 显卡时装对应 CUDA 版）、transformers。模型需事先下载，本项目不自动下载。
 后端配置：EMBEDDING_URL=http://127.0.0.1:8081/embeddings EMBEDDING_MODEL=bge-m3 EMBEDDING_DIMENSIONS=1024
 只取稠密向量（CLS + L2 归一化，与 BGE-M3 官方 dense 用法一致），不做稀疏 / 多向量。只监听 127.0.0.1。
@@ -8,18 +9,46 @@
 import gc, json, os, sys, threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+DIMENSIONS = 1024
+# BGE-M3 支持的最长输入。片段最长 1600 字，通常远短于此；但 OCR 杂字、少见符号、长网址按字节拆分时
+# 词元数可能超过字数，按字数估计的较小上限会悄悄截掉片段后半部分
+MAX_TOKENS = 8192
+MAX_INPUTS = 256
+# 请求体上限，读取前按 Content-Length 检查（本机任一进程都能连上本服务）。每条最多 MAX_TOKENS 词元，
+# 一个词元常为 1–2 个汉字，JSON 里每字 3 字节（转义写法时 6 字节），按每词元 16 字节估，共 32 MiB；
+# 网站实际每批 32 条、每条不超过 1600 字，约 150 KB
+MAX_BODY = MAX_INPUTS * MAX_TOKENS * 16
+
+
+def body_length(value):
+    """Content-Length 头 → 字节数。缺失或不是非负整数时抛 ValueError（400），超过 MAX_BODY 时抛 OverflowError（413）。"""
+    if value is None or not (value.isascii() and value.isdigit()):
+        raise ValueError("缺少 Content-Length，或不是非负整数")
+    if int(value) > MAX_BODY:
+        raise OverflowError(f"请求体超过 {MAX_BODY} 字节")
+    return int(value)
+
+
+if sys.argv[1:] == ["--self-check"]:
+    assert body_length("0") == 0 and body_length(str(MAX_BODY)) == MAX_BODY
+    for bad in (None, "", "-1", "1e3", "+5", " 5", "²"):
+        try:
+            body_length(bad)
+        except ValueError:
+            continue
+        raise AssertionError(f"Content-Length {bad!r} 未被拒绝")
+    try:
+        body_length(str(MAX_BODY + 1))
+    except OverflowError:
+        sys.exit(print("embed-server 自检通过"))
+    raise AssertionError("超过上限的 Content-Length 未被拒绝")
+
 MODEL_DIR = os.environ.get("BGE_M3_DIR")
 if not MODEL_DIR or not os.path.isdir(MODEL_DIR):
     sys.exit("请用环境变量 BGE_M3_DIR 指定已下载的 BAAI/bge-m3 模型目录。")
 
 import torch
 from transformers import AutoModel, AutoTokenizer
-
-DIMENSIONS = 1024
-# BGE-M3 支持的最长输入。片段最长 1600 字，通常远短于此；但 OCR 杂字、少见符号、长网址按字节拆分时
-# 词元数可能超过字数，按字数估计的较小上限会悄悄截掉片段后半部分
-MAX_TOKENS = 8192
-MAX_INPUTS = 256
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 tokenizer = AutoTokenizer.from_pretrained(MODEL_DIR)
@@ -74,7 +103,13 @@ class Handler(BaseHTTPRequestHandler):
         if self.path.rstrip("/") not in ("/embeddings", "/v1/embeddings"):
             return self.reply(404, {"error": "not found"})
         try:
-            body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))))
+            length = body_length(self.headers.get("Content-Length"))
+        except OverflowError as error:
+            return self.reply(413, {"error": str(error)})
+        except ValueError as error:
+            return self.reply(400, {"error": str(error)})
+        try:
+            body = json.loads(self.rfile.read(length))
             texts = body["input"]
             if isinstance(texts, str):
                 texts = [texts]

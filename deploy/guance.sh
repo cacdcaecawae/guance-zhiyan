@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # 管策智研部署脚本（Linux / WSL，由 systemd 守护）。说明见 docs/DEPLOY.md。
-#   deploy/guance.sh install          生成 systemd 服务（Qdrant 与向量服务在 deploy/.env 配置了才装，网站总是装），设为开机自启并（重新）启动
+#   deploy/guance.sh install          生成 systemd 服务（Qdrant 与向量服务在 deploy/.env 配置了才装，网站总是装），设为开机自启并（重新）启动，
+#                                     等各服务运行且健康检查通过才报成功
 #   deploy/guance.sh status           各服务的运行状态、健康检查与代码版本
 #   deploy/guance.sh units <目录>     只把 systemd 单元生成到目录（检查用），不安装
 # 停止、重启与日志用 systemctl / journalctl，如 sudo systemctl restart guance-app、journalctl -u guance-app；更新步骤见 docs/DEPLOY.md。
@@ -130,18 +131,27 @@ EOF
   done
 }
 
-# 等网站健康检查通过，最长 60 秒；成功时输出第一个参数
-wait_app() {
-  local url
-  url="http://127.0.0.1:$(setting PORT 3001)/api/health"
-  for _ in $(seq 30); do
-    if curl -fsS -m 5 "$url" >/dev/null 2>&1; then
-      echo "$1"
-      return 0
-    fi
-    sleep 2
+declare -A LABEL=([qdrant]=Qdrant [embedding]=向量服务 [app]=网站)
+# 等已安装的每个服务都在运行且通过各自的健康检查（与 status 同一套），约 3 分钟（向量服务加载模型较慢）；
+# 有服务启动即退出（failed，或在自动重启的间隔中）时不再等。未就绪的逐个报出并返回失败
+wait_ready() {
+  local name state pending crashed deadline=$((SECONDS + 180))
+  while :; do
+    pending= crashed=
+    for name in $(services); do
+      state=$(systemctl is-active "guance-$name")
+      if [ "$state" = failed ] || [ "$(systemctl show -p SubState --value "guance-$name")" = auto-restart ]; then
+        crashed+=" $name"
+      elif [ "$state" != active ] || ! "${name}_ok" >/dev/null 2>&1; then
+        pending+=" $name"
+      fi
+    done
+    [ -z "$crashed$pending" ] && return 0
+    [ -n "$crashed" ] || ((SECONDS >= deadline)) && break
+    sleep 3
   done
-  echo "网站 60 秒内未就绪（可能仍在启动），查看 journalctl -u guance-app 与 deploy/guance.sh status。" >&2
+  for name in $crashed; do echo "${LABEL[$name]}（guance-$name）启动后退出，查看 journalctl -u guance-$name" >&2; done
+  for name in $pending; do echo "${LABEL[$name]}（guance-$name）约 3 分钟内未就绪，查看 journalctl -u guance-$name" >&2; done
   return 1
 }
 
@@ -173,7 +183,11 @@ install_units() {
     exit 1
   fi
   rm -rf "$dir"
-  wait_app "已安装并启动：$wanted（开机自启）。查看状态：deploy/guance.sh status" || exit 1
+  wait_ready || {
+    echo "已安装 $wanted并设为开机自启，但上面的服务未正常运行。" >&2
+    exit 1
+  }
+  echo "已安装并启动：$wanted（开机自启），各服务健康检查通过。查看状态：deploy/guance.sh status"
 }
 
 # 带可选密钥的 GET / POST：密钥用内建 printf 经管道交给 curl，不出现在任何进程的参数里
@@ -186,6 +200,9 @@ fetch_with_key() {
     curl -fsS "$@"
   fi
 }
+# 健康检查：status 与 install 共用
+app_ok() { curl -fsS -m 5 "http://127.0.0.1:$(setting PORT 3001)/api/health"; }
+qdrant_ok() { curl -fsS -m 5 "$(setting QDRANT_URL http://127.0.0.1:6333 | sed 's#/*$##')/readyz"; }
 # 用网站自己的网络设置（出站代理）、配置读取与向量客户端发同样的请求（含维度、密钥），并按网站的规则校验返回的条数与维度
 embedding_ok() {
   node --env-file-if-exists=server/.env --disable-warning=ExperimentalWarning --input-type=module -e "
@@ -222,8 +239,8 @@ status() {
     shift 2
     if "$@" >/dev/null 2>&1; then echo "$label：正常"; else echo "$label：无响应（由本机管理时看 journalctl -u $unit）"; fi
   }
-  check 网站 guance-app curl -fsS -m 5 "http://127.0.0.1:$(setting PORT 3001)/api/health"
-  check Qdrant guance-qdrant curl -fsS -m 5 "$(setting QDRANT_URL http://127.0.0.1:6333 | sed 's#/*$##')/readyz"
+  check 网站 guance-app app_ok
+  check Qdrant guance-qdrant qdrant_ok
   if [ -z "$(setting EMBEDDING_URL)" ]; then
     echo "向量服务：未配置（server/.env 的 EMBEDDING_URL 为空，文献库不可用）"
   else

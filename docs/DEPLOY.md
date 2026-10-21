@@ -39,7 +39,7 @@ ssh -N -L 3001:127.0.0.1:3001 用户名@服务器    # 保持窗口打开，再�
 5. **数据**：二选一。
    - 新导入：`pnpm rag import <文献.jsonl>`、`pnpm rag metadata <元数据.jsonl>`，见 RAG 说明。全库导入耗时很长，宜在有显卡的机器上完成。
    - 从已有部署迁移：停止两边服务后，**一起**复制 `DATA_DIR`（含 `app.sqlite`，全库约 15 GB）与 Qdrant 数据目录（或 Docker 卷），并保持 `EMBEDDING_URL`、`EMBEDDING_MODEL`、`EMBEDDING_DIMENSIONS`、`QDRANT_URL` 四项原样。向量集合名和索引完成标记由文献库编号（在 `DATA_DIR` 里）和这几项共同决定，任何一项变化都会被视为新索引，需要 `pnpm rag reindex` 全量重算。数据目录不要放在 `/tmp`（服务有自己独立的 `/tmp`），也不要放在 `/usr`、`/etc` 下（服务对它们只读）。
-6. **安装服务**：在仓库根目录，以运行服务的账号（不必是 root）执行 `deploy/guance.sh install`。它生成 `guance-app`（以及配置了的 `guance-qdrant`、`guance-embedding`）单元，经 `sudo` 写入 `/etc/systemd/system/`，设为开机自启并启动，等网站健康检查通过才报告成功。仓库里没有单元模板文件，不需要改任何仓库文件。
+6. **安装服务**：在仓库根目录，以运行服务的账号（不必是 root）执行 `deploy/guance.sh install`。它生成 `guance-app`（以及配置了的 `guance-qdrant`、`guance-embedding`）单元，经 `sudo` 写入 `/etc/systemd/system/`，设为开机自启并启动，等这些服务都在运行且各自的健康检查（与 `status` 相同）通过才报告成功：最多等约 3 分钟（向量服务加载模型较慢），有服务启动后即退出时立即报出是哪一个并以失败结束。仓库里没有单元模板文件，不需要改任何仓库文件。
 
 ## 日常命令
 
@@ -62,11 +62,12 @@ sudo systemctl stop guance-app
 git pull                                     # 或 git checkout <版本>
 pnpm install --frozen-lockfile
 pnpm build
-sudo systemctl start guance-app
-deploy/guance.sh status
+deploy/guance.sh install                     # 重新生成服务、重启全部服务并逐个检查
 ```
 
-退回旧版本：先记下更新前的提交（`git log -1`），`git checkout <原提交>` 后重复上面的安装、构建、启动三步。中途失败一时修不好、期间机器可能重启时，先 `sudo systemctl disable guance-app`，免得开机自启跑未构建完的版本；修好后 `sudo systemctl enable --now guance-app`。
+最后一步用 `install` 而不只是启动网站：更新可能改了向量服务或服务配置本身，`install` 会重新生成单元、重启全部服务，等各服务健康检查通过才报成功。
+
+退回旧版本：先记下更新前的提交（`git log -1`）。回退时同样**先** `sudo systemctl stop guance-app`，再 `git checkout <原提交>`，然后重复安装、构建与 `deploy/guance.sh install`。中途失败一时修不好、期间机器可能重启时，先 `sudo systemctl disable guance-app`，免得开机自启跑未构建完的版本；修好后再执行 `deploy/guance.sh install`（会重新设为开机自启）。
 
 ## WSL
 
