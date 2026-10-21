@@ -63,7 +63,7 @@ printf '#!/bin/sh\nexec python3 %s qdrant\n' "$T/fake.py" >"$T/qdrant-bin"
 chmod +x "$T/qdrant-bin"
 # 两条命令：bash 不能直接 exec，python 成为 bash 的子进程且不理会 TERM，验证停止时结束整个控制组
 export EMBED_CMD="python3 $T/fake.py embedding 33481; true"
-installed=
+installed= branch=
 leftovers() { pgrep -f "$T/fake.py|server/index.ts --local" | wc -l; }
 healthy() { [ "$(grep -cE '^(网站|Qdrant|向量服务)：正常$' <<<"$1")" = 3 ]; }
 stop_direct() {
@@ -78,6 +78,8 @@ cleanup() {
     for unit in "${UNITS[@]}"; do sudo rm -f "/etc/systemd/system/$unit.service"; done
     sudo systemctl daemon-reload
   fi
+  # update 会把工作区切成分离的 HEAD：切回测试开始时的分支
+  [ -z "$branch" ] || git checkout -q "$branch"
   # 开始时已确认 deploy/.env 不存在；server/.env 只删本测试建的
   rm -f deploy/.env
   [ ! -e "$T/server-env" ] || rm -f server/.env
@@ -198,7 +200,8 @@ else
   : >"$T/server-env"
   printf '%s\n' "DATA_DIR=$T/sdata" "PORT=$PORT" "QDRANT_URL=$QDRANT_URL" "EMBEDDING_URL=$EMBEDDING_URL" \
     "EMBEDDING_MODEL=fake" "EMBEDDING_DIMENSIONS=2" "EMBEDDING_API_KEY=$EMBEDDING_API_KEY" >server/.env
-  printf '%s\n' "PATH=$(dirname "$(command -v node)"):/usr/local/bin:/usr/bin:/bin" "QDRANT_BIN=$QDRANT_BIN" \
+  # PATH 在原值前追加：服务里原值是 systemd 的默认 PATH，update 时是本 shell 的（pnpm 在那里）
+  printf '%s\n' "PATH=$(dirname "$(command -v node)"):\$PATH" "QDRANT_BIN=$QDRANT_BIN" \
     "QDRANT_STORAGE=$QDRANT_STORAGE" "EMBED_CMD=\"$EMBED_CMD\"" APP_MODE=local >deploy/.env
   unset DATA_DIR PORT QDRANT_URL EMBEDDING_URL EMBEDDING_MODEL EMBEDDING_DIMENSIONS EMBEDDING_API_KEY APP_MODE \
     QDRANT_BIN QDRANT_STORAGE EMBED_CMD
@@ -231,6 +234,7 @@ else
 
   echo "== update：失败时网站保持停止，status 显示原因"
   before=$(git rev-parse HEAD)
+  branch=$(git symbolic-ref -q --short HEAD || echo "$before")
   if out=$(bash $G update no-such-ref 2>&1); then fail "不存在的版本却更新成功：$out"; fi
   [ "$(systemctl is-active guance-app)" != active ] || fail "更新失败后网站仍被启动"
   [ "$(git rev-parse HEAD)" = "$before" ] || fail "切换失败后代码被改动"
