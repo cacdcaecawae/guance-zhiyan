@@ -161,6 +161,10 @@ systemd_ready() {
 
 install_units() {
   local dir name all=(qdrant embedding app) wanted
+  [ -f dist/index.html ] || {
+    echo "没有构建好的前端页面（dist/index.html），先执行 pnpm build。" >&2
+    exit 1
+  }
   systemd_ready || {
     echo "本机没有运行 systemd，无法安装服务；WSL 先按 docs/DEPLOY.md 打开 systemd。" >&2
     exit 1
@@ -190,34 +194,44 @@ install_units() {
   echo "已安装并启动：$wanted（开机自启），各服务健康检查通过。查看状态：deploy/guance.sh status"
 }
 
-# 带可选密钥的 GET / POST：密钥用内建 printf 经管道交给 curl，不出现在任何进程的参数里
-fetch_with_key() {
-  local key=$1
-  shift
-  if [ -n "$key" ]; then
-    printf 'Authorization: Bearer %s\n' "$key" | curl -fsS -H @- "$@"
-  else
-    curl -fsS "$@"
-  fi
-}
 # 健康检查：status 与 install 共用
 app_ok() { curl -fsS -m 5 "http://127.0.0.1:$(setting PORT 3001)/api/health"; }
-qdrant_ok() { curl -fsS -m 5 "$(setting QDRANT_URL http://127.0.0.1:6333 | sed 's#/*$##')/readyz"; }
-# 用网站自己的网络设置（出站代理）、配置读取与向量客户端发同样的请求（含维度、密钥），并按网站的规则校验返回的条数与维度
-embedding_ok() {
+# 在网站自己的配置读取与网络设置（出站代理）下执行一段请求：只能经代理访问的服务也与网站看到的一致；
+# 密钥只在这个 node 进程里读取，不出现在任何进程的参数里
+app_request() {
   node --env-file-if-exists=server/.env --disable-warning=ExperimentalWarning --input-type=module -e "
     import { configureNetwork } from './server/network.ts'
-    import { ragConfig } from './server/rag.ts'
-    import { Embeddings } from './server/rag-embedding.ts'
     const disposeNetwork = await configureNetwork()
     try {
-      await new Embeddings(ragConfig().embedding).embed(['健康检查'], undefined, 0)
+      $1
     } finally {
       await disposeNetwork()
     }"
 }
+# 用需要鉴权的接口：/readyz 不要密钥，测不出 QDRANT_API_KEY 失效。地址、密钥与 server/rag.ts 的 ragConfig 相同
+qdrant_ok() {
+  app_request '
+      const key = process.env.QDRANT_API_KEY?.trim()
+      const url = (process.env.QDRANT_URL?.trim() || "http://127.0.0.1:6333").replace(/\/+$/, "")
+      const response = await fetch(url + "/collections", {
+        headers: key ? { "api-key": key } : {}, signal: AbortSignal.timeout(5000) })
+      if (!response.ok) throw new Error("HTTP " + response.status)'
+}
+# 与网站同样的向量请求（含维度、密钥），并按网站的规则校验返回的条数与维度
+embedding_ok() {
+  app_request '
+      const { ragConfig } = await import("./server/rag.ts")
+      const { Embeddings } = await import("./server/rag-embedding.ts")
+      await new Embeddings(ragConfig().embedding).embed(["健康检查"], undefined, 0)'
+}
+# 网站连校内模型用的地址与密钥（server/models.ts 的 connection）；/v1/models 只列模型，不调用推理
 campus_ok() {
-  fetch_with_key "$(setting CAMPUS_API_KEY)" -m 10 "$(setting CAMPUS_BASE_URL http://10.27.66.12 | sed 's#/*$##')/v1/models"
+  app_request '
+      const { connection } = await import("./server/models.ts")
+      const { baseURL, apiKey } = connection({ provider: "campus", model: "" })
+      const response = await fetch(baseURL + "/v1/models", {
+        headers: { authorization: "Bearer " + apiKey, "x-api-key": apiKey }, signal: AbortSignal.timeout(10000) })
+      if (!response.ok) throw new Error("HTTP " + response.status)'
 }
 
 status() {

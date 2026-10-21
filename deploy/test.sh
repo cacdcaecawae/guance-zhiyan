@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # deploy/guance.sh 冒烟测试（Linux / WSL，CI 中运行；需先 pnpm build）。Qdrant 与向量服务用替身，网站用真实入口。
 # 总是测：生成的 systemd 单元通过 systemd-analyze verify；deploy/.env 写了应用配置、有语法错误或 APP_MODE 无效时 install
-# 拒绝、服务入口以 78 退出；向量服务请求体长度检查（embed-server.py --self-check）；直接运行各服务入口时的健康检查（向量服务按配置的维度检查、经出站代理才能访问时也正常）；
+# 拒绝、服务入口以 78 退出；没有 dist/ 时 install 拒绝；向量服务自检（embed-server.py --self-check）；直接运行各服务入口时的健康检查
+# （向量服务按配置的维度检查；向量服务与校内模型只能经出站代理访问时也正常；Qdrant 密钥错误时报失败）；
 # Qdrant 只监听本机且相对路径按仓库根目录解析；健康检查不在进程参数里暴露密钥；server/.env 的行尾注释、export 与空格写法
 # 按 Node 的规则读取。有 systemd 与免密 sudo、且本机没有已装的 guance-* 服务和 server/.env 时（如 CI），再真实安装：
 # Qdrant 起不来时 install 报失败；开机自启、加固选项生效且数据目录可写、崩溃后自动重启、停止后不留进程。
@@ -19,11 +20,12 @@ UNITS=(guance-qdrant guance-embedding guance-app)
 # 应用配置经环境变量传入（优先于 server/.env，网站与 status 一致）；Qdrant 路径故意写成相对仓库根目录的形式
 export DATA_DIR=$T/data PORT=33411 QDRANT_URL=http://127.0.0.1:33433 \
   EMBEDDING_URL=http://127.0.0.1:33481/embeddings EMBEDDING_MODEL=fake EMBEDDING_DIMENSIONS=2 \
-  EMBEDDING_API_KEY=secret-test-key-1234 APP_MODE=local \
+  EMBEDDING_API_KEY=secret-test-key-1234 QDRANT_API_KEY=qdrant-test-key-5678 FAKE_QDRANT_KEY=qdrant-test-key-5678 APP_MODE=local \
   QDRANT_STORAGE=$(realpath --relative-to=. "$T/qdrant") QDRANT_BIN=$(realpath --relative-to=. "$T/qdrant-bin")
 cat >"$T/fake.py" <<'EOF'
-# 替身：Qdrant（记下收到的配置）或向量服务（返回固定 2 维向量，响应前停 2 秒，便于检查进程参数；忽略 SIGTERM；
-# 兼作 HTTP 代理：CONNECT 隧道一律接到自己，用于“只能经代理访问”的向量服务）
+# 替身：Qdrant（记下收到的配置；设了 FAKE_QDRANT_KEY 时 /collections 要求 api-key 相符）或向量服务（返回固定 2 维向量，
+# 响应前停 2 秒，便于检查进程参数；忽略 SIGTERM；兼作校内模型的 /v1/models 与 HTTP 代理：CONNECT 隧道一律接到自己，
+# 用于“只能经代理访问”的向量服务与校内模型）
 import json, os, select, signal, socket, sys, time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 kind = sys.argv[1]
@@ -39,6 +41,9 @@ class H(BaseHTTPRequestHandler):
         self.send_response(200); self.send_header("Content-Length", str(len(body))); self.end_headers()
         self.wfile.write(body)
     def do_GET(self):
+        if self.path.startswith("/collections") and self.headers.get("api-key") != os.environ.get("FAKE_QDRANT_KEY", self.headers.get("api-key")):
+            self.send_response(401); self.send_header("Content-Length", "0"); self.end_headers()
+            return
         self.reply(b"ok")
     def do_POST(self):
         self.rfile.read(int(self.headers.get("Content-Length", 0)))
@@ -81,6 +86,7 @@ cleanup() {
   # 开始时已确认 deploy/.env 不存在；server/.env 只删本测试建的
   rm -f deploy/.env
   [ ! -e "$T/server-env" ] || rm -f server/.env
+  [ ! -e "$T/dist" ] || mv "$T/dist" dist
   rm -rf "$T"
 }
 trap cleanup EXIT
@@ -126,7 +132,13 @@ refused DATA_DIR=/elsewhere 'DATA_DIR 移到 server/.env'
 refused 'EMBED_CMD="unterminated' 'deploy/.env 读取失败'
 refused APP_MODE=locla 'APP_MODE 只能是 local 或 server'
 
-echo "== 向量服务在读取前拒绝缺失、非法或超过上限的请求体长度"
+echo "== 没有构建好的前端页面时 install 拒绝并提示 pnpm build"
+mv dist "$T/dist"
+out=$(timeout 60 bash $G install 2>&1) && fail "没有 dist/ 时 install 仍执行"
+grep -q 'pnpm build' <<<"$out" || fail "没有 dist/ 时未提示 pnpm build：$out"
+mv "$T/dist" dist
+
+echo "== 向量服务自检：请求体长度、模型名、并发上限"
 python3 server/rag/embed-server.py --self-check || fail "embed-server.py 自检未通过"
 
 echo "== 生成的 systemd 单元"
@@ -156,17 +168,22 @@ grep -q "\"cwd\": \"$T/qdrant\"" "$T/qdrant/env.json" || fail "Qdrant 相对路�
 # 先取输出再匹配：直接接管道时 grep -q 提前退出，status 收到 SIGPIPE，pipefail 下整条管道失败、fail 不会执行
 out=$(EMBEDDING_DIMENSIONS=3 bash $G status)
 grep -q '^向量服务：正常$' <<<"$out" && fail "维度与向量服务不符时仍报告正常"
-# 向量服务的主机名只有代理能解析：网站经 configureNetwork 走代理能取到向量，健康检查也必须走同一代理
+# 向量服务与校内模型的主机名只有代理能解析：网站经 configureNetwork 走代理能访问，健康检查也必须走同一代理
 out=$(HTTP_PROXY=http://127.0.0.1:33481 NO_PROXY=127.0.0.1,localhost \
-  EMBEDDING_URL=http://guance-embed.invalid:33481/embeddings bash $G status)
+  EMBEDDING_URL=http://guance-embed.invalid:33481/embeddings \
+  CAMPUS_BASE_URL=http://guance-campus.invalid:33481 CAMPUS_API_KEY=campus-test-key-9012 bash $G status)
 grep -q '^向量服务：正常$' <<<"$out" || fail "只能经代理访问的向量服务被报告为无响应：$out"
+grep -q '^校内模型：正常$' <<<"$out" || fail "只能经代理访问的校内模型被报告为无响应：$out"
+# /readyz 不要密钥；健康检查须用需要鉴权的接口，Qdrant 密钥错误时报失败
+out=$(QDRANT_API_KEY=wrong-key bash $G status)
+grep -q '^Qdrant：正常$' <<<"$out" && fail "Qdrant 密钥错误时仍报告正常"
 
 echo "== 健康检查期间密钥不出现在任何进程的参数里"
-bash $G status >/dev/null &
+CAMPUS_BASE_URL=http://127.0.0.1:33481 CAMPUS_API_KEY=campus-test-key-9012 bash $G status >/dev/null &
 checker=$!
 sleep 1
 # 匹配串从文件读取，避免 grep 自己的参数里出现密钥
-echo "$EMBEDDING_API_KEY" >"$T/secret"
+printf '%s\n' "$EMBEDDING_API_KEY" "$QDRANT_API_KEY" campus-test-key-9012 >"$T/secret"
 exposed=$(grep -lFf "$T/secret" /proc/[0-9]*/cmdline 2>/dev/null || true)
 [ -z "$exposed" ] || fail "密钥出现在进程参数中：$(for f in $exposed; do tr '\0' ' ' <"$f"; echo; done)"
 wait $checker || true
@@ -205,7 +222,7 @@ else
   printf '%s\n' "PATH=$(dirname "$(command -v node)"):\$PATH" "QDRANT_BIN=$QDRANT_BIN" \
     "QDRANT_STORAGE=$QDRANT_STORAGE" "EMBED_CMD=\"$EMBED_CMD\"" APP_MODE=local >deploy/.env
   unset DATA_DIR PORT QDRANT_URL EMBEDDING_URL EMBEDDING_MODEL EMBEDDING_DIMENSIONS EMBEDDING_API_KEY APP_MODE \
-    QDRANT_BIN QDRANT_STORAGE EMBED_CMD
+    QDRANT_BIN QDRANT_STORAGE EMBED_CMD QDRANT_API_KEY FAKE_QDRANT_KEY
   rm -f "$T/qdrant/env.json"
   installed=1
   # 先装一个起不来的 Qdrant（启动即退出、反复重启）：网站照常健康，install 也必须报失败并指出 Qdrant

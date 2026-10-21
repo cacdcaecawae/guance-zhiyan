@@ -7,7 +7,7 @@
 模型名默认 bge-m3，请求里的 model 不同时返回 400；后端用别的名字时，启动本服务前设同名环境变量 EMBEDDING_MODEL。
 只取稠密向量（CLS + L2 归一化，与 BGE-M3 官方 dense 用法一致），不做稀疏 / 多向量。只监听 127.0.0.1。
 """
-import gc, json, os, sys, threading
+import gc, json, os, sys, threading, traceback
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 DIMENSIONS = 1024
@@ -21,6 +21,10 @@ MAX_INPUTS = 256
 MAX_BODY = MAX_INPUTS * MAX_TOKENS * 16
 # 本服务的模型名，须与 server/.env 的 EMBEDDING_MODEL 一致：索引按这个名字记录用的是哪个模型，名字对不上的请求一律拒绝
 MODEL = os.environ.get("EMBEDDING_MODEL") or "bge-m3"
+# 同时在处理（含排队等显卡）的请求数上限，在读取请求体之前占位，超出时返回 503（网站对 5xx 退避重试）。
+# 校内目标 10 人并发、每次检索一个查询向量，再加导入批次，16 足够；最坏占用 16 × MAX_BODY 的请求体内存
+MAX_PENDING = 16
+slots = threading.BoundedSemaphore(MAX_PENDING)
 
 
 def model_ok(body):
@@ -39,6 +43,10 @@ def body_length(value):
 
 if sys.argv[1:] == ["--self-check"]:
     assert model_ok({"model": MODEL}) and model_ok({}) and not model_ok({"model": MODEL + "-x"}), "模型名不符未被拒绝"
+    assert all(slots.acquire(blocking=False) for _ in range(MAX_PENDING)), "并发占位不足 MAX_PENDING"
+    assert not slots.acquire(blocking=False), "超过 MAX_PENDING 的请求未被拒绝"
+    for _ in range(MAX_PENDING):
+        slots.release()
     assert body_length("0") == 0 and body_length(str(MAX_BODY)) == MAX_BODY
     for bad in (None, "", "-1", "1e3", "+5", " 5", "²"):
         try:
@@ -111,6 +119,14 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         if self.path.rstrip("/") not in ("/embeddings", "/v1/embeddings"):
             return self.reply(404, {"error": "not found"})
+        if not slots.acquire(blocking=False):
+            return self.reply(503, {"error": f"同时处理的请求已达 {MAX_PENDING} 个，请稍后重试"})
+        try:
+            self.handle_embeddings()
+        finally:
+            slots.release()
+
+    def handle_embeddings(self):
         try:
             length = body_length(self.headers.get("Content-Length"))
         except OverflowError as error:
@@ -134,6 +150,9 @@ class Handler(BaseHTTPRequestHandler):
             with lock:
                 vectors = embed(texts)
         except Exception as error:  # 推理失败（如显存不足）明确返回 500，而不是直接断开连接
+            # 类型、信息与调用栈写 stderr（systemd 下进 journalctl）；只记条数，不记请求正文
+            print(f"向量计算失败（{len(texts)} 条）：", file=sys.stderr)
+            traceback.print_exc()
             return self.reply(500, {"error": f"向量计算失败：{type(error).__name__}"})
         self.reply(200, {"object": "list", "model": MODEL, "data": [{"object": "embedding", "index": i, "embedding": v} for i, v in enumerate(vectors)]})
 

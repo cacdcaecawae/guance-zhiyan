@@ -54,7 +54,7 @@ journalctl -u guance-app -f                  # 查看日志
 
 ## 切换文献库
 
-用哪个文献库由 `server/.env` 的 `DATA_DIR` 决定：改成另一个数据目录，再 `sudo systemctl restart guance-app`。每个数据目录在 Qdrant 里有自己的一组向量，同一个 Qdrant 可以同时存几个库的向量，切换不用重算。迁移时把要用的数据目录和整个 Qdrant 数据目录一起复制。同一数据目录复制出的副本沿用同一个文献库标识、共用同一组向量，不要同时对两份副本执行导入或重建（见 [RAG 说明](RAG.md)中 `pnpm rag reindex` 一段）。
+用哪个文献库由 `server/.env` 的 `DATA_DIR` 决定：改成另一个数据目录，再 `sudo systemctl restart guance-app`。`DATA_DIR` 是整个应用的数据目录，会话、历史、附件和成果文件也随之切换：原目录的这些记录不再显示，但没有删除，切回原目录即恢复。每个数据目录在 Qdrant 里有自己的一组向量，同一个 Qdrant 可以同时存几个库的向量，切换不用重算。迁移时把要用的数据目录和整个 Qdrant 数据目录一起复制。同一数据目录复制出的副本沿用同一个文献库标识、共用同一组向量，不要同时对两份副本执行导入或重建（见 [RAG 说明](RAG.md)中 `pnpm rag reindex` 一段）。
 
 ## 更新
 
