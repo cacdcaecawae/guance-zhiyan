@@ -4,7 +4,7 @@
 # 拒绝、服务入口以 78 退出；直接运行各服务入口时的健康检查（向量服务按配置的维度检查、经出站代理才能访问时也正常）；
 # Qdrant 只监听本机且相对路径按仓库根目录解析；健康检查不在进程参数里暴露密钥；server/.env 的行尾注释、export 与空格写法
 # 按 Node 的规则读取。有 systemd 与免密 sudo、且本机没有已装的 guance-* 服务和 server/.env 时（如 CI），再真实安装：
-# 开机自启、加固选项生效且数据目录可写、崩溃后自动重启、停止后不留进程。
+# Qdrant 起不来时 install 报失败；开机自启、加固选项生效且数据目录可写、崩溃后自动重启、停止后不留进程。
 set -euo pipefail
 cd "$(dirname "$(readlink -f "$0")")/.."
 if [ -f deploy/.env ]; then
@@ -193,7 +193,7 @@ if ! { [ -d /run/systemd/system ] && sudo -n true 2>/dev/null; }; then
 elif [ -e server/.env ] || ls /etc/systemd/system/guance-*.service >/dev/null 2>&1; then
   echo "== 跳过 systemd 安装测试（本机已有 server/.env 或已装的 guance-* 服务）"
 else
-  echo "== systemd：安装后开机自启、加固选项生效、数据目录可写"
+  echo "== systemd：Qdrant 起不来时 install 报失败；正常安装后开机自启、加固选项生效、数据目录可写"
   # 服务不继承本 shell 的环境：应用配置写进 server/.env，进程配置写进 deploy/.env（node 不在 systemd 的默认 PATH 时补上）
   : >"$T/server-env"
   printf '%s\n' "DATA_DIR=$T/sdata" "PORT=$PORT" "QDRANT_URL=$QDRANT_URL" "EMBEDDING_URL=$EMBEDDING_URL" \
@@ -205,6 +205,12 @@ else
     QDRANT_BIN QDRANT_STORAGE EMBED_CMD
   rm -f "$T/qdrant/env.json"
   installed=1
+  # 先装一个起不来的 Qdrant（启动即退出、反复重启）：网站照常健康，install 也必须报失败并指出 Qdrant
+  cp deploy/.env "$T/deploy-env"
+  sed -i 's#^QDRANT_BIN=.*#QDRANT_BIN=/bin/false#' deploy/.env
+  out=$(timeout 300 bash $G install 2>&1) && fail "Qdrant 起不来时 install 仍报告成功：$out"
+  grep -q 'guance-qdrant' <<<"$out" || fail "install 失败时未指出 guance-qdrant：$out"
+  cp "$T/deploy-env" deploy/.env
   out=$(bash $G install) || fail "install 失败：$out"
   grep -q '已安装并启动' <<<"$out" || fail "install 未报告启动：$out"
   for unit in "${UNITS[@]}"; do
