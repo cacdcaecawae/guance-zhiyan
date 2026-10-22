@@ -262,7 +262,7 @@ export class LibraryStore {
    * path, exactly when possible, otherwise by prefix either way (驻马店 ↔ 驻马店市, 安徽省 ↔ 安徽).
    * ponytail: scans rag_metadata per query (~53k rows); index area parts if filters get slow.
    */
-  documentIds(filter: LibraryFilter, withoutText = false): string[] {
+  documentIds(filter: LibraryFilter): string[] {
     const where: string[] = []
     const params: (string | number)[] = []
     for (const [column, value] of [
@@ -274,17 +274,15 @@ export class LibraryStore {
         where.push(`${column}=?`)
         params.push(value)
       }
-    // withoutText (library_list only) reads metadata rows, so documents without imported text are
-    // listed too; otherwise LEFT JOIN from documents: document ids alone also select documents
-    // without metadata, and any metadata condition still excludes them, since it never matches NULL.
-    const id = withoutText ? 'm.document_id' : 'd.id'
+    // LEFT JOIN from documents: only documents with imported text are in scope; document ids alone
+    // also select documents without metadata, and any metadata condition still excludes them,
+    // since it never matches NULL.
+    const id = 'd.id'
     if (filter.documentIds) {
       where.push(`${id} IN (SELECT value FROM json_each(?))`)
       params.push(JSON.stringify(filter.documentIds))
     }
-    const from = withoutText
-      ? 'rag_metadata m'
-      : 'rag_documents d LEFT JOIN rag_metadata m ON m.document_id=d.id'
+    const from = 'rag_documents d LEFT JOIN rag_metadata m ON m.document_id=d.id'
     const run = (clause?: string, extra: string[] = []) =>
       this.store.db
         .prepare(
@@ -309,19 +307,17 @@ export class LibraryStore {
   }
   /**
    * Documents in scope for library_list, ordered by period and year so a series reads in order.
-   * Catalogue entries without imported text are listed too, flagged `noText`, so the model can
-   * say a document exists but has no usable text instead of claiming it is missing. They come
-   * after every document with text: a catalogue far larger than the imported texts (the 506-text
-   * training library lists ~53,000 entries) otherwise fills the first rows with them, and the model
-   * concluded the library had nothing on the question.
+   * Only documents with imported text are listed: catalogue entries without text (the 506-text
+   * training library catalogues ~53,000) led the model to narrow onto an empty entry or ask the
+   * user back instead of searching (evaluation iteration 26).
    */
   listDocuments(filter: LibraryFilter, title?: string, limit = 50) {
-    const ids = this.documentIds(filter, true)
+    const ids = this.documentIds(filter)
     const rows = this.store.db
       .prepare(
         `SELECT m.document_id AS documentId, COALESCE(v.title, m.title, '') AS title, m.area,
-        m.period, m.year, m.doc_type AS docType, m.outline, d.id IS NULL AS noText
-        FROM rag_metadata m LEFT JOIN rag_documents d ON d.id=m.document_id
+        m.period, m.year, m.doc_type AS docType, m.outline
+        FROM rag_metadata m JOIN rag_documents d ON d.id=m.document_id
         LEFT JOIN rag_versions v ON v.id=d.version_id
         WHERE m.document_id IN (SELECT value FROM json_each(?))
         AND (? IS NULL OR instr(COALESCE(v.title, m.title, ''), ?) > 0)
@@ -334,10 +330,9 @@ export class LibraryStore {
       const index = PERIODS.indexOf(period as string)
       return period === null ? -1 : index < 0 ? PERIODS.length : index
     }
-    rows.sort((a, b) => Number(a.noText) - Number(b.noText) || rank(a.period) - rank(b.period))
+    rows.sort((a, b) => rank(a.period) - rank(b.period))
     return {
       total: rows.length,
-      withoutText: rows.filter((row) => row.noText).length,
       documents: rows.slice(0, limit).map((row) => ({
         documentId: row.documentId as string,
         title: row.title as string,
@@ -348,7 +343,6 @@ export class LibraryStore {
         ...(row.year ? { year: row.year as number } : {}),
         ...(row.docType ? { docType: row.docType as string } : {}),
         ...(row.outline ? { outline: true } : {}),
-        ...(row.noText ? { noText: true } : {}),
       })),
     }
   }
