@@ -169,6 +169,7 @@ test('completed library answers drop free commentary after the citations', () =>
     '**口径说明**：上述内容反映了当时主流扶贫方式，次年还部署了社区教育示范区。',
     '## 分析（推断）',
     '1. 基础设施是投入重心。',
+    '2. 产业项目次之。约占总投资的68.3%。',
   ]
   const make = (question: string, text: string): Message => ({
     id: 'turn-1',
@@ -194,10 +195,10 @@ test('completed library answers drop free commentary after the citations', () =>
 
   const analysis = [make('分析城固县扶贫的投入重心。', answer.join('\n'))]
   trimAnswers(analysis)
-  assert.equal(
-    textOf(analysis[0]),
-    answer.join('\n'),
-    'questions asking for analysis are left whole',
+  assert.deepEqual(
+    textOf(analysis[0]).split('\n'),
+    [...answer.slice(0, -1), '2. 产业项目次之。'],
+    'analysis answers keep every line but lose the sentences giving a number found in no passage',
   )
 
   const refusal = `库中没有“十五五”规划，无法列出。\n仅供参考：${cite}`

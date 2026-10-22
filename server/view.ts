@@ -337,16 +337,18 @@ function sourcedPart(sentence: string, facts: Facts) {
  * category worse. Kept lines without a citation (the opening, headings, passage-text lines) then
  * lose the sentences giving an unsourced number or count, the model's own summaries the judge
  * rejected as information outside the passages: replayed, 55.0% to 56.2% on the 506-document sample
- * (CI +0.2 to +2.2), unchanged on the full library, no category worse. Questions asking for
- * comparison or analysis (a government work report alone does not count), and answers with fewer
- * than two cited lines (refusals, clarifying questions), are left whole. Returns each line as kept
- * (possibly shortened) or undefined when dropped.
+ * (CI +0.2 to +2.2), unchanged on the full library, no category worse. Answers to questions asking
+ * for comparison or analysis (a government work report alone does not count) keep every line and
+ * only lose those sentences (evaluation iteration 27): their rejections were mostly numbers found in
+ * no passage. Answers with fewer than two cited lines (refusals, clarifying questions) are left
+ * whole. Returns each line as kept (possibly shortened) or undefined when dropped.
  * ponytail: keyword rules; an analysis question without these words is trimmed like a factual one.
  */
 function trimAnswer(lines: string[], question: string, facts: Facts) {
   const cited = lines.map((line) => CITED.test(line))
-  if (ASKS_ANALYSIS.test(question) || cited.filter(Boolean).length < 2) return lines
-  const kept: (string | undefined)[] = lines.map(() => undefined)
+  if (cited.filter(Boolean).length < 2) return lines
+  const analysis = ASKS_ANALYSIS.test(question)
+  const kept: (string | undefined)[] = analysis ? [...lines] : lines.map(() => undefined)
   // Table rows, as Markdown reads them: a header line that is not a heading, a separator row
   // ("|---|", "--- | ---"), then the lines with a pipe up to a heading. Each table is found on its
   // own, so a heading with a pipe above, below or between tables is not a row.
