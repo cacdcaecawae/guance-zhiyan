@@ -178,7 +178,7 @@ test('library_open retains the requested passage, budgets neighbors and preserve
       available: () => true,
       retrieve: async () => shortTail,
       neighbors: (id, before, after) => sources.neighbors(id, before, after),
-      list: () => ({ total: 0, withoutText: 0, documents: [] }),
+      list: () => ({ total: 0, documents: [] }),
     },
   }).init()
   try {
@@ -295,7 +295,6 @@ test('library_search passes a normalized scope, rejects an invalid one, and libr
       title === '长标题'
         ? {
             total: 50,
-            withoutText: 0,
             documents: Array.from({ length: 50 }, (_, i) => ({
               documentId: String(i),
               title: '长'.repeat(500),
@@ -353,11 +352,8 @@ test('library_search passes a normalized scope, rejects an invalid one, and libr
       `共 50 篇符合条件，以下列出前 ${rows.length} 篇（可加 title 关键词或更多条件缩小范围）：`,
     )
     assert.ok(rows.join('').length <= 6000)
-    // Only documents without text: the count is stated and the model is pointed at the rest of the library.
-    const bare = (await run('no text')).split('\n')
-    assert.equal(bare[0], '共 1 篇符合条件（其中 1 篇没有可用正文，排在最后）：')
-    assert.equal(JSON.parse(bare[1]).noText, true)
-    assert.match(bare[2], /^这些文献都没有可用正文。.*library_search/)
+    // A catalogue entry without text is not listed; the model is told to widen the scope instead.
+    assert.match(await run('no text'), /^没有符合条件的文献。可放宽条件/)
   } finally {
     await agents.close()
     store.close()
@@ -477,7 +473,7 @@ test('library tools stop searching once the question passes its deadline', async
   let searched = 0
   const library = {
     retrieve: async () => (searched++, []),
-    list: () => (searched++, { total: 0, withoutText: 0, documents: [] }),
+    list: () => (searched++, { total: 0, documents: [] }),
   } as unknown as Library
   registerLibrary(ctx, library, Date.now() - 1)
   const exec = { signal: new AbortController().signal } as ToolRunContext
