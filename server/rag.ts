@@ -191,9 +191,9 @@ export class KnowledgeLibrary {
     return this.documents.documentIds(filter)
   }
 
-  list(filter: LibraryFilter, title?: string) {
+  list(filter: LibraryFilter, title?: string, limit?: number) {
     this.requireMetadata()
-    return this.documents.listDocuments(filter, title)
+    return this.documents.listDocuments(filter, title, limit)
   }
 
   /** Library tools are offered only when there is something configured to search. */

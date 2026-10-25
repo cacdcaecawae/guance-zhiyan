@@ -13,9 +13,9 @@ const MAX_CHARS = 6000
 
 const GUIDE = `共享文献库（管理员导入的政策、规划等文件）通过 library_search 按需检索。涉及政策、规划、法规、标准等资料的问题，先检索再回答；需要某个片段的前后文时调用 library_open；标有 superseded 的片段已被新版本替代，不作为现行规定引用。闲聊和一般常识不必检索。联网资料与文献库证据分开说明。
 检索步骤：
-1. 先确定涉及的文献：问题写明地区、规划期、文种、年份或文件名时，用 library_list（带 area、period、docType、year，文件名关键词放 title）找到对应文献；比较多个地区或多个规划期时，每个对象分别找。
+1. 先确定涉及的文献：问题写明地区、规划期、文种、年份或文件名时，用 library_list（带 area、period、docType、year，文件名关键词放 title）找到对应文献；比较多个地区或多个规划期时，每个对象分别找。问文献库收录多少文献、覆盖哪些地区和规划期时，不带条件调用 library_list 查看概况。
 2. 再用 library_search 检索：已选定文献时把它们的 documentId 放进 documentIds，只在这些文献内检索；否则带上与第 1 步相同的筛选条件。问题问到的每个方面分别换关键词检索，片段不足时继续换词或用 library_open 看前后文。
-3. 检索不到或片段不足以回答时，明确说明未在文献库中找到、查过哪些范围，不凭记忆编造，也不推测未收录文件的内容。
+3. 检索不到或片段不足以回答时，明确说明未在文献库中找到、查过哪些范围，不凭记忆编造，也不推测未收录文件的内容。检索到的文献只有 planid、title 等开头字段、没有正文段落时，明确告诉用户这篇没有可用正文、无法摘录，不编造；再用 library_list 找出同地区或同主题、有正文的文献，列出两三篇供用户改用。用户问到的章节、条款、项目或数字，在已收录文献的原文中找不到或与原文不符时，明确指出该文献中没有这一章节（或项目、数字），或说明原文实际怎么写；不推测它的内容，也不拿其他项目、其他文献的数字顶替。片段开头的 content_source 表示正文来源（dbtxt 为数据库文本，html 为网页，pdf 为 PDF 提取），不是原始排版：用户要求按原书或原始电子版样式呈现时，说明这一点，不声称是原始版式。
 依据文献库作答时按以下格式：
 1. 开头一句写明依据的文献，只写工具返回的标题与文献编号，不加发文日期、发文机构、会议届次。
 2. 正文按要点分条。每条写成“十字以内的小标题：“原文摘录””，摘录从片段中原样复制回答该要点的一段连续原文（一两句即可），中间不跳过、不用省略号；需要的内容不相连时拆成两条，各自加引号，条末原样复制该片段的 cite 字段作为引用（整段复制，含方括号和链接，不能只写 planid）；用表格呈现时，每行加“出处”列，放该行内容对应片段的 cite；不同要点引用各自对应的片段，不要多个要点共用一条引用。不用自己的话转述片段内容，片段没写的背景、意义、成效评价、数字换算、规划期起止年份、文件日期、机构沿革和其他地区或年份的情况一律不写，宁缺不补。
@@ -116,6 +116,23 @@ function failure(error: unknown, signal: AbortSignal): never {
   throw new HarnessError(RAG_ERRORS.RAG_RETRIEVAL_FAILED, 'RAG_RETRIEVAL_FAILED')
 }
 
+/** library_list without conditions: what the library holds, so "how many documents" has an answer. */
+function overview({ total, documents }: ReturnType<Library['list']>) {
+  const tally = (keys: string[]) => {
+    const counts = new Map<string, number>()
+    for (const key of keys) counts.set(key, (counts.get(key) ?? 0) + 1)
+    return [...counts].sort((a, b) => b[1] - a[1]).map(([key, n]) => `${key} ${n} 篇`)
+  }
+  const provinces = tally(documents.map((document) => document.area.split('/')[0] || '全国'))
+  return [
+    `共享文献库共收录 ${total} 篇有正文的文献。`,
+    `文种：${tally(documents.map((document) => document.docType ?? '未标注')).join('、')}。`,
+    `规划期：${tally(documents.flatMap((document) => (document.period ? [document.period] : []))).join('、')}；没有规划期、按年份区分的 ${documents.filter((document) => !document.period).length} 篇。`,
+    `地区：覆盖 ${provinces.length} 个省级地区，${provinces.join('、')}。`,
+    '要列出具体文献，再按地区、规划期、文种或年份调用。',
+  ].join('\n')
+}
+
 /** Shown instead of results once a question has searched for too long. */
 const OVERTIME =
   '本题检索已超过时限：不再检索，直接依据已经取得的片段作答；片段没有覆盖的方面如实说明未找到。'
@@ -188,7 +205,7 @@ export function registerLibrary(ctx: Context, library: Library, deadline = Infin
     defineTool({
       name: 'library_list',
       description:
-        '按地区、规划期、文种或年份列出共享文献库中的文献（文献编号 documentId、标题、地区、规划期），用于确认库内有哪些文献、选定要检索的篇目。至少给出一个条件；title 可按标题关键词再筛选。',
+        '按地区、规划期、文种或年份列出共享文献库中的文献（文献编号 documentId、标题、地区、规划期），用于确认库内有哪些文献、选定要检索的篇目；title 可按标题关键词再筛选。不带任何条件时返回文献库概况：总篇数及文种、规划期、地区分布。',
       parameters: { ...SCOPE, title: { type: 'string', description: '标题关键词' } },
       output: contentOutput,
       execute: async (args, exec) => {
@@ -196,8 +213,9 @@ export function registerLibrary(ctx: Context, library: Library, deadline = Infin
         try {
           const filter = scopeOf(args)
           const title = args.title?.trim() || undefined
-          if ((!filter && !title) || (title && (title.length > 64 || !title.isWellFormed())))
+          if (title && (title.length > 64 || !title.isWellFormed()))
             throw reject('RAG_INVALID_FILTER')
+          if (!filter && !title) return overview(library.list({}, undefined, Infinity))
           const { total, documents } = library.list(filter ?? {}, title)
           if (!total)
             return '没有符合条件的文献。可放宽条件（例如改用上一级地区或去掉规划期）后再列出。'
