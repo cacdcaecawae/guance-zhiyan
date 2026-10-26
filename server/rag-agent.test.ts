@@ -291,7 +291,7 @@ test('library_search passes a normalized scope, rejects an invalid one, and libr
       return plan.chunks
     },
     neighbors: (id: string, before: number, after: number) => sources.neighbors(id, before, after),
-    list: (filter: LibraryFilter, title?: string) =>
+    list: (filter: LibraryFilter, title?: string, limit?: number) =>
       title === '长标题'
         ? {
             total: 50,
@@ -301,7 +301,7 @@ test('library_search passes a normalized scope, rejects an invalid one, and libr
               area: '安徽',
             })),
           }
-        : sources.listDocuments(filter, title),
+        : sources.listDocuments(filter, title, limit),
   }
   const model = new TestModel((request) => {
     if (request.messages.at(-1)?.role === 'tool') return textChunks('已查看工具结果。')
@@ -312,6 +312,7 @@ test('library_search passes a normalized scope, rejects an invalid one, and libr
       return toolChunks('library_search', { query: '水利', period: '2025年' })
     if (input === 'long') return toolChunks('library_list', { title: '长标题' })
     if (input === 'no text') return toolChunks('library_list', { area: '正定县' })
+    if (input === 'overview') return toolChunks('library_list', {})
     if (input === 'document')
       return toolChunks('library_search', { query: '水利', documentIds: [' 33236 ', ''] })
     return toolChunks('library_search', {
@@ -354,6 +355,17 @@ test('library_search passes a normalized scope, rejects an invalid one, and libr
     assert.ok(rows.join('').length <= 6000)
     // A catalogue entry without text is not listed; the model is told to widen the scope instead.
     assert.match(await run('no text'), /^没有符合条件的文献。可放宽条件/)
+    // Without conditions library_list describes the library (documents with text only).
+    assert.equal(
+      await run('overview'),
+      [
+        '共享文献库共收录 1 篇有正文的文献。',
+        '文种：规划文件 1 篇。',
+        '规划期：十四五 1 篇；没有规划期、按年份区分的 0 篇。',
+        '地区：覆盖 1 个省级地区，安徽 1 篇。',
+        '要列出具体文献，再按地区、规划期、文种或年份调用。',
+      ].join('\n'),
+    )
   } finally {
     await agents.close()
     store.close()
