@@ -123,12 +123,15 @@ function overview({ total, documents }: ReturnType<Library['list']>) {
     for (const key of keys) counts.set(key, (counts.get(key) ?? 0) + 1)
     return [...counts].sort((a, b) => b[1] - a[1]).map(([key, n]) => `${key} ${n} 篇`)
   }
-  const provinces = tally(documents.map((document) => document.area.split('/')[0] || '全国'))
+  const areas = documents.map((document) => document.area.split('/')[0])
+  const provinces = tally(areas.filter((area) => area && area !== '全国'))
+  const national = areas.filter((area) => area === '全国').length
+  const unknown = areas.filter((area) => !area).length
   return [
     `共享文献库共收录 ${total} 篇有正文的文献。`,
     `文种：${tally(documents.map((document) => document.docType ?? '未标注')).join('、')}。`,
-    `规划期：${tally(documents.flatMap((document) => (document.period ? [document.period] : []))).join('、')}；没有规划期、按年份区分的 ${documents.filter((document) => !document.period).length} 篇。`,
-    `地区：覆盖 ${provinces.length} 个省级地区，${provinces.join('、')}。`,
+    `规划期：${tally(documents.flatMap((document) => (document.period ? [document.period] : []))).join('、')}；未标注规划期的 ${documents.filter((document) => !document.period).length} 篇。`,
+    `地区：覆盖 ${provinces.length} 个省级地区${provinces.length ? `，${provinces.join('、')}` : ''}${national ? `；全国 ${national} 篇` : ''}${unknown ? `；未标注地区 ${unknown} 篇` : ''}。`,
     '要列出具体文献，再按地区、规划期、文种或年份调用。',
   ].join('\n')
 }

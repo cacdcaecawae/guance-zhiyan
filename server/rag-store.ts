@@ -315,16 +315,16 @@ export class LibraryStore {
     const ids = this.documentIds(filter)
     const rows = this.store.db
       .prepare(
-        `SELECT m.document_id AS documentId, COALESCE(v.title, m.title, '') AS title, m.area,
+        `SELECT d.id AS documentId, COALESCE(v.title, m.title, '') AS title, m.area, m.level,
         m.period, m.year, m.doc_type AS docType, m.outline
-        FROM rag_metadata m JOIN rag_documents d ON d.id=m.document_id
+        FROM rag_documents d LEFT JOIN rag_metadata m ON m.document_id=d.id
         LEFT JOIN rag_versions v ON v.id=d.version_id
-        WHERE m.document_id IN (SELECT value FROM json_each(?))
+        WHERE d.id IN (SELECT value FROM json_each(?))
         AND (? IS NULL OR instr(COALESCE(v.title, m.title, ''), ?) > 0)
-        ORDER BY m.period, m.year, title, m.document_id`,
+        ORDER BY m.period, m.year, title, d.id`,
       )
       .all(JSON.stringify(ids), title ?? null, title ?? null)
-    // Stable sort keeping the SQL order within a period: none first (year-based reports), then
+    // Stable sort keeping the SQL order within a period: none first (including missing metadata), then
     // periods in time order, unrecognized labels last.
     const rank = (period: unknown) => {
       const index = PERIODS.indexOf(period as string)
@@ -336,9 +336,10 @@ export class LibraryStore {
       documents: rows.slice(0, limit).map((row) => ({
         documentId: row.documentId as string,
         title: row.title as string,
-        area: (JSON.parse(row.area as string) as string[])
-          .filter((part) => part !== '全国')
-          .join('/'),
+        area:
+          (JSON.parse((row.area as string | null) ?? '[]') as string[])
+            .filter((part) => part !== '全国')
+            .join('/') || (row.level === '国家' || row.area === '["全国"]' ? '全国' : ''),
         ...(row.period ? { period: row.period as string } : {}),
         ...(row.year ? { year: row.year as number } : {}),
         ...(row.docType ? { docType: row.docType as string } : {}),
