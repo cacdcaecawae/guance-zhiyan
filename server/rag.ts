@@ -192,7 +192,7 @@ export class KnowledgeLibrary {
   }
 
   list(filter: LibraryFilter, title?: string, limit?: number) {
-    this.requireMetadata()
+    if (Object.keys(filter).some((key) => key !== 'documentIds')) this.requireMetadata()
     return this.documents.listDocuments(filter, title, limit)
   }
 

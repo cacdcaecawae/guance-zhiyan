@@ -336,6 +336,10 @@ test('a metadata scope filters dense candidates in Qdrant and lexical candidates
     ['other', '其他地区养老规划'],
   ])
     await library.import({ id, title, text: `第一条 ${title}养老测试。` })
+  assert.equal(library.list({}).total, 2, 'unfiltered listing needs no metadata')
+  assert.equal(library.list({}, '裕安区').total, 1, 'title-only listing needs no metadata')
+  assert.equal(library.list({ documentIds: ['county'] }).total, 1)
+  assert.throws(() => library.list({ area: '裕安区' }), { code: 'RAG_NO_METADATA' })
   const inScope = documents.chunks(documents.current('county')!)[0].id
   control.dense = [documents.chunks(documents.current('other')!)[0].id, inScope]
   await assert.rejects(library.retrieve('养老', undefined, { area: '裕安区' }), {

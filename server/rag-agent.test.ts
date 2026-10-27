@@ -361,11 +361,40 @@ test('library_search passes a normalized scope, rejects an invalid one, and libr
       [
         '共享文献库共收录 1 篇有正文的文献。',
         '文种：规划文件 1 篇。',
-        '规划期：十四五 1 篇；没有规划期、按年份区分的 0 篇。',
+        '规划期：十四五 1 篇；未标注规划期的 0 篇。',
         '地区：覆盖 1 个省级地区，安徽 1 篇。',
         '要列出具体文献，再按地区、规划期、文种或年份调用。',
       ].join('\n'),
     )
+    for (const id of ['national', 'unknown', 'bare']) {
+      sources.publish(sources.stage({ id, title: id, text: '第一条 测试正文。' }).versionId, null)
+    }
+    sources.saveMetadata([
+      {
+        id: 'national',
+        title: null,
+        area: ['全国'],
+        level: null,
+        period: null,
+        year: 2020,
+        docType: null,
+        outline: false,
+      },
+      {
+        id: 'unknown',
+        title: null,
+        area: [],
+        level: null,
+        period: null,
+        year: null,
+        docType: null,
+        outline: false,
+      },
+    ])
+    const overview = await run('overview')
+    assert.match(overview, /共收录 4 篇有正文/)
+    assert.match(overview, /覆盖 1 个省级地区，安徽 1 篇；全国 1 篇；未标注地区 2 篇/)
+    assert.match(overview, /未标注规划期的 3 篇（其中按年份区分的 1 篇）/)
   } finally {
     await agents.close()
     store.close()

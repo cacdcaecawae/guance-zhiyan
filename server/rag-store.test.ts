@@ -402,6 +402,20 @@ test('metadata validates source exports, scopes current documents by area, perio
     assert.deepEqual(scope({ documentIds: ['bare', 'county'], period: '十四五' }), ['county'])
     assert.deepEqual(scope({ area: '六安市', documentIds: ['county', 'jilin'] }), ['county'])
 
+    const all = library.listDocuments({})
+    assert.equal(all.total, 9, 'all imported documents count, including missing metadata')
+    assert.equal(all.documents.find((d) => d.documentId === 'bare')?.area, '')
+    assert.equal(all.documents.find((d) => d.documentId === 'nation')?.area, '全国')
+    assert.equal(all.documents.find((d) => d.documentId === 'nation-plain')?.area, '全国')
+    assert.deepEqual(
+      library.listDocuments({}, '未导入').documents.map((d) => d.documentId),
+      ['bare'],
+    )
+    assert.deepEqual(
+      library.listDocuments({ documentIds: ['bare'] }).documents.map((d) => d.documentId),
+      ['bare'],
+    )
+
     const listed = library.listDocuments({ area: '六安市' })
     assert.equal(listed.total, 3)
     assert.ok(!listed.documents.some((d) => d.documentId === 'pending'))
