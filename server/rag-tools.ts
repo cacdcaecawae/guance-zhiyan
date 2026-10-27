@@ -127,10 +127,12 @@ function overview({ total, documents }: ReturnType<Library['list']>) {
   const provinces = tally(areas.filter((area) => area && area !== '全国'))
   const national = areas.filter((area) => area === '全国').length
   const unknown = areas.filter((area) => !area).length
+  const unperiod = documents.filter((document) => !document.period)
+  const byYear = unperiod.filter((document) => document.year).length
   return [
     `共享文献库共收录 ${total} 篇有正文的文献。`,
     `文种：${tally(documents.map((document) => document.docType ?? '未标注')).join('、')}。`,
-    `规划期：${tally(documents.flatMap((document) => (document.period ? [document.period] : []))).join('、')}；未标注规划期的 ${documents.filter((document) => !document.period).length} 篇。`,
+    `规划期：${tally(documents.flatMap((document) => (document.period ? [document.period] : []))).join('、')}；未标注规划期的 ${unperiod.length} 篇${byYear ? `（其中按年份区分的 ${byYear} 篇）` : ''}。`,
     `地区：覆盖 ${provinces.length} 个省级地区${provinces.length ? `，${provinces.join('、')}` : ''}${national ? `；全国 ${national} 篇` : ''}${unknown ? `；未标注地区 ${unknown} 篇` : ''}。`,
     '要列出具体文献，再按地区、规划期、文种或年份调用。',
   ].join('\n')
