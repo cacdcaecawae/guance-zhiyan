@@ -295,7 +295,24 @@ const COUNT = /[零〇一二三四五六七八九十百千万两]+个?(?:大|项
 const ASKED_COUNT =
   /(?:你|您)[^，。；：:！？]{0,6}的[零〇一二三四五六七八九十百千万两]+个?(?:大|项|方面|章|节|部分|板块|领域)/g
 /** Numbers and counts in the library results returned so far and in the questions asked so far. */
-type Facts = { runs: Set<string>; numbers: Set<string>; counts: Set<string> }
+type Facts = { runs: Set<string>; numbers: Set<string>; counts: Set<string>; texts: string[] }
+/** Wording the answer puts in quotation marks, as if the documents said it; titles in 《》 aside. */
+const QUOTED = /“([^”\n]{4,80})”|"([^"\n]{4,80})"|「([^」\n]{4,80})」/g
+/**
+ * A quotation found in no library result or question, such as an inference written as "规划提出
+ * “以快递业为绝对核心”": quoted text reads as the documents' own wording. Pieces around an ellipsis
+ * are checked on their own; quotations under four characters ("十四五") are not checked.
+ */
+function invented(text: string, facts: Facts) {
+  for (const match of text.replace(/《[^》]*》/g, '').matchAll(QUOTED)) {
+    const pieces = (match[1] ?? match[2] ?? match[3])
+      .split(/…+|\.{3,}/)
+      .map(contentChars)
+      .filter((piece) => piece.length >= 4)
+    if (pieces.some((piece) => !facts.texts.some((source) => source.includes(piece)))) return true
+  }
+  return false
+}
 /**
  * Text giving a number or count found in neither the library results nor the questions, such as
  * "共六个方面", "六大抓手" or "2019年撤市设区".
@@ -303,6 +320,7 @@ type Facts = { runs: Set<string>; numbers: Set<string>; counts: Set<string> }
 function unsourced(text: string, facts: Facts) {
   const shown = text.replace(/\[([^\]]*)\]\([^)]*\)/g, '$1') // link text, not link targets
   return (
+    invented(shown, facts) ||
     numbers(shown).some((n) => !facts.numbers.has(n)) ||
     (shown.replace(ASKED_COUNT, '').match(COUNT) ?? []).some((count) => !facts.counts.has(count))
   )
@@ -345,7 +363,21 @@ function sourcedPart(sentence: string, facts: Facts) {
  */
 function trimAnswer(lines: string[], question: string, facts: Facts) {
   const cited = lines.map((line) => CITED.test(line))
-  if (ASKS_ANALYSIS.test(question) || cited.filter(Boolean).length < 2) return lines
+  if (cited.filter(Boolean).length < 2) return lines
+  // Analysis answers keep their reasoning, only not the sentences quoting wording no document has.
+  if (ASKS_ANALYSIS.test(question))
+    return lines.map((line, index) => {
+      if (cited[index] || line.includes('|') || WEB_LINK.test(line)) return line
+      const sentences = line.match(SENTENCE) ?? []
+      const kept = sentences.filter(
+        (sentence) => ABSENT.test(sentence) || !invented(sentence, facts),
+      )
+      return kept.length === sentences.length
+        ? line
+        : kept.join('').trim()
+          ? kept.join('')
+          : undefined
+    })
   const kept: (string | undefined)[] = lines.map(() => undefined)
   // Table rows, as Markdown reads them: a header line that is not a heading, a separator row
   // ("|---|", "--- | ---"), then the lines with a pipe up to a heading. Each table is found on its
@@ -425,6 +457,7 @@ function trimAnswer(lines: string[], question: string, facts: Facts) {
 
 function addFacts(message: Message, facts: Facts) {
   const add = (text: string) => {
+    facts.texts.push(contentChars(text))
     for (const n of numbers(text)) facts.numbers.add(n)
     for (const count of text.match(COUNT) ?? []) facts.counts.add(count)
   }
@@ -444,7 +477,7 @@ function addFacts(message: Message, facts: Facts) {
 }
 
 export function trimAnswers(messages: Message[]) {
-  const facts: Facts = { runs: new Set(), numbers: new Set(), counts: new Set() }
+  const facts: Facts = { runs: new Set(), numbers: new Set(), counts: new Set(), texts: [] }
   let read = 0 // messages already added to facts
   for (const [index, message] of messages.entries()) {
     if (message.role !== 'assistant' || message.status !== 'done') continue

@@ -208,6 +208,54 @@ test('completed library answers drop free commentary after the citations', () =>
   assert.equal(textOf(untouched[1]), answer.join('\n'), 'answers still streaming are not trimmed')
 })
 
+test('trimming drops sentences quoting wording no library result has, in analysis answers too', () => {
+  const passage = '实施行业扶贫10大类137个项目，规划总投资526亿元，项目覆盖贫困户2.1万户6.34万人。'
+  const id = '22222222-2222-4222-8222-222222222222'
+  const cite = `[planid 5116·原文](/api/library/passages/${id})`
+  const lines = [
+    '依据《城固县“十三五”规划纲要》（planid 5116）。',
+    `- **项目**：“实施行业扶贫10大类137个项目” ${cite}`,
+    `- **投资**：“规划总投资526亿元” ${cite}`,
+    '## 分析（推断）',
+    '1. 规划以“项目覆盖贫困户”为抓手。规划提出“以产业扶贫为绝对核心”。',
+    '2. 未检索到“十三五扶贫完成情况统计”。',
+  ]
+  const messages: Message[] = [
+    {
+      id: 'turn-1',
+      role: 'assistant',
+      question: '分析城固县扶贫的投入重心。',
+      status: 'done',
+      parts: [
+        {
+          id: 't1',
+          type: 'tool',
+          step: 1,
+          name: 'library_search',
+          input: '{}',
+          output: JSON.stringify({
+            id,
+            link: `/api/library/passages/${id}`,
+            documentId: '5116',
+            text: passage,
+          }),
+          status: 'done',
+        },
+        { id: 'x1', type: 'text', step: 1, text: lines.join('\n') },
+      ],
+    },
+  ]
+  trimAnswers(messages)
+  const answer = messages[0]
+  assert.deepEqual(
+    answer.role === 'assistant' && answer.parts[1].type === 'text'
+      ? answer.parts[1].text.split('\n')
+      : [],
+    [...lines.slice(0, 4), '1. 规划以“项目覆盖贫困户”为抓手。', lines[5]],
+    'keeps quoted passage wording, titles and not-found notes; drops the invented quotation',
+  )
+})
+
 test('trimming uses results up to each answer and keeps web sources, bare tables and stated gaps only', () => {
   const passage = '实施行业扶贫10大类137个项目，规划总投资526亿元，项目覆盖贫困户2.1万户6.34万人。'
   const later = '易地扶贫搬迁安置点配套建设产业园区和社区工厂，带动搬迁群众就近就业。'
