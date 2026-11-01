@@ -251,6 +251,62 @@ test('library_open retains the requested passage, budgets neighbors and preserve
   }
 })
 
+test('library_evidence returns the chosen passages under each aspect once, and says what is missing', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'gczy-rag-evidence-test-'))
+  const store = new Store(root)
+  const sources = new LibraryStore(store)
+  const staged = sources.stage({
+    id: '5116',
+    title: '测试规划',
+    text: '甲'.repeat(3000) + '乙'.repeat(3000),
+  })
+  sources.publish(staged.versionId, null)
+  const [first, second] = staged.chunks
+  const model = new TestModel((request) => {
+    if (request.messages.at(-1)?.role === 'tool') return textChunks('已整理。')
+    return toolChunks('library_evidence', {
+      aspects: [
+        { aspect: '目标', passageIds: [first.id.toUpperCase(), second.id] },
+        { aspect: '举措', passageIds: [first.id, INVENTED, 'not-an-id'] },
+        { aspect: '保障', passageIds: [] },
+      ],
+    })
+  })
+  const agents = await new Agents(store, {
+    adapter: model,
+    library: {
+      available: () => true,
+      retrieve: async () => [],
+      neighbors: (id, before, after) => sources.neighbors(id, before, after),
+      list: () => ({ total: 0, documents: [] }),
+    },
+  }).init()
+  try {
+    const user = store.user('test-rag-evidence', 'Test')
+    const session = store.create(user.id)
+    await agents.start(user.id, session.id, '城固县规划写了什么？')
+    await agents.active.get(session.id)?.done
+    const lines = lastText(model.requests.at(-1)!).split('\n')
+    const json = (line: string) => JSON.parse(line) as Passage & { cite: string }
+    assert.equal(lines[1], '方面 1：目标')
+    assert.deepEqual([json(lines[2]).id, json(lines[3]).id], [first.id, second.id])
+    assert.equal(json(lines[2]).cite, `[planid 5116·原文](/api/library/passages/${first.id})`)
+    assert.equal(json(lines[2]).text, first.text, 'passages remain whole')
+    assert.deepEqual(lines.slice(4), [
+      '方面 2：举措',
+      `（片段 ${first.id} 见前文。）`,
+      `（片段 ${INVENTED} 不存在，未列入。）`,
+      '（片段 not-an-id 不存在，未列入。）',
+      '方面 3：保障',
+      '（没有片段：回答中写明这一方面未在文献库中找到。）',
+    ])
+  } finally {
+    await agents.close()
+    store.close()
+    await rm(root, { recursive: true })
+  }
+})
+
 test('library_search passes a normalized scope, rejects an invalid one, and library_list names the scoped documents', async () => {
   const root = await mkdtemp(join(tmpdir(), 'gczy-rag-scope-test-'))
   const store = new Store(root)

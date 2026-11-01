@@ -10,12 +10,16 @@ export type Library = Pick<KnowledgeLibrary, 'available' | 'retrieve' | 'neighbo
 
 /** Per tool result; a required passage stays whole even if its serialization exceeds this. */
 const MAX_CHARS = 6000
+/** Evidence for one answer, gathered from passages already read; twice a search result. */
+const MAX_EVIDENCE = 12000
+const PASSAGE_ID = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/
 
 const GUIDE = `共享文献库（管理员导入的政策、规划等文件）通过 library_search 按需检索。涉及政策、规划、法规、标准等资料的问题，先检索再回答；需要某个片段的前后文时调用 library_open；标有 superseded 的片段已被新版本替代，不作为现行规定引用。闲聊和一般常识不必检索。联网资料与文献库证据分开说明。
 检索步骤：
 1. 先确定涉及的文献：问题写明地区、规划期、文种、年份或文件名时，用 library_list（带 area、period、docType、year，文件名关键词放 title）找到对应文献；比较多个地区或多个规划期时，每个对象分别找。问文献库收录多少文献、覆盖哪些地区和规划期时，不带条件调用 library_list 查看概况。
 2. 再用 library_search 检索：已选定文献时把它们的 documentId 放进 documentIds，只在这些文献内检索；否则带上与第 1 步相同的筛选条件。问题问到的每个方面分别换关键词检索，片段不足时继续换词或用 library_open 看前后文。
 3. 检索不到或片段不足以回答时，明确说明未在文献库中找到、查过哪些范围，不凭记忆编造，也不推测未收录文件的内容。检索到的文献没有正文段落时，告诉用户这篇没有可用正文，不编造，可以推荐同地区或同主题、有正文的文献。用户问到的章节、条款、项目或数字在原文中找不到或与原文不符时，直接指出，或说明原文实际怎么写，不推测，也不拿其他文献的数字顶替。
+4. 依据文献库作答时，写回答前先调用 library_evidence：逐一列出问题要回答的方面（问题问了几个方面就列几个），每个方面填上支撑它的片段 id；再按它返回的方面顺序作答，每个方面写成一条或几条要点，只用返回的片段；某个方面没有片段就写明未在文献库中找到。
 依据文献库作答时按以下格式：
 1. 开头一句写明依据的文献，只写工具返回的标题与文献编号，不加发文日期、发文机构、会议届次。
 2. 正文按要点分条。每条写成“十字以内的小标题：“原文摘录””，摘录从片段中原样复制回答该要点的一段连续原文（一两句即可），中间不跳过、不用省略号；需要的内容不相连时拆成两条，各自加引号，条末原样复制该片段的 cite 字段作为引用（整段复制，含方括号和链接，不能只写 planid）；用表格呈现时，每行加“出处”列，放该行内容对应片段的 cite；不同要点引用各自对应的片段，不要多个要点共用一条引用。不用自己的话转述片段内容，片段没写的背景、意义、成效评价、数字换算、规划期起止年份、文件日期、机构沿革和其他地区或年份的情况一律不写，宁缺不补。
@@ -25,23 +29,24 @@ const GUIDE = `共享文献库（管理员导入的政策、规划等文件）�
 6. 写完后逐条核对：每条要点里的内容（包括数字、名称、范围、时间）都能在它所附的片段中找到；找不到的删除，或移入“分析（推断）”并写明是推断。
 文献编号（也称 planid、文献 id）是片段所属文献的 documentId，不是片段 id；链接只能使用工具返回的 link 或 cite。`
 
+const serialize = (passage: Passage) =>
+  JSON.stringify({
+    id: passage.id,
+    link: `/api/library/passages/${passage.id}`,
+    // 现成的引用写法：模型原样复制，文献编号不再靠模型自己拼（迭代 1 中约四成回答漏写或写错）
+    // 迭代 5：文献编号放进链接文字——迭代 4 常只抄“（planid X）”丢掉链接，判分与读者都拿不到原文
+    cite: `[planid ${passage.documentId}·原文](/api/library/passages/${passage.id})`,
+    documentId: passage.documentId,
+    title: passage.title,
+    heading: passage.heading,
+    publishedAt: passage.publishedAt,
+    // library_open can reach versions that a later import replaced.
+    ...(passage.current === 0 ? { superseded: true } : {}),
+    text: passage.text,
+  })
+
 function render(passages: Passage[], header: string, requiredId?: string) {
-  const rendered = passages.map((passage) =>
-    JSON.stringify({
-      id: passage.id,
-      link: `/api/library/passages/${passage.id}`,
-      // 现成的引用写法：模型原样复制，文献编号不再靠模型自己拼（迭代 1 中约四成回答漏写或写错）
-      // 迭代 5：文献编号放进链接文字——迭代 4 常只抄“（planid X）”丢掉链接，判分与读者都拿不到原文
-      cite: `[planid ${passage.documentId}·原文](/api/library/passages/${passage.id})`,
-      documentId: passage.documentId,
-      title: passage.title,
-      heading: passage.heading,
-      publishedAt: passage.publishedAt,
-      // library_open can reach versions that a later import replaced.
-      ...(passage.current === 0 ? { superseded: true } : {}),
-      text: passage.text,
-    }),
-  )
+  const rendered = passages.map(serialize)
   const required = passages.findIndex((passage) => passage.id === requiredId)
   if (requiredId && required < 0) throw reject('RAG_PASSAGE_NOT_FOUND')
   const lines = [header]
@@ -197,8 +202,7 @@ export function registerLibrary(ctx: Context, library: Library, deadline = Infin
         if (Date.now() > deadline) return OVERTIME
         try {
           const id = args.id.trim().toLowerCase()
-          if (!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(id))
-            throw reject('RAG_PASSAGE_NOT_FOUND')
+          if (!PASSAGE_ID.test(id)) throw reject('RAG_PASSAGE_NOT_FOUND')
           return render(library.neighbors(id, 1, 1), '原文片段及相邻内容（每行一个片段）：', id)
         } catch (error) {
           failure(error, exec.signal)
@@ -239,6 +243,68 @@ export function registerLibrary(ctx: Context, library: Library, deadline = Infin
                 : '：'),
             ...lines,
           ].join('\n')
+        } catch (error) {
+          failure(error, exec.signal)
+        }
+      },
+    }),
+  )
+  ctx.tools.register(
+    defineTool({
+      name: 'library_evidence',
+      description:
+        '依据文献库作答前整理证据：逐一列出问题要回答的方面，每个方面填上支撑它的片段 id（取自 library_search、library_open 的结果，没有就留空）。返回按方面排列的片段原文与 cite，回答按这些方面分条，只用这些片段。',
+      parameters: {
+        aspects: {
+          type: 'array',
+          required: true,
+          items: {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              aspect: { type: 'string', required: true, description: '问题要回答的一个方面' },
+              passageIds: { type: 'array', required: true, items: { type: 'string' } },
+            },
+          },
+        },
+      },
+      output: contentOutput,
+      // No deadline: this is the writing step that the overtime notice asks for.
+      execute: async (args, exec) => {
+        try {
+          if (!args.aspects.length || args.aspects.length > 12) throw reject('RAG_INVALID_QUERY')
+          // One unknown id is reported in place; it does not fail the whole evidence list.
+          const find = (id: string) => {
+            try {
+              return library.neighbors(id, 0, 0).find((candidate) => candidate.id === id)
+            } catch (error) {
+              if (error instanceof HttpError && error.status === 404) return undefined
+              throw error
+            }
+          }
+          const lines = ['按方面整理的证据（回答按这些方面分条，只用下面的片段）：']
+          const shown = new Set<string>()
+          let spent = 0
+          for (const [index, { aspect, passageIds }] of args.aspects.entries()) {
+            const name = aspect.trim().slice(0, 100)
+            if (!name.isWellFormed()) throw reject('RAG_INVALID_QUERY')
+            lines.push(`方面 ${index + 1}：${name}`)
+            const ids = passageIds.slice(0, 8).map((id) => id.trim().toLowerCase())
+            if (!ids.length) lines.push('（没有片段：回答中写明这一方面未在文献库中找到。）')
+            for (const id of ids) {
+              const passage = PASSAGE_ID.test(id) ? find(id) : undefined
+              if (!passage) lines.push(`（片段 ${id.slice(0, 40)} 不存在，未列入。）`)
+              else if (shown.has(id)) lines.push(`（片段 ${id} 见前文。）`)
+              else if (spent > MAX_EVIDENCE) lines.push(`（片段 ${id} 因长度限制未展开。）`)
+              else {
+                const line = serialize(passage)
+                lines.push(line)
+                shown.add(id)
+                spent += line.length
+              }
+            }
+          }
+          return lines.join('\n')
         } catch (error) {
           failure(error, exec.signal)
         }
