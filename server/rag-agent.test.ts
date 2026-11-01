@@ -8,9 +8,6 @@ import { Agents } from './agent.ts'
 import { Store } from './store.ts'
 import { LibraryStore, type LibraryFilter, type Passage } from './rag-store.ts'
 import { RagError, RAG_ERRORS } from './rag.ts'
-import { registerLibrary, type Library } from './rag-tools.ts'
-import type { Context } from '@deepseek-ai/cordis'
-import type { ToolDefinition, ToolRunContext } from '@deepseek-ai/dsh-tools'
 import { TestModel, textChunks, toolChunks } from '../tests/support/model.ts'
 
 const textOf = (content: readonly ContentBlock[]) =>
@@ -505,24 +502,77 @@ test('library search cancellation and failures stay tool-level, truthful and fre
   }
 })
 
-test('library tools stop searching once the question passes its deadline', async () => {
-  const tools = new Map<string, ToolDefinition>()
-  const ctx = {
-    systemPrompt: { section() {} },
-    tools: { register: (tool: ToolDefinition) => tools.set(tool.name, tool) },
-  } as unknown as Context
-  let searched = 0
-  const library = {
-    retrieve: async () => (searched++, []),
-    list: () => (searched++, { total: 0, documents: [] }),
-  } as unknown as Library
-  registerLibrary(ctx, library, Date.now() - 1)
-  const exec = { signal: new AbortController().signal } as ToolRunContext
-  for (const [name, args] of [
-    ['library_search', { query: '水利' }],
-    ['library_list', { area: '裕安区' }],
-    ['library_open', { id: INVENTED }],
-  ] as const)
-    assert.match(String(await tools.get(name)!.execute(args, exec)), /超过时限/, name)
-  assert.equal(searched, 0)
+test('the search budget withdraws search tools after 70 seconds or 6 rounds and leaves earlier calls unchanged', async (t) => {
+  t.mock.timers.enable({ apis: ['Date'], now: Date.now() })
+  const root = await mkdtemp(join(tmpdir(), 'gczy-rag-budget-test-'))
+  const store = new Store(root)
+  const queries: string[] = []
+  let slow = false
+  const told = (request: GenerateOptions) =>
+    JSON.stringify(request.messages).includes('检索已达时限')
+  // 总想再检索的模型：工具撤下后仍调用一次（校内模型实测会这样），被拒绝后才作答；
+  // 超过 30 次调用也作答，拒绝失效时测试报错而不是无限循环。
+  const model = new TestModel((request) => {
+    if (slow) {
+      slow = false
+      t.mock.timers.tick(70_000) // 第一次模型调用就用完了时限
+    }
+    if (
+      (request.messages.at(-1)?.role === 'tool' && lastText(request).includes('检索已达时限')) ||
+      model.requests.length > 30
+    )
+      return textChunks('依据已取得的片段作答。')
+    return toolChunks('library_search', { query: `检索 ${queries.length + 1}` })
+  })
+  const agents = await new Agents(store, {
+    adapter: model,
+    library: {
+      available: () => true,
+      retrieve: async (query) => (queries.push(query), []),
+      neighbors: () => [],
+      list: () => ({ total: 0, documents: [] }),
+    },
+  }).init()
+  try {
+    const user = store.user('test-rag-budget', 'Test')
+    const run = async () => {
+      const session = store.create(user.id)
+      const from = model.requests.length
+      queries.length = 0
+      await agents.start(user.id, session.id, '养老服务有哪些政策？')
+      await agents.active.get(session.id)?.done
+      const answer = (await agents.snapshot(user.id, session.id)).messages.at(-1)
+      assert.ok(answer?.role === 'assistant' && answer.status === 'done')
+      return model.requests.slice(from)
+    }
+
+    const rounds = await run()
+    assert.equal(queries.length, 6, 'six rounds search; the call after them is refused')
+    assert.equal(rounds.length, 8)
+    assert.ok(toolNames(rounds[0]).includes('library_search'))
+    for (const request of rounds.slice(0, 6)) {
+      assert.deepEqual(toolNames(request), toolNames(rounds[0]), 'nothing changes before the limit')
+      assert.ok(!told(request))
+    }
+    for (const request of rounds.slice(6)) {
+      assert.ok(!toolNames(request).some((name) => name.startsWith('library_')))
+      assert.ok(toolNames(request).includes('create_file'), 'file tools stay')
+      assert.match(systemOf(request), /检索已达时限/)
+    }
+
+    slow = true
+    const timed = await run()
+    assert.deepEqual(queries, ['检索 1'], 'the call issued before the limit still runs to the end')
+    assert.equal(timed.length, 3)
+    assert.ok(toolNames(timed[0]).includes('library_search') && !told(timed[0]))
+    assert.equal(timed[1].messages.at(-1)?.role, 'tool', 'its result reaches the next call')
+    assert.ok(!toolNames(timed[1]).includes('library_search'))
+    assert.match(systemOf(timed[1]), /检索已达时限/)
+  } finally {
+    await agents.close()
+    store.close()
+    assert.ok(resolve(root).startsWith(resolve(tmpdir()) + sep))
+    assert.ok(basename(root).startsWith('gczy-rag-budget-test-'))
+    await rm(root, { recursive: true })
+  }
 })

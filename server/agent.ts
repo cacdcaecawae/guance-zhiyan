@@ -135,8 +135,21 @@ export interface AgentOptions {
   library?: Library
 }
 
-// ponytail: 固定 60 秒检索时限（单次问答目标 120 秒，留一半给作答）；需要按题型区分时再改成按问题估算。
-const SEARCH_BUDGET_MS = 60_000
+// ponytail: 单次问答目标 120 秒（10 人并发）。校内模型约 14 秒/千字（思考加回答）；慢题约 7 轮工具调用、
+// 思考 7600 字，快题 2 轮。满 70 秒或 6 轮后不再提供检索，余下约 50 秒（约 3500 字）作答。超时仍多就调低，
+// 回答常说“未及核对”就调高；需要按题型区分时再改成按问题估算。
+const SEARCH_BUDGET_MS = 70_000
+const MAX_SEARCH_ROUNDS = 6
+/** 到限后撤下的检索工具；文件与沙箱工具保留，用户要的文件仍能生成。 */
+const SEARCH_TOOLS = new Set([
+  'library_search',
+  'library_open',
+  'library_list',
+  'web_search',
+  'web_fetch',
+])
+const ANSWER_NOW =
+  '本题检索已达时限：不再检索，直接依据已经取得的资料作答；没有查到或来不及核对的方面，在回答中简要说明。'
 export class Agents {
   ctx = new Context()
   active = new Map<string, ActiveRun>()
@@ -463,9 +476,24 @@ export class Agents {
             return next()
           })
         }
+        // 检索时限：每次模型调用前都组装一次提示词与工具，第 n 次组装前已有 n-1 轮工具调用。到限后撤下检索工具、
+        // 要求直接作答；已发出的工具调用照常执行完，之后模型若仍调用检索工具则拒绝，不再检索。
+        const started = Date.now()
+        let assembled = 0
+        let final = false
+        ctx.on('system-prompt/assemble', async (_assembly, _context, next) => {
+          const assembly = await next()
+          final ||= ++assembled > MAX_SEARCH_ROUNDS || Date.now() - started >= SEARCH_BUDGET_MS
+          if (!final) return assembly
+          return {
+            ...assembly,
+            tools: assembly.tools.filter((tool) => !SEARCH_TOOLS.has(tool.name)),
+            sections: [...assembly.sections, { name: 'answer-now', text: ANSWER_NOW }],
+          }
+        })
+        ctx.tools.guard((exec) => (final && SEARCH_TOOLS.has(exec.name) ? ANSWER_NOW : undefined))
         // Offered only when the library has content; otherwise chat and web search work as usual.
-        if (this.options.library?.available())
-          registerLibrary(ctx, this.options.library, Date.now() + SEARCH_BUDGET_MS)
+        if (this.options.library?.available()) registerLibrary(ctx, this.options.library)
         else
           ctx.systemPrompt.section({
             name: 'shared-library',

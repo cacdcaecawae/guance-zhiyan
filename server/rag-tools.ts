@@ -138,16 +138,11 @@ function overview({ total, documents }: ReturnType<Library['list']>) {
   ].join('\n')
 }
 
-/** Shown instead of results once a question has searched for too long. */
-const OVERTIME =
-  '本题检索已超过时限：不再检索，直接依据已经取得的片段作答；片段没有覆盖的方面如实说明未找到。'
-
 /**
  * On-demand retrieval: the model decides when to search, so evidence enters context only then.
- * After `deadline` (epoch ms) the tools stop searching so a long question still answers in time:
- * every extra step re-reads the context and thinks again, which costs more than the search itself.
+ * The per-question search budget lives in agent.ts and covers web tools as well.
  */
-export function registerLibrary(ctx: Context, library: Library, deadline = Infinity) {
+export function registerLibrary(ctx: Context, library: Library) {
   ctx.systemPrompt.section({ name: 'shared-library', order: 90, text: GUIDE })
   ctx.tools.register(
     defineTool({
@@ -165,7 +160,6 @@ export function registerLibrary(ctx: Context, library: Library, deadline = Infin
       },
       output: contentOutput,
       execute: async (args, exec) => {
-        if (Date.now() > deadline) return OVERTIME
         try {
           const query = args.query.trim()
           if (!query || query.length > 1000 || !query.isWellFormed())
@@ -194,7 +188,6 @@ export function registerLibrary(ctx: Context, library: Library, deadline = Infin
       parameters: { id: { type: 'string', required: true } },
       output: contentOutput,
       execute: async (args, exec) => {
-        if (Date.now() > deadline) return OVERTIME
         try {
           const id = args.id.trim().toLowerCase()
           if (!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(id))
@@ -214,7 +207,6 @@ export function registerLibrary(ctx: Context, library: Library, deadline = Infin
       parameters: { ...SCOPE, title: { type: 'string', description: '标题关键词' } },
       output: contentOutput,
       execute: async (args, exec) => {
-        if (Date.now() > deadline) return OVERTIME
         try {
           const filter = scopeOf(args)
           const title = args.title?.trim() || undefined
