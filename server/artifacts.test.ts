@@ -159,3 +159,53 @@ test('Excel rejects characters that cannot form valid XML; CSV keeps them', asyn
     await rm(root, { recursive: true })
   }
 })
+
+test('generated decks have a cover, a slide per heading and continuation slides for long bodies', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'gczy-pptx-test-'))
+  const store = new Store(root)
+  try {
+    const files = new Artifacts(store)
+    const user = store.user('test:office-text', 'Test')
+    const session = store.create(user.id)
+    const items = Array.from({ length: 15 }, (_, i) => `第${i + 1}条` + '字'.repeat(30))
+    const long = '长'.repeat(700)
+    const content = [
+      '# 长三角规划对比',
+      '## 一、背景',
+      '- 要点 & <原文>',
+      '普通段落 😀',
+      '## 二、主要做法',
+      '### 1. 产业',
+      ...items,
+      '### 2. 长段',
+      long,
+    ].join('\n')
+    await assert.rejects(files.create(user.id, session.id, '汇报', 'pptx', '前￿后'), {
+      code: 'FILE_INVALID_PPTX_CONTENT',
+    })
+    assert.match(toolError('FILE_INVALID_PPTX_CONTENT'), /演示文稿.*字符/)
+    const artifact = await files.create(user.id, session.id, '汇报.pptx', 'pptx', content)
+    assert.equal(artifact.name, '汇报.pptx')
+    const zip = await JSZip.loadAsync(await readFile(files.path(artifact.id)))
+    assert.equal(zip.file(/^ppt\/slides\/slide\d+\.xml$/).length, 7)
+    const slides = await Promise.all(
+      Array.from({ length: 7 }, async (_, i) => {
+        const xml = await zip.file(`ppt/slides/slide${i + 1}.xml`)!.async('string')
+        return [...xml.matchAll(/<a:t>([^<]*)<\/a:t>/g)].map((match) => match[1])
+      }),
+    )
+    assert.deepEqual(slides.slice(0, 3), [
+      ['长三角规划对比'],
+      ['一、背景', '要点 &amp; &lt;原文&gt;', '普通段落 😀'],
+      ['二、主要做法'],
+    ])
+    assert.deepEqual(slides[3], ['1. 产业', ...items.slice(0, 14)])
+    assert.deepEqual(slides[4], ['1. 产业（续）', items[14]])
+    assert.deepEqual(slides[5], ['2. 长段', long.slice(0, 616)])
+    assert.deepEqual(slides[6], ['2. 长段（续）', long.slice(616)])
+    assert.match(await zip.file('ppt/slides/slide2.xml')!.async('string'), /<a:buChar/)
+  } finally {
+    store.close()
+    await rm(root, { recursive: true })
+  }
+})

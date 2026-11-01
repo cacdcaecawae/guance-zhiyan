@@ -5,6 +5,7 @@ import { Document, HeadingLevel, Packer, Paragraph } from 'docx'
 import ExcelJS from 'exceljs'
 import JSZip from 'jszip'
 import { XMLParser } from 'fast-xml-parser'
+import PptxGenJS from 'pptxgenjs'
 import type { Context } from '@deepseek-ai/cordis'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { HarnessError } from '@deepseek-ai/dsh-llm'
@@ -16,6 +17,7 @@ export const MIME: Record<string, string> = {
   csv: 'text/csv; charset=utf-8',
   docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
   xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
 }
 const MAX_CONTENT = 200_000
 const MAX_USER_BYTES = 50 * 1024 * 1024
@@ -26,7 +28,7 @@ const xmlInvalid = (text: string) =>
     const code = char.codePointAt(0)!
     return (code < 32 && !'\t\n\r'.includes(char)) || code === 0xfffe || code === 0xffff
   })
-type GeneratedFormat = 'md' | 'docx' | 'xlsx' | 'csv'
+type GeneratedFormat = 'md' | 'docx' | 'pptx' | 'xlsx' | 'csv'
 type Workspace = {
   readOffice(data: Uint8Array, format: 'docx' | 'xlsx', signal?: AbortSignal): Promise<string>
 }
@@ -78,13 +80,18 @@ export class Artifacts {
       throw new HarnessError('文件名称或格式无效。', 'FILE_INVALID_NAME')
     if (!content.trim() || Buffer.byteLength(content) > MAX_CONTENT)
       throw new HarnessError('文件内容为空或超过 200 KB。', 'FILE_INVALID_CONTENT')
+    const title = name.replace(/\.[a-z0-9]+$/i, '')
+    // 演示文稿封面可能取文件名，文件名也要能写入 XML
+    if (
+      (format === 'docx' || format === 'pptx') &&
+      xmlInvalid(format === 'pptx' ? title + content : content)
+    )
+      throw new HarnessError(
+        `${format === 'docx' ? 'Word ' : '演示文稿'}正文含有不支持的字符，请移除无效字符或改用 Markdown。`,
+        `FILE_INVALID_${format.toUpperCase()}_CONTENT`,
+      )
     let bytes: Buffer
     if (format === 'docx') {
-      if (xmlInvalid(content))
-        throw new HarnessError(
-          'Word 正文含有不支持的字符，请移除无效字符或改用 Markdown。',
-          'FILE_INVALID_DOCX_CONTENT',
-        )
       const children = content.split(/\r?\n/).map((line) => {
         const heading = /^(#{1,3})\s+(.+)$/.exec(line)
         return new Paragraph(
@@ -99,6 +106,88 @@ export class Artifacts {
         )
       })
       bytes = await Packer.toBuffer(new Document({ sections: [{ children }] }))
+    } else if (format === 'pptx') {
+      // 与 Word 同样按行解析：开头无正文的 # 标题作封面（否则用文件名），其余每个标题开一页，
+      // 其下各行为该页段落，以 - * + 开头的显示为项目符号；标题下没有正文时作章节过渡页。
+      const sections: {
+        title: string
+        level: number
+        lines: { text: string; bullet: boolean }[]
+      }[] = [{ title, level: 0, lines: [] }]
+      for (const line of content.split(/\r?\n/)) {
+        const heading = /^(#{1,3})\s+(.+)$/.exec(line)
+        const item = /^\s*[-*+]\s+(.*)$/.exec(line)
+        if (heading)
+          sections.push({ title: heading[2].trim(), level: heading[1].length, lines: [] })
+        else if (line.trim())
+          sections.at(-1)!.lines.push({ text: (item?.[1] ?? line).trim(), bullet: !!item })
+      }
+      if (!sections[0].lines.length) sections.shift()
+      const cover =
+        sections[0]?.level === 1 && !sections[0].lines.length ? sections.shift()!.title : title
+      // ponytail: 按每行 44 字、每页 14 行估算分页（18 磅微软雅黑实测约 47 个汉字一行、正文框约 16 行），
+      // 西文与长单词按字数计偏保守；要更满的版面再按字体测宽
+      const PER_LINE = 44
+      const PER_SLIDE = 14
+      const font = { fontFace: '微软雅黑', color: '1B1B1D' }
+      const red = { color: 'B0302A' }
+      // TypeScript 把该包的类型声明当作 CommonJS；Node 按 ESM 加载时默认导出即是类
+      const deck = new (PptxGenJS as unknown as typeof PptxGenJS.default)()
+      Object.assign(deck, {
+        layout: 'LAYOUT_WIDE',
+        title: cover,
+        subject: cover,
+        author: '管策智研',
+        company: '管策智研',
+      })
+      const first = deck.addSlide()
+      first.addShape('rect', { x: 0, y: 0, w: 0.3, h: 7.5, fill: red, line: red })
+      first.addText(cover, { x: 1, y: 1.5, w: 11.3, h: 4, fontSize: 36, bold: true, ...font })
+      for (const section of sections) {
+        const pages: { text: string; options: { bullet: boolean; breakLine: true } }[][] = [[]]
+        let used = 0
+        for (const { text, bullet } of section.lines) {
+          const chars = Array.from(text)
+          for (let i = 0; i < chars.length; i += PER_LINE * PER_SLIDE) {
+            const piece = chars.slice(i, i + PER_LINE * PER_SLIDE)
+            const cost = Math.ceil(piece.length / PER_LINE)
+            if (used + cost > PER_SLIDE) {
+              pages.push([])
+              used = 0
+            }
+            pages.at(-1)!.push({ text: piece.join(''), options: { bullet, breakLine: true } })
+            used += cost
+          }
+        }
+        pages.forEach((page, i) => {
+          const slide = deck.addSlide()
+          // 没有正文的标题放在页面中部，作章节过渡页
+          const top = page.length ? 0.3 : 2.4
+          slide.addText(i ? `${section.title}（续）` : section.title, {
+            x: 0.6,
+            y: top,
+            w: 12.1,
+            h: 1,
+            fontSize: page.length ? 24 : 32,
+            bold: true,
+            valign: 'bottom',
+            ...font,
+          })
+          slide.addShape('rect', { x: 0.7, y: top + 1.1, w: 1, h: 0.06, fill: red, line: red })
+          if (page.length)
+            slide.addText(page, {
+              x: 0.6,
+              y: 1.65,
+              w: 12.1,
+              h: 5.4,
+              fontSize: 18,
+              valign: 'top',
+              paraSpaceAfter: 6,
+              ...font,
+            })
+        })
+      }
+      bytes = (await deck.write({ outputType: 'nodebuffer' })) as Buffer
     } else if (format === 'xlsx' || format === 'csv') {
       // 内容不是 JSON（常见为 Markdown 表格）时也给出下面的格式说明，而不是笼统的“工具执行失败”
       let rows: unknown
@@ -169,7 +258,7 @@ export class Artifacts {
       }
     } else bytes = Buffer.from(content)
     signal?.throwIfAborted()
-    const filename = name.replace(/\.[a-z0-9]+$/i, '') + '.' + format
+    const filename = title + '.' + format
     return this.save(userId, sessionId, filename, bytes, signal, true)
   }
   async save(
@@ -274,10 +363,10 @@ export class Artifacts {
       defineTool({
         name: 'create_file',
         description:
-          '生成当前会话的文件供下载。md/docx 的 content 为正文（docx 支持 # 标题与段落）；xlsx/csv 的 content 必须为二维 JSON 数组字符串，第一行为表头。不要编造研究结果或数据。',
+          '生成当前会话的文件供下载。md/docx 的 content 为正文（docx 支持 # 标题与段落）；pptx 为演示文稿（PPT），content 写法同 docx：开头的 # 标题作封面，其后每个 # 至 ### 标题开一页，下方每行为一条要点，以 - 开头显示项目符号，过长自动分页；xlsx/csv 的 content 必须为二维 JSON 数组字符串，第一行为表头。不要编造研究结果或数据。',
         parameters: {
           name: { type: 'string', required: true },
-          format: { type: 'string', enum: ['md', 'docx', 'xlsx', 'csv'], required: true },
+          format: { type: 'string', enum: ['md', 'docx', 'pptx', 'xlsx', 'csv'], required: true },
           content: { type: 'string', required: true },
         },
         output: contentOutput,
