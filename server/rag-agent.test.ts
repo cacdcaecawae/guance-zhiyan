@@ -502,7 +502,7 @@ test('library search cancellation and failures stay tool-level, truthful and fre
   }
 })
 
-test('the search budget withdraws search tools after 70 seconds or 6 rounds and leaves earlier calls unchanged', async (t) => {
+test('the search budget withdraws search tools after 100 seconds or 8 rounds and leaves earlier calls unchanged', async (t) => {
   t.mock.timers.enable({ apis: ['Date'], now: Date.now() })
   const root = await mkdtemp(join(tmpdir(), 'gczy-rag-budget-test-'))
   const store = new Store(root)
@@ -515,7 +515,7 @@ test('the search budget withdraws search tools after 70 seconds or 6 rounds and 
   const model = new TestModel((request) => {
     if (slow) {
       slow = false
-      t.mock.timers.tick(70_000) // 第一次模型调用就用完了时限
+      t.mock.timers.tick(100_000) // 第一次模型调用就用完了时限
     }
     if (
       (request.messages.at(-1)?.role === 'tool' && lastText(request).includes('检索已达时限')) ||
@@ -547,14 +547,14 @@ test('the search budget withdraws search tools after 70 seconds or 6 rounds and 
     }
 
     const rounds = await run()
-    assert.equal(queries.length, 6, 'six rounds search; the call after them is refused')
-    assert.equal(rounds.length, 8)
+    assert.equal(queries.length, 8, 'eight rounds search; the call after them is refused')
+    assert.equal(rounds.length, 10)
     assert.ok(toolNames(rounds[0]).includes('library_search'))
-    for (const request of rounds.slice(0, 6)) {
+    for (const request of rounds.slice(0, 8)) {
       assert.deepEqual(toolNames(request), toolNames(rounds[0]), 'nothing changes before the limit')
       assert.ok(!told(request))
     }
-    for (const request of rounds.slice(6)) {
+    for (const request of rounds.slice(8)) {
       assert.ok(!toolNames(request).some((name) => name.startsWith('library_')))
       assert.ok(toolNames(request).includes('create_file'), 'file tools stay')
       assert.match(systemOf(request), /检索已达时限/)
