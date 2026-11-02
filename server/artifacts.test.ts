@@ -16,18 +16,18 @@ test('generated Word reads preserve paragraph text and whitespace', async () => 
     const files = new Artifacts(store)
     const user = store.user('test:office-text', 'Test')
     const session = store.create(user.id)
+    // 正文按 Markdown 解析：每行仍是一段，行首行尾的半角空格与制表符属于 Markdown 语法，不保留
     const paragraphs = [
       '# 标题',
-      '  缩进与尾空格  ',
-      '\t制表符\t',
       '　全角缩进　',
       '\u00a0不换行空格\u00a0',
-      '   ',
+      '内部\t制表符',
       '',
       '00123 & <原文> 😀',
+      '# 一级标题',
       '## 二级标题',
       '### 三级标题',
-      '#### 保留普通段落',
+      '#### 四级标题',
     ]
     const artifact = await files.create(
       user.id,
@@ -38,12 +38,93 @@ test('generated Word reads preserve paragraph text and whitespace', async () => 
     )
     assert.equal(
       await files.read(user.id, session.id, artifact.id),
-      paragraphs.map((line) => line.replace(/^#{1,3} /, '')).join('\n') + '\n',
+      paragraphs
+        .filter(Boolean)
+        .map((line) => line.replace(/^#+ /, ''))
+        .join('\n') + '\n',
     )
     const zip = await JSZip.loadAsync(await readFile(files.path(artifact.id)))
     const xml = await zip.file('word/document.xml')!.async('string')
-    for (const heading of ['Heading1', 'Heading2', 'Heading3']) assert.ok(xml.includes(heading))
+    for (const style of ['Title', 'Heading1', 'Heading2', 'Heading3', 'Heading4'])
+      assert.ok(xml.includes(`<w:pStyle w:val="${style}"/>`), style)
     assert.ok(xml.includes('xml:space="preserve"'))
+  } finally {
+    store.close()
+    await rm(root, { recursive: true })
+  }
+})
+
+test('Word renders Markdown tables, lists, emphasis, links and quotes as Word structures', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'gczy-docx-markdown-test-'))
+  const store = new Store(root)
+  try {
+    const files = new Artifacts(store)
+    const user = store.user('test:office-text', 'Test')
+    const session = store.create(user.id)
+    const content = [
+      '# 对比报告',
+      '## 一、要点',
+      '正文**加粗**与*强调*，见[planid 7·原文](/api/library/passages/00000000-0000-4000-8000-000000000000)与[统计局](https://www.stats.gov.cn/)。',
+      '',
+      '- 第一条',
+      '  - 子条目',
+      '',
+      '1. 甲',
+      '2. 乙',
+      '',
+      '| 地区 | 目标 |',
+      '| --- | ---: |',
+      '| 上海 | **4.5%**<br>左右 |',
+      '| 江苏 |',
+      '',
+      '> 原文摘录',
+      '',
+      '1. 丙',
+      '',
+      '段落',
+      '',
+      '2. 丁',
+    ].join('\n')
+    const artifact = await files.create(user.id, session.id, '报告', 'docx', content)
+    const zip = await JSZip.loadAsync(await readFile(files.path(artifact.id)))
+    const xml = await zip.file('word/document.xml')!.async('string')
+    const text = await files.read(user.id, session.id, artifact.id)
+    // 表格每个单元格各占一段，缺的单元格补成空段；表后留一个空段
+    assert.equal(
+      text,
+      '对比报告\n一、要点\n正文加粗与强调，见planid 7·原文与统计局。\n第一条\n子条目\n甲\n乙\n地区\n目标\n上海\n4.5%\n左右\n江苏\n\n\n原文摘录\n丙\n段落\n丁\n',
+    )
+    assert.doesNotMatch(text, /[|*]|\]\(|\/api\//)
+    assert.equal(xml.match(/<w:tbl>/g)?.length, 1)
+    assert.equal(xml.match(/<w:tr>/g)?.length, 3)
+    assert.equal(xml.match(/<w:tc>/g)?.length, 6)
+    assert.match(xml, /<w:tblHeader\/>/)
+    assert.match(xml, /w:fill="E7E6E6"/)
+    assert.match(xml, /<w:jc w:val="right"\/>(?:(?!<\/w:p>).)*4\.5%/)
+    assert.match(xml, /<w:b\/>(?:(?!<\/w:r>).)*>加粗</)
+    assert.match(xml, /<w:b\/>(?:(?!<\/w:r>).)*>地区</)
+    assert.match(xml, /<w:i\/>(?:(?!<\/w:r>).)*>强调</)
+    assert.match(xml, /<w:pStyle w:val="Quote"\/>(?:(?!<\/w:p>).)*原文摘录/)
+    const levels = [...xml.matchAll(/<w:numPr><w:ilvl w:val="(\d)"\/><w:numId w:val="(\d+)"\/>/g)]
+    assert.deepEqual(
+      levels.map((match) => match[1]),
+      ['0', '1', '0', '0', '0', '0'],
+    )
+    // 无序与有序列表用不同的编号定义；同一有序列表共用一个编号实例，新列表从 1 重新编号，
+    // 被段落隔开、从 2 起编的列表接着上一列表编号
+    const ids = levels.map((match) => match[2])
+    assert.notEqual(ids[0], ids[2])
+    assert.equal(ids[2], ids[3])
+    assert.notEqual(ids[4], ids[2])
+    assert.equal(ids[5], ids[4])
+    const numbering = await zip.file('word/numbering.xml')!.async('string')
+    assert.match(numbering, /w:numFmt w:val="bullet"/)
+    assert.match(numbering, /w:numFmt w:val="decimal"/)
+    const rels = await zip.file('word/_rels/document.xml.rels')!.async('string')
+    assert.match(rels, /Target="https:\/\/www\.stats\.gov\.cn\/" TargetMode="External"/)
+    assert.doesNotMatch(rels, /api\/library/)
+    const footer = await zip.file(/^word\/footer\d*\.xml$/)[0].async('string')
+    assert.match(footer, /PAGE/)
   } finally {
     store.close()
     await rm(root, { recursive: true })
@@ -90,6 +171,49 @@ test('generated spreadsheets preserve literal OOXML escapes in files and read_fi
       read.slice(1).map((row) => row.slice(1)),
       rows,
     )
+  } finally {
+    store.close()
+    await rm(root, { recursive: true })
+  }
+})
+
+test('generated spreadsheets style the header, fit column widths and freeze the header row', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'gczy-xlsx-style-test-'))
+  const store = new Store(root)
+  try {
+    const files = new Artifacts(store)
+    const user = store.user('test:office-text', 'Test')
+    const session = store.create(user.id)
+    const rows = [
+      ['地区', '研发投入强度目标', '说明'],
+      ['上海', 4.5, '长'.repeat(40)],
+      ['江苏', '3.2% 左右', '第一行\n第二行'],
+    ]
+    const artifact = await files.create(user.id, session.id, '对比', 'xlsx', JSON.stringify(rows))
+    const book = new ExcelJS.Workbook()
+    await book.xlsx.load(Uint8Array.from(await readFile(files.path(artifact.id))).buffer)
+    const sheet = book.worksheets[0]
+    assert.deepEqual(
+      (sheet.views as ExcelJS.WorksheetViewFrozen[]).map(({ state, ySplit }) => ({
+        state,
+        ySplit,
+      })),
+      [{ state: 'frozen', ySplit: 1 }],
+    )
+    // 最长一行的显示宽度（汉字计 2）加 2，至少 10、至多 50
+    assert.deepEqual(
+      [1, 2, 3].map((j) => sheet.getColumn(j).width),
+      [10, 18, 50],
+    )
+    for (let j = 1; j <= 3; j++) {
+      assert.equal(sheet.getCell(1, j).font.bold, true)
+      assert.equal(sheet.getCell(1, j).fill.type, 'pattern')
+      for (let i = 1; i <= 3; i++) {
+        assert.equal(sheet.getCell(i, j).alignment.wrapText, true)
+        assert.equal(sheet.getCell(i, j).border.bottom?.style, 'thin')
+      }
+    }
+    assert.equal(sheet.getCell(2, 1).font?.bold, undefined)
   } finally {
     store.close()
     await rm(root, { recursive: true })
@@ -204,6 +328,66 @@ test('generated decks have a cover, a slide per heading and continuation slides 
     assert.deepEqual(slides[5], ['2. 长段', long.slice(0, 616)])
     assert.deepEqual(slides[6], ['2. 长段（续）', long.slice(616)])
     assert.match(await zip.file('ppt/slides/slide2.xml')!.async('string'), /<a:buChar/)
+  } finally {
+    store.close()
+    await rm(root, { recursive: true })
+  }
+})
+
+test('decks render bold runs, nested bullets and tables split across slides with the header repeated', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'gczy-pptx-markdown-test-'))
+  const store = new Store(root)
+  try {
+    const files = new Artifacts(store)
+    const user = store.user('test:office-text', 'Test')
+    const session = store.create(user.id)
+    const body = Array.from({ length: 30 }, (_, i) => `| 地区${i + 1} | 目标${i + 1} |`)
+    const content = [
+      '# 汇报',
+      '## 要点',
+      '- **加粗**说明',
+      '  - 子要点',
+      '1. 甲',
+      '## 对比',
+      '| 地区 | 目标 |',
+      '| --- | --- |',
+      ...body,
+      '',
+      '表后说明',
+    ].join('\n')
+    const artifact = await files.create(user.id, session.id, '汇报', 'pptx', content)
+    const zip = await JSZip.loadAsync(await readFile(files.path(artifact.id)))
+    const count = zip.file(/^ppt\/slides\/slide\d+\.xml$/).length
+    const slides = await Promise.all(
+      Array.from({ length: count }, (_, i) =>
+        zip.file(`ppt/slides/slide${i + 1}.xml`)!.async('string'),
+      ),
+    )
+    const texts = (xml: string) => [...xml.matchAll(/<a:t>([^<]*)<\/a:t>/g)].map((m) => m[1])
+    assert.deepEqual(texts(slides[1]), ['要点', '加粗', '说明', '子要点', '1. ', '甲'])
+    assert.match(slides[1], /b="1"[^>]*>(?:(?!<\/a:r>).)*<a:t>加粗</)
+    assert.match(slides[1], /<a:pPr lvl="1"[^>]*>(?:(?!<\/a:pPr>).)*<a:buChar/)
+    // 表格单独成页，按估算行高切开，每页重复表头，标题标“（续）”；表后的文字另起一页
+    const tables = slides.filter((xml) => xml.includes('<a:tbl>'))
+    assert.equal(tables.length, 2)
+    assert.deepEqual(
+      tables.map((xml) => texts(xml).slice(0, 3)),
+      [
+        ['对比', '地区', '目标'],
+        ['对比（续）', '地区', '目标'],
+      ],
+    )
+    assert.deepEqual(
+      tables.flatMap((xml) => texts(xml).slice(3)),
+      body.flatMap((row) =>
+        row
+          .split('|')
+          .slice(1, -1)
+          .map((cell) => cell.trim()),
+      ),
+    )
+    assert.deepEqual(texts(slides.at(-1)!), ['对比（续）', '表后说明'])
+    assert.equal(count, 5)
   } finally {
     store.close()
     await rm(root, { recursive: true })

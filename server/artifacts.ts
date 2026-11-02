@@ -1,11 +1,34 @@
 import { randomUUID } from 'node:crypto'
 import { mkdir, readFile, unlink, writeFile } from 'node:fs/promises'
 import { join, extname } from 'node:path'
-import { Document, HeadingLevel, Packer, Paragraph } from 'docx'
+import {
+  AlignmentType,
+  BorderStyle,
+  Document,
+  ExternalHyperlink,
+  Footer,
+  HeadingLevel,
+  LevelFormat,
+  LineRuleType,
+  Packer,
+  PageNumber,
+  Paragraph,
+  ShadingType,
+  Table,
+  TableCell,
+  TableLayoutType,
+  TableRow,
+  TextRun,
+  VerticalAlignTable,
+  WidthType,
+} from 'docx'
 import ExcelJS from 'exceljs'
 import JSZip from 'jszip'
 import { XMLParser } from 'fast-xml-parser'
 import PptxGenJS from 'pptxgenjs'
+import remarkGfm from 'remark-gfm'
+import remarkParse from 'remark-parse'
+import { unified } from 'unified'
 import type { Context } from '@deepseek-ai/cordis'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { HarnessError } from '@deepseek-ai/dsh-llm'
@@ -52,6 +75,307 @@ export const contentOutput = {
   render: (_args: unknown, text: string) => [{ type: 'text' as const, text }],
 }
 
+const markdown = unified().use(remarkParse).use(remarkGfm)
+type Block = ReturnType<typeof markdown.parse>['children'][number]
+type Inline = Extract<Block, { type: 'paragraph' }>['children'][number]
+type Seg = { text: string; bold?: boolean; italics?: boolean; strike?: boolean; link?: string }
+type Align = NonNullable<Extract<Block, { type: 'table' }>['align']>
+type Item =
+  | { type: 'heading'; depth: number; segs: Seg[] }
+  /** depth 为列表嵌套层数（0 不在列表中）；mark 只在列表项的第一行 */
+  | {
+      type: 'line'
+      segs: Seg[]
+      depth: number
+      quote: boolean
+      mark?: { list: number; ordered: boolean; n: number }
+    }
+  /** 行 × 列 × 单元格内各行 */
+  | { type: 'table'; rows: Seg[][][][]; align: Align }
+
+/** 行内 Markdown 拆成行（换行、<br> 各起一行），每行为带格式的文字段。HTML 标签不显示；
+ * 相对链接（如文献原文）在下载后的文件里打不开，只保留文字，http(s) 链接保留地址。 */
+const inline = (nodes: readonly Inline[], style: Omit<Seg, 'text'> = {}, out: Seg[][] = [[]]) => {
+  for (const node of nodes) {
+    if (node.type === 'text' || node.type === 'inlineCode')
+      node.value.split('\n').forEach((text, i) => {
+        if (i) out.push([])
+        if (text) out.at(-1)!.push({ ...style, text })
+      })
+    else if (node.type === 'break' || (node.type === 'html' && /^<br\s*\/?>$/i.test(node.value)))
+      out.push([])
+    else if (node.type === 'strong') inline(node.children, { ...style, bold: true }, out)
+    else if (node.type === 'emphasis') inline(node.children, { ...style, italics: true }, out)
+    else if (node.type === 'delete') inline(node.children, { ...style, strike: true }, out)
+    else if (node.type === 'link')
+      inline(
+        node.children,
+        /^https?:\/\//i.test(node.url) ? { ...style, link: node.url } : style,
+        out,
+      )
+    else if (node.type === 'linkReference') inline(node.children, style, out)
+    else if ((node.type === 'image' || node.type === 'imageReference') && node.alt)
+      out.at(-1)!.push({ ...style, text: node.alt })
+    else if (node.type === 'footnoteReference')
+      out.at(-1)!.push({ ...style, text: `[${node.label ?? node.identifier}]` })
+  }
+  return out
+}
+const plain = (segs: Seg[]) => segs.map((seg) => seg.text).join('')
+/** 显示宽度：中日韩及全角字符计 2，其余计 1 */
+const textWidth = (text: string) =>
+  Array.from(text).reduce((sum, char) => sum + (char.codePointAt(0)! >= 0x2e80 ? 2 : 1), 0)
+const cellWidth = (lines: Seg[][]) => Math.max(0, ...lines.map((line) => textWidth(plain(line))))
+/** 列宽：按所需宽度从小到大依次给足（至多均分剩下的宽度），最长的列分剩余；都放得下时按比例放大到总宽 */
+const fitColumns = (needs: number[], total: number) => {
+  const widths = [...needs]
+  let rest = total
+  needs
+    .map((need, i) => [need, i])
+    .sort((a, b) => a[0] - b[0])
+    .forEach(([need, i], k) => {
+      widths[i] = Math.min(need, rest / (needs.length - k))
+      rest -= widths[i]
+    })
+  const sum = widths.reduce((a, b) => a + b, 0)
+  return widths.map((width) => (width * total) / sum)
+}
+
+/** Markdown 展开为标题、文字行与表格的序列，Word 与演示文稿共用。分隔线、链接定义等不输出。 */
+function flatten(content: string) {
+  const items: Item[] = []
+  let lists = 0
+  let lastOrdered = 0
+  let mark: Extract<Item, { type: 'line' }>['mark']
+  const lines = (lines: Seg[][], depth: number, quote: boolean) => {
+    for (const segs of lines) {
+      items.push({ type: 'line', segs, depth, quote, mark })
+      mark = undefined
+    }
+  }
+  const walk = (nodes: readonly Block[], depth: number, quote: boolean) => {
+    for (const node of nodes) {
+      if (node.type === 'heading')
+        items.push({ type: 'heading', depth: node.depth, segs: inline(node.children).flat() })
+      else if (node.type === 'paragraph') lines(inline(node.children), depth, quote)
+      else if (node.type === 'code')
+        lines(
+          node.value.split('\n').map((text) => (text ? [{ text }] : [])),
+          depth,
+          quote,
+        )
+      else if (node.type === 'html')
+        lines(
+          node.value
+            .replace(/<[^>]*>/g, '')
+            .split('\n')
+            .filter((text) => text.trim())
+            .map((text) => [{ text }]),
+          depth,
+          quote,
+        )
+      else if (node.type === 'list') {
+        const start = node.start ?? 1
+        // ponytail: 起始号大于 1 的有序列表视为被段落隔开的上一列表的延续，接着编号；单独从 n 起编的列表仍从 1 编
+        const list = node.ordered && start > 1 && lastOrdered ? lastOrdered : ++lists
+        if (node.ordered) lastOrdered = list
+        node.children.forEach((item, i) => {
+          mark = { list, ordered: !!node.ordered, n: start + i }
+          walk(item.children, depth + 1, quote)
+          mark = undefined
+        })
+      } else if (node.type === 'table') {
+        const columns = node.children[0].children.length
+        items.push({
+          type: 'table',
+          align: node.align ?? [],
+          // GFM：单元格按表头列数补齐，多出的忽略
+          rows: node.children.map((row) =>
+            Array.from({ length: columns }, (_, j) => inline(row.children[j]?.children ?? [])),
+          ),
+        })
+      } else if (node.type === 'blockquote') walk(node.children, depth, true)
+      else if (node.type === 'footnoteDefinition') walk(node.children, depth, quote)
+    }
+  }
+  // 解析器在文字中保留原样的换行符，统一成 \n 再按行拆分
+  walk(markdown.parse(content.replace(/\r\n?/g, '\n')).children, 0, false)
+  return items
+}
+
+const SONG = { ascii: 'Times New Roman', hAnsi: 'Times New Roman', eastAsia: '宋体' }
+const HEI = { ascii: 'Arial', hAnsi: 'Arial', eastAsia: '黑体' }
+const headingStyle = (size: number, before: number, outlineLevel: number) => ({
+  run: { font: HEI, size, color: '000000' },
+  paragraph: { spacing: { before, after: 120 }, keepNext: true, keepLines: true, outlineLevel },
+})
+/** A4 默认页边距下的正文宽度（缇） */
+const PAGE_WIDTH = 11906 - 2 * 1440
+const listLevels = (format: (typeof LevelFormat)[keyof typeof LevelFormat], text: string[]) =>
+  text.map((text, level) => ({
+    level,
+    format,
+    text,
+    alignment: AlignmentType.LEFT,
+    style: { paragraph: { indent: { left: 900 + 480 * level, hanging: 420 } } },
+  }))
+
+/** Word：首个 # 标题作文档标题，其余标题用 1–4 级标题样式；正文首行缩进两字，表格表头加底色并跨页重复，页脚居中页码 */
+function docx(content: string, name: string) {
+  const items = flatten(content)
+  const head = items[0]
+  const titled = head?.type === 'heading' && head.depth === 1
+  const runs = (segs: Seg[]) =>
+    segs.map(({ link, ...seg }) => {
+      const run = new TextRun({ ...seg, style: link ? 'Hyperlink' : undefined })
+      return link ? new ExternalHyperlink({ link, children: [run] }) : run
+    })
+  const table = ({ rows, align }: Extract<Item, { type: 'table' }>) => {
+    // 五号字一个汉字约 210 缇，按半字宽计，另加单元格左右边距
+    const widths = fitColumns(
+      rows[0].map((_, j) => Math.max(...rows.map((row) => cellWidth(row[j]))) * 105 + 240),
+      PAGE_WIDTH,
+    ).map(Math.round)
+    const border = { style: BorderStyle.SINGLE, size: 4, color: '7F7F7F' }
+    return new Table({
+      width: { size: PAGE_WIDTH, type: WidthType.DXA },
+      columnWidths: widths,
+      layout: TableLayoutType.FIXED,
+      margins: { top: 50, bottom: 50, left: 100, right: 100 },
+      borders: Object.fromEntries(
+        ['top', 'bottom', 'left', 'right', 'insideHorizontal', 'insideVertical'].map((side) => [
+          side,
+          border,
+        ]),
+      ),
+      rows: rows.map(
+        (row, i) =>
+          new TableRow({
+            tableHeader: i === 0,
+            cantSplit: true,
+            children: row.map(
+              (lines, j) =>
+                new TableCell({
+                  width: { size: widths[j], type: WidthType.DXA },
+                  verticalAlign: VerticalAlignTable.CENTER,
+                  shading: i
+                    ? undefined
+                    : { type: ShadingType.CLEAR, fill: 'E7E6E6', color: 'auto' },
+                  children: lines.map(
+                    (segs) =>
+                      new Paragraph({
+                        style: 'TableText',
+                        alignment: i
+                          ? {
+                              left: AlignmentType.LEFT,
+                              center: AlignmentType.CENTER,
+                              right: AlignmentType.RIGHT,
+                            }[align[j] ?? 'left']
+                          : AlignmentType.CENTER,
+                        children: runs(i ? segs : segs.map((seg) => ({ ...seg, bold: true }))),
+                      }),
+                  ),
+                }),
+            ),
+          }),
+      ),
+    })
+  }
+  const children = items.flatMap((item, i) => {
+    if (item.type === 'heading')
+      return new Paragraph({
+        heading:
+          titled && !i
+            ? HeadingLevel.TITLE
+            : [
+                HeadingLevel.HEADING_1,
+                HeadingLevel.HEADING_2,
+                HeadingLevel.HEADING_3,
+                HeadingLevel.HEADING_4,
+              ][Math.min(item.depth, 4) - 1],
+        children: runs(item.segs),
+      })
+    // 表后留 6 磅空段：相邻表格不会被 Word 合并；文末是表格时 Word 补的空段也不会被挤到新的一页
+    if (item.type === 'table')
+      return [table(item), new Paragraph({ spacing: { line: 120, lineRule: LineRuleType.EXACT } })]
+    const level = Math.min(item.depth, 3) - 1
+    if (item.mark)
+      return new Paragraph({
+        numbering: {
+          reference: item.mark.ordered ? 'ordered' : 'bullet',
+          level,
+          instance: item.mark.ordered ? item.mark.list : 0,
+        },
+        children: runs(item.segs),
+      })
+    return new Paragraph({
+      style: item.quote && level < 0 ? 'Quote' : undefined,
+      indent:
+        level >= 0 ? { left: 900 + 480 * level } : item.quote ? undefined : { firstLine: 480 },
+      children: runs(item.segs),
+    })
+  })
+  return Packer.toBuffer(
+    new Document({
+      title: titled ? plain(head.segs) : name,
+      creator: '管策智研',
+      styles: {
+        default: {
+          document: { run: { font: SONG, size: 24 }, paragraph: { spacing: { line: 360 } } },
+          title: {
+            run: { font: HEI, size: 36, color: '000000' },
+            paragraph: { alignment: AlignmentType.CENTER, spacing: { before: 240, after: 360 } },
+          },
+          heading1: headingStyle(32, 360, 0),
+          heading2: headingStyle(28, 240, 1),
+          heading3: headingStyle(24, 180, 2),
+          heading4: { ...headingStyle(24, 120, 3), run: { font: SONG, size: 24, bold: true } },
+        },
+        paragraphStyles: [
+          {
+            id: 'TableText',
+            name: 'Table Text',
+            basedOn: 'Normal',
+            run: { size: 21 },
+            paragraph: { spacing: { line: 276 } },
+          },
+          {
+            id: 'Quote',
+            name: 'Quote',
+            basedOn: 'Normal',
+            run: { font: { ...SONG, eastAsia: '楷体' }, color: '404040' },
+            paragraph: {
+              indent: { left: 480, right: 480 },
+              border: { left: { style: BorderStyle.SINGLE, size: 18, color: 'BFBFBF', space: 8 } },
+            },
+          },
+        ],
+      },
+      numbering: {
+        config: [
+          { reference: 'bullet', levels: listLevels(LevelFormat.BULLET, ['●', '○', '■']) },
+          { reference: 'ordered', levels: listLevels(LevelFormat.DECIMAL, ['%1.', '(%2)', '%3)']) },
+        ],
+      },
+      sections: [
+        {
+          footers: {
+            default: new Footer({
+              children: [
+                new Paragraph({
+                  alignment: AlignmentType.CENTER,
+                  children: [new TextRun({ children: [PageNumber.CURRENT], size: 18 })],
+                }),
+              ],
+            }),
+          },
+          children,
+        },
+      ],
+    }),
+  )
+}
+
 export class Artifacts {
   store: Store
   constructor(store: Store) {
@@ -91,44 +415,30 @@ export class Artifacts {
         `FILE_INVALID_${format.toUpperCase()}_CONTENT`,
       )
     let bytes: Buffer
-    if (format === 'docx') {
-      const children = content.split(/\r?\n/).map((line) => {
-        const heading = /^(#{1,3})\s+(.+)$/.exec(line)
-        return new Paragraph(
-          heading
-            ? {
-                text: heading[2],
-                heading: [HeadingLevel.HEADING_1, HeadingLevel.HEADING_2, HeadingLevel.HEADING_3][
-                  heading[1].length - 1
-                ],
-              }
-            : { text: line },
-        )
-      })
-      bytes = await Packer.toBuffer(new Document({ sections: [{ children }] }))
-    } else if (format === 'pptx') {
-      // 与 Word 同样按行解析：开头无正文的 # 标题作封面（否则用文件名），其余每个标题开一页，
-      // 其下各行为该页段落，以 - * + 开头的显示为项目符号；标题下没有正文时作章节过渡页。
+    if (format === 'docx') bytes = await docx(content, title)
+    else if (format === 'pptx') {
+      // 与 Word 同样解析 Markdown：开头无正文的 # 标题作封面（否则用文件名），其余每个标题开一页，
+      // 其下文字行与表格归该页，列表项显示项目符号；标题下没有正文时作章节过渡页。
       const sections: {
         title: string
         level: number
-        lines: { text: string; bullet: boolean }[]
-      }[] = [{ title, level: 0, lines: [] }]
-      for (const line of content.split(/\r?\n/)) {
-        const heading = /^(#{1,3})\s+(.+)$/.exec(line)
-        const item = /^\s*[-*+]\s+(.*)$/.exec(line)
-        if (heading)
-          sections.push({ title: heading[2].trim(), level: heading[1].length, lines: [] })
-        else if (line.trim())
-          sections.at(-1)!.lines.push({ text: (item?.[1] ?? line).trim(), bullet: !!item })
+        items: Exclude<Item, { type: 'heading' }>[]
+      }[] = [{ title, level: 0, items: [] }]
+      for (const item of flatten(content)) {
+        if (item.type === 'heading')
+          sections.push({ title: plain(item.segs).trim(), level: item.depth, items: [] })
+        else if (item.type === 'table' || plain(item.segs).trim()) sections.at(-1)!.items.push(item)
       }
-      if (!sections[0].lines.length) sections.shift()
+      if (!sections[0].items.length) sections.shift()
       const cover =
-        sections[0]?.level === 1 && !sections[0].lines.length ? sections.shift()!.title : title
+        sections[0]?.level === 1 && !sections[0].items.length ? sections.shift()!.title : title
       // ponytail: 按每行 44 字、每页 14 行估算分页（18 磅微软雅黑实测约 47 个汉字一行、正文框约 16 行），
       // 西文与长单词按字数计偏保守；要更满的版面再按字体测宽
       const PER_LINE = 44
       const PER_SLIDE = 14
+      // ponytail: 表格按 14 磅字宽估算各行行数与行高，单行高过整页时仍会超出页面；要精确再按字体测宽
+      const CELL_UNIT = 14 / 72 / 2
+      const CELL_LINE = (14 * 1.2) / 72
       const font = { fontFace: '微软雅黑', color: '1B1B1D' }
       const red = { color: 'B0302A' }
       // TypeScript 把该包的类型声明当作 CommonJS；Node 按 ESM 加载时默认导出即是类
@@ -144,37 +454,129 @@ export class Artifacts {
       first.addShape('rect', { x: 0, y: 0, w: 0.3, h: 7.5, fill: red, line: red })
       first.addText(cover, { x: 1, y: 1.5, w: 11.3, h: 4, fontSize: 36, bold: true, ...font })
       for (const section of sections) {
-        const pages: { text: string; options: { bullet: boolean; breakLine: true } }[][] = [[]]
-        let used = 0
-        for (const { text, bullet } of section.lines) {
-          const chars = Array.from(text)
-          for (let i = 0; i < chars.length; i += PER_LINE * PER_SLIDE) {
-            const piece = chars.slice(i, i + PER_LINE * PER_SLIDE)
-            const cost = Math.ceil(piece.length / PER_LINE)
-            if (used + cost > PER_SLIDE) {
+        // 每页为一组文字段（每行最后一段带 breakLine），或一段表格（首行为表头，每页重复）
+        type Run = { text: string; options: Record<string, unknown> }
+        const pages: (Run[] | { rows: string[][]; colW: number[]; align: Align })[] = []
+        let used = PER_SLIDE
+        for (const item of section.items) {
+          if (item.type === 'table') {
+            const rows = item.rows.map((row) => row.map((lines) => lines.map(plain).join('\n')))
+            const colW = fitColumns(
+              rows[0].map(
+                (_, j) => Math.max(...item.rows.map((row) => cellWidth(row[j]))) * CELL_UNIT + 0.3,
+              ),
+              12.1,
+            )
+            const heights = rows.map(
+              (row) =>
+                Math.max(
+                  ...row.map((text, j) =>
+                    text
+                      .split('\n')
+                      .reduce(
+                        (sum, line) =>
+                          sum +
+                          Math.max(1, Math.ceil((textWidth(line) * CELL_UNIT) / (colW[j] - 0.2))),
+                        0,
+                      ),
+                  ),
+                ) *
+                  CELL_LINE +
+                0.1,
+            )
+            let page: string[][] = []
+            let height = heights[0]
+            rows.slice(1).forEach((row, k) => {
+              if (page.length && height + heights[k + 1] > 5.4) {
+                pages.push({ rows: [rows[0], ...page], colW, align: item.align })
+                page = []
+                height = heights[0]
+              }
+              page.push(row)
+              height += heights[k + 1]
+            })
+            pages.push({ rows: [rows[0], ...page], colW, align: item.align })
+            used = PER_SLIDE
+            continue
+          }
+          const { mark } = item
+          const segs = mark?.ordered ? [{ text: `${mark.n}. ` }, ...item.segs] : item.segs
+          const chars = Array.from(plain(segs))
+          // 超过一页的长段按字数切开，切开的部分不保留行内格式
+          const pieces =
+            chars.length > PER_LINE * PER_SLIDE
+              ? Array.from({ length: Math.ceil(chars.length / (PER_LINE * PER_SLIDE)) }, (_, i) => [
+                  {
+                    text: chars
+                      .slice(i * PER_LINE * PER_SLIDE, (i + 1) * PER_LINE * PER_SLIDE)
+                      .join(''),
+                  },
+                ])
+              : [segs]
+          for (const piece of pieces) {
+            const cost = Math.ceil(Array.from(plain(piece)).length / PER_LINE)
+            if (!Array.isArray(pages.at(-1)) || used + cost > PER_SLIDE) {
               pages.push([])
               used = 0
             }
-            pages.at(-1)!.push({ text: piece.join(''), options: { bullet, breakLine: true } })
+            ;(pages.at(-1) as Run[]).push(
+              ...piece.map((seg: Seg, k) => ({
+                text: seg.text,
+                options: {
+                  bold: seg.bold,
+                  italic: seg.italics,
+                  strike: seg.strike ? 'sngStrike' : undefined,
+                  hyperlink: seg.link ? { url: seg.link } : undefined,
+                  // 段落属性只写在首段：pptxgenjs 遇到带项目符号的文字段会另起一段
+                  ...(!k && {
+                    bullet: !!mark && !mark.ordered,
+                    indentLevel: Math.max(item.depth - 1, 0),
+                  }),
+                  ...(k === piece.length - 1 && { breakLine: true }),
+                },
+              })),
+            )
             used += cost
           }
         }
+        if (!pages.length) pages.push([])
         pages.forEach((page, i) => {
           const slide = deck.addSlide()
           // 没有正文的标题放在页面中部，作章节过渡页
-          const top = page.length ? 0.3 : 2.4
+          const top = !Array.isArray(page) || page.length ? 0.3 : 2.4
           slide.addText(i ? `${section.title}（续）` : section.title, {
             x: 0.6,
             y: top,
             w: 12.1,
             h: 1,
-            fontSize: page.length ? 24 : 32,
+            fontSize: top < 1 ? 24 : 32,
             bold: true,
             valign: 'bottom',
             ...font,
           })
           slide.addShape('rect', { x: 0.7, y: top + 1.1, w: 1, h: 0.06, fill: red, line: red })
-          if (page.length)
+          if (!Array.isArray(page))
+            slide.addTable(
+              page.rows.map((row, r) =>
+                row.map((text, j) => ({
+                  text,
+                  options: r
+                    ? { align: page.align[j] ?? 'left' }
+                    : { align: 'center', bold: true, color: 'FFFFFF', fill: red },
+                })),
+              ),
+              {
+                x: 0.6,
+                y: 1.65,
+                w: 12.1,
+                colW: page.colW,
+                fontSize: 14,
+                valign: 'middle',
+                border: { type: 'solid', pt: 0.75, color: 'BFBFBF' },
+                ...font,
+              },
+            )
+          else if (page.length)
             slide.addText(page, {
               x: 0.6,
               y: 1.65,
@@ -222,7 +624,7 @@ export class Artifacts {
             'FILE_INVALID_XLSX_CONTENT',
           )
         const book = new ExcelJS.Workbook()
-        const sheet = book.addWorksheet('研究资料')
+        const sheet = book.addWorksheet('研究资料', { views: [{ state: 'frozen', ySplit: 1 }] })
         // ExcelJS decodes OOXML escapes when reading but does not escape literal text on write.
         sheet.addRows(
           rows.map((row) =>
@@ -231,10 +633,31 @@ export class Artifacts {
             ),
           ),
         )
-        sheet.getRow(1).font = { bold: true }
-        sheet.columns.forEach((col) => {
-          col.width = 24
-        })
+        // 首行为表头：加粗、底色、冻结；各列按最长一行定宽（8–50 字符宽，超出换行），细边框
+        const columns = Math.max(0, ...rows.map((row) => row.length))
+        const thin = { style: 'thin' as const, color: { argb: 'FFBFBFBF' } }
+        for (let j = 1; j <= columns; j++) {
+          sheet.getColumn(j).width = Math.min(
+            50,
+            Math.max(
+              8,
+              ...rows.flatMap((row) =>
+                String(row[j - 1] ?? '')
+                  .split('\n')
+                  .map(textWidth),
+              ),
+            ) + 2,
+          )
+          for (let i = 1; i <= rows.length; i++) {
+            const cell = sheet.getCell(i, j)
+            cell.border = { top: thin, left: thin, bottom: thin, right: thin }
+            cell.alignment = { vertical: i === 1 ? 'middle' : 'top', wrapText: true }
+            if (i === 1) {
+              cell.font = { bold: true }
+              cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE7E6E6' } }
+            }
+          }
+        }
         bytes = Buffer.from(await book.xlsx.writeBuffer())
       } else {
         // Spreadsheet applications may execute formula-like CSV text.
@@ -363,7 +786,7 @@ export class Artifacts {
       defineTool({
         name: 'create_file',
         description:
-          '生成当前会话的文件供下载。md/docx 的 content 为正文（docx 支持 # 标题与段落）；pptx 为演示文稿（PPT），content 写法同 docx：开头的 # 标题作封面，其后每个 # 至 ### 标题开一页，下方每行为一条要点，以 - 开头显示项目符号，过长自动分页；xlsx/csv 的 content 必须为二维 JSON 数组字符串，第一行为表头。不要编造研究结果或数据。',
+          '生成当前会话的文件供下载。md/docx/pptx 的 content 为 Markdown，docx 与 pptx 排版其中的 # 至 ### 标题、段落、- 或 1. 列表（可缩进一级）、**加粗** 和 | 表格 |：docx 以开头的 # 标题为文档标题；pptx 为演示文稿（PPT），开头的 # 标题作封面，其后每个标题开一页，每行或每个列表项为一条要点，表格单独成页，过长自动分页；xlsx/csv 的 content 必须为二维 JSON 数组字符串，第一行为表头。不要编造研究结果或数据。',
         parameters: {
           name: { type: 'string', required: true },
           format: { type: 'string', enum: ['md', 'docx', 'pptx', 'xlsx', 'csv'], required: true },
