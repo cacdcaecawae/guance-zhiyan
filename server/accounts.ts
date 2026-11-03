@@ -69,11 +69,6 @@ class Attempts {
         if (now - entry.last >= WINDOW) this.failures.delete(name)
     this.failures.set(key, { count: (this.entry(key, now)?.count ?? 0) + 1, last: now })
   }
-  forgive(key: string, now: number, all: boolean) {
-    const entry = this.entry(key, now)
-    if (all || !entry || entry.count <= 1) this.failures.delete(key)
-    else entry.count--
-  }
 }
 
 /** 服务器模式的本地账号：密码以加盐 scrypt 保存，登录状态保存在服务端，可随时撤销。 */
@@ -81,9 +76,11 @@ export class Accounts {
   db: Store['db']
   secure: boolean
   trustProxy: boolean
-  byName = new Attempts(5)
-  // 同一出口地址后可能有多人，放宽一些
+  // 按（来访地址, 用户名）计数：别人从另一台机器输错，不会让正主登不上
+  byPair = new Attempts(5)
+  // 同一地址换着用户名猜的总闸；同一出口地址后可能有多人，放宽一些
   byAddress = new Attempts(30)
+  queues = new Map<string, Promise<unknown>>()
   constructor(store: Store, options: { secure?: boolean; trustProxy?: boolean } = {}) {
     this.db = store.db
     this.secure = options.secure ?? false
@@ -162,27 +159,48 @@ export class Accounts {
   ): Promise<Identity> {
     const username = name.toLowerCase()
     const address = this.address(request)
+    const pair = `${address} ${username}`
+    // 同一地址的登录逐个验证：每次判断都已计入先到请求的结果，并发猜解绕不过限制，
+    // 并发的正确登录也不会被尚未出结果的请求误判。
+    // ponytail: 共用出口地址的多人登录时排队，每人多等约一次哈希（几十毫秒）
+    const previous = this.queues.get(address) ?? Promise.resolve()
+    const turn = previous.then(async () => {
+      const wait = Math.max(
+        this.byPair.wait(pair, Date.now()),
+        this.byAddress.wait(address, Date.now()),
+      )
+      if (wait > 0) {
+        response.setHeader('Retry-After', Math.ceil(wait / 1000))
+        throw new HttpError(429, `登录尝试过多，请 ${Math.ceil(wait / 1000)} 秒后再试。`)
+      }
+      const row = this.db
+        .prepare('SELECT subject, hash FROM accounts WHERE username=?')
+        .get(username) as { subject: string; hash: string } | undefined
+      const valid = await verify(password, row?.hash ?? (await (decoy ??= hash(randomUUID()))))
+      if (!row || !valid) {
+        this.byPair.fail(pair, Date.now())
+        this.byAddress.fail(address, Date.now())
+        throw new HttpError(401, '用户名或密码错误。')
+      }
+      // 成功只清这一对的计数；按地址的总闸照旧，有效账号不能用来抵消猜错的次数
+      this.byPair.failures.delete(pair)
+      return row.subject
+    })
+    const settled = turn.then(
+      () => {},
+      () => {},
+    )
+    this.queues.set(address, settled)
+    void settled.then(() => {
+      if (this.queues.get(address) === settled) this.queues.delete(address)
+    })
+    const subject = await turn
     const now = Date.now()
-    const wait = Math.max(this.byName.wait(username, now), this.byAddress.wait(address, now))
-    if (wait > 0) {
-      response.setHeader('Retry-After', Math.ceil(wait / 1000))
-      throw new HttpError(429, `登录尝试过多，请 ${Math.ceil(wait / 1000)} 秒后再试。`)
-    }
-    // 先记失败再验证：并发的请求也会看到计数，成功后撤回
-    this.byName.fail(username, now)
-    this.byAddress.fail(address, now)
-    const row = this.db
-      .prepare('SELECT subject, hash FROM accounts WHERE username=?')
-      .get(username) as { subject: string; hash: string } | undefined
-    const valid = await verify(password, row?.hash ?? (await (decoy ??= hash(randomUUID()))))
-    if (!row || !valid) throw new HttpError(401, '用户名或密码错误。')
-    this.byName.forgive(username, now, true)
-    this.byAddress.forgive(address, now, false)
     const token = randomBytes(32).toString('base64url')
     this.db.prepare('DELETE FROM logins WHERE expires<=?').run(now)
     this.db.prepare('INSERT INTO logins VALUES(?, ?, ?)').run(digest(token), username, now + TTL)
     response.setHeader('Set-Cookie', this.cookie(token, TTL))
-    return { subject: row.subject, name: username }
+    return { subject, name: username }
   }
   token(request: IncomingMessage) {
     return new RegExp(`(?:^|;\\s*)${COOKIE}=([\\w-]+)`).exec(request.headers.cookie ?? '')?.[1]

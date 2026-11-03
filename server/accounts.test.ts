@@ -163,17 +163,39 @@ test('two accounts cannot see each other’s sessions', async (t) => {
   assert.equal((await call(`/api/sessions/${id}`, { cookie: alice })).status, 200)
 })
 
-test('failed logins back off per username and per address; proxies count only when trusted', async (t) => {
+test('failed logins back off per address and username; another machine cannot lock the owner out', async (t) => {
+  t.mock.timers.enable({ apis: ['Date'], now: Date.now() })
+  const { accounts, login } = await host(t, { trustProxy: true })
+  await accounts.add('alice', PASSWORD)
+  const from = (address: string) => ({ 'X-Forwarded-For': address })
+  for (let i = 0; i < 6; i++)
+    assert.equal((await login('alice', 'wrong', from('10.0.0.1'))).status, 401)
+  const blocked = await login('alice', PASSWORD, from('10.0.0.1'))
+  assert.equal(blocked.status, 429, 'the guessing machine waits even with the right password')
+  assert.equal(blocked.headers.get('retry-after'), '2')
+  assert.equal((await login('alice', PASSWORD, from('10.0.0.2'))).status, 200, 'owner elsewhere')
+  t.mock.timers.tick(2000)
+  assert.equal((await login('alice', PASSWORD, from('10.0.0.1'))).status, 200)
+  assert.equal(
+    (await login('alice', 'wrong', from('10.0.0.1'))).status,
+    401,
+    'success clears the count',
+  )
+})
+
+test('concurrent logins neither reject right passwords nor let guesses through', async (t) => {
   t.mock.timers.enable({ apis: ['Date'], now: Date.now() })
   const direct = await host(t)
   await direct.accounts.add('alice', PASSWORD)
-  for (let i = 0; i < 6; i++) assert.equal((await direct.login('alice', 'wrong')).status, 401)
-  const blocked = await direct.login('alice', PASSWORD)
-  assert.equal(blocked.status, 429, 'the right password waits too')
-  assert.equal(blocked.headers.get('retry-after'), '2')
-  t.mock.timers.tick(2000)
-  assert.equal((await direct.login('alice', PASSWORD)).status, 200)
-  assert.equal((await direct.login('alice', 'wrong')).status, 401, 'success clears the count')
+  await direct.accounts.add('bob', PASSWORD)
+  const burst = async (count: number, username: string, password: string) =>
+    (await Promise.all(Array.from({ length: count }, () => direct.login(username, password)))).map(
+      (response) => response.status,
+    )
+  assert.deepEqual(await burst(10, 'alice', PASSWORD), Array(10).fill(200))
+  const guesses = await burst(20, 'bob', 'wrong')
+  assert.equal(guesses.filter((status) => status === 401).length, 6)
+  assert.equal(guesses.filter((status) => status === 429).length, 14)
 
   // 同一地址换着用户名猜：30 次以内不受限，之后整个地址一起等待；X-Forwarded-For 默认不采信
   const spray = (target: typeof direct, forwarded: string) =>

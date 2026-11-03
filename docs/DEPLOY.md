@@ -29,19 +29,26 @@
 ### 启用服务器模式
 
 1. `deploy/.env` 设 `APP_MODE=server`。
-2. `server/.env` 设 `APP_ORIGIN` 为浏览器地址栏里的来源（协议、主机与端口，不带路径）；登录等写操作只接受这个来源，Cookie 是否加 `Secure` 也由它是否 `https:` 决定。二选一：
-   - **直接访问**（校园网内最简单）：`HOST=0.0.0.0`、`PORT=3001`、`APP_ORIGIN=http://<服务器校园网 IP>:3001`，服务器防火墙放行该端口。这是明文 HTTP，密码与 Cookie 在网络上不加密，只在可信的校园网内这样用。
-   - **经反向代理**（可加 HTTPS，推荐）：网站保持 `HOST=127.0.0.1`，由 nginx 等对外，`APP_ORIGIN=https://<域名>`，并设 `TRUST_PROXY=1`。
+2. `server/.env` 设 `APP_ORIGIN` 为浏览器地址栏里的来源（协议、主机与端口，不带路径，80 / 443 端口不写）；登录等写操作只接受这个来源，Cookie 是否加 `Secure` 也由它是否 `https:` 决定。
+
+   **推荐：防火墙端口转发，直连网站。** 服务器防火墙把 80 端口转发到网站的 3001，`server/.env` 写：
+
+   ```ini
+   HOST=0.0.0.0
+   PORT=3001
+   APP_ORIGIN=http://10.27.80.200
+   ```
+
+   `APP_ORIGIN` 换成访问者实际打开的地址；不设 `TRUST_PROXY`。登录失败按连接的来源地址计数，所以转发不能改写来源地址（只做目的地址转换）；改写了的话所有人共用一个计数，有人猜错几十次，全站都要等。这是明文 HTTP，密码与 Cookie 在网络上不加密，只在可信的校园网内这样用。
+
+   **前置 nginx 等反向代理时**（例如要加 HTTPS）：网站改为 `HOST=127.0.0.1`，`APP_ORIGIN` 写对外地址（如 `https://<域名>`，不是 `127.0.0.1`），并且**必须**设 `TRUST_PROXY=1`。不设时网站看到的来源都是代理本机，全站共用一个限流桶；`APP_ORIGIN` 写错则登录一律被拒为“请求来源不被允许”。`TRUST_PROXY=1` 表示网站只经这一层代理访问，由代理在 `X-Forwarded-For` 末尾追加真实来访地址；直连时不要设，否则任何人都能伪造这个请求头，绕过按地址的限制。应用不读 `X-Forwarded-Proto`。
 
    `HOST` 只用 `127.0.0.1` 或 `0.0.0.0`：`status` 的健康检查固定访问 `127.0.0.1`。
 
-3. 建账号：在仓库目录执行 `pnpm account add <用户名>`，按提示输入两次密码。不要把密码写在命令行参数里；批量创建时从标准输入传入，例如 `read -rs PW && printf '%s
-' "$PW" | pnpm account add judge01`。服务运行中也可增删账号、改密码，立即生效。
+3. 建账号：在仓库目录执行 `pnpm account add <用户名>`，按提示输入两次密码。不要把密码写在命令行参数里；批量创建时从标准输入传入，例如 `read -rs PW && printf '%s\n' "$PW" | pnpm account add judge01`。服务运行中也可增删账号、改密码，立即生效。
 4. `deploy/guance.sh install`（已安装过时 `sudo systemctl restart guance-app`），打开 `APP_ORIGIN` 登录。没有账号时网站日志会提示先建账号。
 
-`TRUST_PROXY=1` 表示网站只经一层反向代理访问，由代理在 `X-Forwarded-For` 末尾追加真实来访地址，登录失败按该地址计数。直接访问时不要设：任何人都能伪造这个请求头，绕过按地址的限制。应用不读 `X-Forwarded-Proto`。
-
-nginx 参考配置（未在本仓库实测；域名与证书路径按实际修改）：
+前置 nginx 的参考配置（未在本仓库实测；域名与证书路径按实际修改，同时按上文设 `TRUST_PROXY=1`）：
 
 ```nginx
 server {
