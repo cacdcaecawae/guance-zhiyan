@@ -1,14 +1,18 @@
-import type { IncomingMessage } from 'node:http'
+import type { IncomingMessage, ServerResponse } from 'node:http'
 
 /** Trusted integration boundary. Never accept a browser-supplied user id as identity. */
 export interface Identity {
   subject: string
   name: string
 }
-export type Authenticate = (request: IncomingMessage) => Promise<Identity | undefined>
+/** May refresh its own session cookie on the response before anything is written. */
+export type Authenticate = (
+  request: IncomingMessage,
+  response: ServerResponse,
+) => Promise<Identity | undefined>
 
-// School authentication and account provisioning are explicitly deferred.
-// Production fails closed until its trusted authenticator is integrated here.
+// Fails closed when no authenticator is wired: server mode uses local accounts (accounts.ts);
+// school SSO, once available, plugs in here as another Authenticate.
 export const authenticate: Authenticate = async () => undefined
 
 /** Explicit single-user local entry; never a public authentication provider. */

@@ -18,6 +18,8 @@ interface State {
   loading: boolean
   error: string | null
   connectionError: string | null
+  /** 服务器要求登录：显示登录页而不是连接错误 */
+  needsLogin: boolean
 }
 let state: State = {
   user: null,
@@ -27,6 +29,7 @@ let state: State = {
   loading: true,
   error: null,
   connectionError: null,
+  needsLogin: false,
 }
 const listeners = new Set<() => void>()
 let generation = 0
@@ -61,7 +64,10 @@ export async function request<T>(path: string, init?: RequestInit): Promise<T> {
     },
   })
   const value = await response.json().catch(() => null)
-  if (!response.ok) throw new Error(value?.error ?? `请求失败（${response.status}），请重试。`)
+  if (!response.ok)
+    throw Object.assign(new Error(value?.error ?? `请求失败（${response.status}），请重试。`), {
+      login: response.status === 401 && value?.login === true,
+    })
   if (value === null) throw new Error('服务器返回了无效数据。')
   return value as T
 }
@@ -75,7 +81,7 @@ export async function initialize() {
     const catalog = await request<ModelCatalog>('/models')
     if (version !== initialization) return
     listVersion++
-    update({ user, catalog, sessions, current: null, loading: false })
+    update({ user, catalog, sessions, current: null, loading: false, needsLogin: false })
   } catch (error) {
     if (version === initialization)
       update({
@@ -85,8 +91,29 @@ export async function initialize() {
         current: null,
         loading: false,
         error: error instanceof Error ? error.message : '连接失败，请重试。',
+        needsLogin: (error as { login?: boolean } | undefined)?.login === true,
       })
   }
+}
+
+export async function login(username: string, password: string) {
+  await request<User>('/login', { method: 'POST', body: JSON.stringify({ username, password }) })
+  await initialize()
+}
+
+/** 服务端撤销登录后才回到登录页，失败时抛出，不假装已退出。 */
+export async function logout() {
+  await request('/logout', { method: 'POST' })
+  initialization++
+  update({
+    user: null,
+    catalog: null,
+    sessions: [],
+    current: null,
+    loading: false,
+    error: null,
+    needsLogin: true,
+  })
 }
 
 // 本地每次改动会话列表都使进行中的列表读取过时：过时结果丢弃并重读，不覆盖较新的改动

@@ -1,6 +1,8 @@
 export interface User {
   id: string
   name: string
+  /** 服务器模式下经账号登录，可以退出 */
+  login?: boolean
 }
 export interface Artifact {
   id: string
