@@ -9,6 +9,7 @@ import { MIME } from './artifacts.ts'
 import { RAG_ERRORS, RagError } from './rag.ts'
 import type { LibraryStore, Passage } from './rag-store.ts'
 import { authenticate as defaultAuthenticate, type Authenticate } from './auth.ts'
+import { Valset, valsetIdentity } from './valset.ts'
 import type { Accounts } from './accounts.ts'
 import { sessionChanges, type SessionFrame } from '../src/services/session-stream.ts'
 import type { Session } from '../src/types/index.ts'
@@ -60,6 +61,7 @@ export function createApp(
 ) {
   const accounts = options.accounts
   const authenticate = options.authenticate ?? accounts?.authenticate ?? defaultAuthenticate
+  const valset = new Valset(store, agents)
   const server = createServer(async (request, response) => {
     response.setHeader('Cache-Control', 'no-store')
     response.setHeader('X-Content-Type-Options', 'nosniff')
@@ -129,7 +131,7 @@ export function createApp(
         accounts.logout(request, response)
         return json(response, 200, {})
       }
-      const identity = await authenticate(request, response)
+      const identity = valsetIdentity(request, path) ?? (await authenticate(request, response))
       if (
         !identity ||
         !identity.subject ||
@@ -145,6 +147,8 @@ export function createApp(
       const user = store.user(identity.subject, identity.name)
       if (path === '/api/me' && request.method === 'GET')
         return json(response, 200, accounts ? { ...user, login: true } : user)
+      if (path.startsWith('/api/valset/'))
+        return await valset.handle(request, response, user.id, path)
       if (path === '/api/models' && request.method === 'GET')
         return json(response, 200, modelCatalog(!!agents.options.adapter))
       if (path === '/api/library' || path.startsWith('/api/library/')) {

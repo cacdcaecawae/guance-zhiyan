@@ -87,6 +87,20 @@ test('正式服务器入口：账号登录、刷新保持、退出后回到登�
     await page.getByRole('button', { name: '登录' }).click()
     await expect(page.getByTitle('当前账号：bob')).toBeVisible()
     await expect(page.getByRole('textbox', { name: '研究问题' })).toBeVisible()
+
+    // 服务器模式下的验证集：登录后上传组委会模板、执行并导出；未配置模型密钥，各题如实记为失败
+    await page.getByRole('link', { name: '验证集测试' }).click()
+    await page.getByLabel('选择验证集文件').setInputFiles('tests/fixtures/valset-template-4.xlsx')
+    await page.getByRole('button', { name: '开始测试' }).click()
+    await expect(page.getByRole('status').filter({ hasText: '已完成' })).toHaveText(
+      '已完成 3 / 3 题 · 失败 3',
+    )
+    await expect(page.getByRole('row').nth(1)).toContainText('尚未配置')
+    const [result] = await Promise.all([
+      page.waitForEvent('download'),
+      page.getByRole('link', { name: '导出结果 Excel' }).click(),
+    ])
+    expect(result.suggestedFilename()).toBe('验证集结果-valset-template-4.xlsx')
   } finally {
     await info.attach('server-log', { body: diagnostics, contentType: 'text/plain' })
     if (child.exitCode === null) {

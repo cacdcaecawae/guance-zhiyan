@@ -69,6 +69,9 @@ export class Store {
     // 已删除的会话先隐藏；磁盘清理完成前保留索引，供重启重试并继续计入产物配额。
     if (!columns.some((column) => column.name === 'deleted'))
       this.db.exec('ALTER TABLE sessions ADD COLUMN deleted INTEGER NOT NULL DEFAULT 0;')
+    // 验证集每题一个会话，不列入研究记录，从验证集页面打开
+    if (!columns.some((column) => column.name === 'valset'))
+      this.db.exec('ALTER TABLE sessions ADD COLUMN valset INTEGER NOT NULL DEFAULT 0;')
     if (
       !this.db
         .prepare('PRAGMA table_info(artifacts)')
@@ -96,7 +99,7 @@ export class Store {
   list(userId: string): SessionSummary[] {
     return this.db
       .prepare(
-        'SELECT id, title, pinned FROM sessions WHERE user_id=? AND deleted=0 ORDER BY pinned DESC, created DESC LIMIT 100',
+        'SELECT id, title, pinned FROM sessions WHERE user_id=? AND deleted=0 AND valset=0 ORDER BY pinned DESC, created DESC LIMIT 100',
       )
       .all(userId)
       .map(summary)
@@ -110,11 +113,11 @@ export class Store {
     if (!row) throw new HttpError(404, '没有找到会话。')
     return row as unknown as SessionSummary & ModelSelection
   }
-  create(userId: string): SessionSummary {
-    const session = { id: randomUUID(), title: '新研究' }
+  create(userId: string, title = '新研究', valset = false): SessionSummary {
+    const session = { id: randomUUID(), title }
     this.db
-      .prepare('INSERT INTO sessions(id, user_id, title, created) VALUES(?, ?, ?, ?)')
-      .run(session.id, userId, session.title, Date.now())
+      .prepare('INSERT INTO sessions(id, user_id, title, created, valset) VALUES(?, ?, ?, ?, ?)')
+      .run(session.id, userId, session.title, Date.now(), valset ? 1 : 0)
     return session
   }
   update(userId: string, id: string, { title, pinned }: { title?: string; pinned?: boolean }) {

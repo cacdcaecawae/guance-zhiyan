@@ -190,7 +190,7 @@ const tooComplex = (content: string) =>
 /** Markdown 展开为标题、文字行与表格的序列，Word、演示文稿与表格共用。空行、分隔线、链接定义等不输出。
  * 文献库原文链接只留文字，后附引用编号（同一片段同一编号），sources 按编号列出片段。
  * 正文过于复杂或解析失败时按 code 报错。 */
-function flatten(content: string, code: string) {
+export function flatten(content: string, code: string) {
   const items: Item[] = []
   const sources: { id: string; label: string }[] = []
   let lists = 0
