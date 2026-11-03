@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test, type TestContext } from 'node:test'
 import ExcelJS from 'exceljs'
+import JSZip from 'jszip'
 import { TestModel } from '../tests/support/model.ts'
 import type { ValsetJob } from '../src/types/valset.ts'
 import { Agents } from './agent.ts'
@@ -100,22 +101,43 @@ test('plain text drops Markdown syntax, link targets and citation numbers', () =
   )
 })
 
-test('export has the template-5 columns, one-decimal seconds and （空） without a reply', async () => {
-  const { sheet, values } = await readSheet(
-    await exportValset([
-      { question: '问一', expected: '答一', answer: '回复一', status: '正常', seconds: 12.3 },
-      { question: '问二', expected: '答二', status: '超时', seconds: 180 },
-      { question: '问三', expected: '答三', status: '失败', seconds: 0.4, error: '模型失败' },
-    ]),
-  )
+test('export matches template 5: columns, styles, numeric seconds and （空） without a reply', async () => {
+  const data = await exportValset([
+    { question: '问一', expected: '答一', answer: '回复一', status: '正常', seconds: 12.3 },
+    { question: '问二', expected: '答二', status: '超时', seconds: 180 },
+    { question: '问三', expected: '答三', status: '失败', seconds: 0.4, error: '模型失败' },
+  ])
+  const { sheet, values } = await readSheet(data)
   assert.deepEqual(values, [
     ['问题', '预期答案', '智能体实际回复', '耗时(秒)', '状态'],
     ['问一', '答一', '回复一', 12.3, '正常'],
     ['问二', '答二', '（空）', 180, '超时'],
     ['问三', '答三', '（空）', 0.4, '失败'],
   ])
-  assert.equal(sheet.getCell('D2').numFmt, '0.0')
-  assert.equal(sheet.getCell('A1').font.bold, true)
+  // 样式逐项对照组委会模板 5
+  const head = sheet.getCell('C1')
+  assert.deepEqual(head.font, {
+    name: '微软雅黑',
+    size: 11,
+    bold: true,
+    color: { argb: 'FFFFFFFF' },
+  })
+  assert.equal((head.fill as { fgColor: { argb: string } }).fgColor.argb, 'FF305496')
+  assert.equal(sheet.getRow(1).height, 26)
+  assert.equal(sheet.getCell('A2').font.name, '微软雅黑')
+  // ExcelJS 读回时把字号取整，直接看样式表：正文 10.5 号
+  const styles = await (await JSZip.loadAsync(data)).file('xl/styles.xml')!.async('string')
+  assert.match(styles, /<sz val="10.5"\/>/)
+  assert.equal(sheet.getCell('A2').alignment.horizontal, 'left')
+  assert.equal(sheet.getCell('D2').alignment.horizontal, 'center')
+  assert.equal(sheet.getCell('E4').alignment.vertical, 'middle')
+  assert.equal(sheet.getCell('E4').border.bottom?.style, 'thin')
+  assert.equal(sheet.getCell('D2').numFmt, undefined, 'General like the template')
+  assert.deepEqual(
+    sheet.columns.map((column) => column.width),
+    [36, 50, 40, 10, 10],
+  )
+  assert.equal((sheet.views[0] as { ySplit?: number }).ySplit, 1, 'header row frozen')
 })
 
 async function fixture(t: TestContext) {

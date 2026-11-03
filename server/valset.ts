@@ -95,7 +95,10 @@ const cellText = (text: string) =>
     .replace(/(?![\t\n\r])\p{Cc}|[\ufffe\uffff]/gu, '')
     .replace(/_(?=x[0-9a-fA-F]{4}_)/g, '_x005F_')
 
-/** 表头样式同组委会模板：白色粗体、深蓝底、居中，冻结首行；数值显示一位小数 */
+/**
+ * 样式逐项同组委会模板 4、5：表头微软雅黑 11 号白色粗体、深蓝底、居中，行高 26；正文微软雅黑 10.5 号、
+ * 垂直居中、自动换行，前三列左对齐、耗时与状态居中；全部单元格浅灰细边框，冻结首行，数字为常规格式。
+ */
 async function workbook(columns: [string, number][], rows: (string | number | undefined)[][]) {
   const book = new ExcelJS.Workbook()
   const sheet = book.addWorksheet('Sheet1', { views: [{ state: 'frozen', ySplit: 1 }] })
@@ -103,17 +106,23 @@ async function workbook(columns: [string, number][], rows: (string | number | un
   sheet.addRows(
     rows.map((row) => row.map((cell) => (typeof cell === 'string' ? cellText(cell) : cell))),
   )
-  sheet.eachRow((row, n) =>
-    row.eachCell((cell) => {
-      cell.alignment = { vertical: n === 1 ? 'middle' : 'top', wrapText: true }
-      // 数值只有耗时一列
-      if (typeof cell.value === 'number') cell.numFmt = '0.0'
-      if (n > 1) return
-      cell.alignment.horizontal = 'center'
-      cell.font = { name: '微软雅黑', size: 11, bold: true, color: { argb: 'FFFFFFFF' } }
-      cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF305496' } }
-    }),
-  )
+  const thin = { style: 'thin' as const, color: { argb: 'FFBFBFBF' } }
+  sheet.eachRow((row, n) => {
+    for (let column = 1; column <= columns.length; column++) {
+      const cell = row.getCell(column)
+      cell.border = { top: thin, left: thin, bottom: thin, right: thin }
+      cell.alignment = {
+        horizontal: n === 1 || column > 3 ? 'center' : 'left',
+        vertical: 'middle',
+        wrapText: true,
+      }
+      cell.font =
+        n === 1
+          ? { name: '微软雅黑', size: 11, bold: true, color: { argb: 'FFFFFFFF' } }
+          : { name: '微软雅黑', size: 10.5, color: { argb: 'FF000000' } }
+      if (n === 1) cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF305496' } }
+    }
+  })
   sheet.getRow(1).height = 26
   return Buffer.from(await book.xlsx.writeBuffer())
 }
@@ -125,7 +134,7 @@ type Job = Omit<ValsetJob, 'model' | 'rows' | 'total' | 'finished'> & {
   rows: Row[]
 }
 
-/** 导出列同组委会模板 5；没有回答时写“（空）”，耗时保留一位小数 */
+/** 导出列同组委会模板 5；没有回答时写“（空）”，耗时已取到一位小数 */
 export const exportValset = (rows: Row[]) =>
   workbook(
     [
