@@ -238,6 +238,18 @@ it('文件显示在生成它的那一轮下，归不到任何一轮的放在末�
     />,
   )
   expect(screen.queryByRole('region', { name: '会话文件' })).toBeNull()
+  // 生成中的一轮先不显示已生成的文件，回答完成后才出现在正文之后
+  rerender(
+    <MessageList
+      sessionId="s"
+      messages={[messages[0], { ...messages[1], status: 'loading' }]}
+      busy
+      onRetry={() => {}}
+      artifacts={files.slice(0, 2)}
+    />,
+  )
+  expect(within(screen.getAllByRole('article')[1]).queryByRole('listitem')).toBeNull()
+  expect(screen.queryByRole('region', { name: '会话文件' })).toBeNull()
 })
 
 it('离开底部时出现“回到底部”，点击滚到容器底部', () => {

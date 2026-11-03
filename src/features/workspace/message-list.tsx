@@ -195,7 +195,11 @@ export function MessageList({
                 busy={busy}
                 onRetry={onRetry}
                 latest={message === messages.at(-1)}
-                files={cards(artifacts.filter((file) => owner.get(file.id) === message.id))}
+                files={
+                  // 回答完成后才显示：模型先生成文件再写正文，生成中显示卡片会让文件跑在正文前面
+                  message.status !== 'loading' &&
+                  cards(artifacts.filter((file) => owner.get(file.id) === message.id))
+                }
               />
             </li>
           ),
