@@ -16,6 +16,10 @@ export function startValsetJob(file: File) {
 export const cancelValsetJob = (id: string) =>
   request<ValsetJob>(`/valset/jobs/${id}/cancel`, { method: 'POST' })
 
+/** 删除任务及各题会话 */
+export const deleteValsetJob = (id: string) =>
+  request<object>(`/valset/jobs/${id}`, { method: 'DELETE' })
+
 /** 下载链接：浏览器直接带登录态下载 */
 export const VALSET_TEMPLATE_URL = '/api/valset/template'
 export const valsetExportUrl = (id: string) => `/api/valset/jobs/${id}/export`

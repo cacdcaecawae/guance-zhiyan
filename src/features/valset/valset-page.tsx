@@ -1,4 +1,5 @@
 import { CircleAlertIcon, DownloadIcon, Loader2Icon, PlayIcon, UploadIcon } from 'lucide-react'
+import * as DialogPrimitive from '@radix-ui/react-dialog'
 import { useEffect, useRef, useState } from 'react'
 import { Link, useSearchParams } from 'react-router'
 import { TopBar } from '@/app/shell'
@@ -8,6 +9,7 @@ import { cn } from '@/lib/cn'
 import { useRequest, type Loaded } from '@/lib/use-request'
 import {
   cancelValsetJob,
+  deleteValsetJob,
   listValsetJobs,
   readValsetJob,
   startValsetJob,
@@ -38,7 +40,18 @@ export function ValsetPage() {
               reloadList()
             }}
           />
-          {jobId && <JobView key={jobId} id={jobId} />}
+          {jobId && (
+            <JobView
+              key={jobId}
+              id={jobId}
+              onDeleted={() => {
+                setParams({})
+                reloadList()
+                // 任务连同按钮消失，焦点交给上传区
+                document.getElementById('valset-file')?.focus()
+              }}
+            />
+          )}
           <History list={list} current={jobId} onRetry={reloadList} />
         </div>
       </div>
@@ -93,6 +106,7 @@ function Upload({ onStarted }: { onStarted: (job: ValsetJob) => void }) {
         )}
       >
         <input
+          id="valset-file"
           type="file"
           aria-label="选择验证集文件"
           accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
@@ -137,11 +151,15 @@ const STATE = { running: '执行中', done: '已完成', cancelled: '已取消' 
 const STATUSES: ValsetStatus[] = ['正常', '超时', '失败', '已取消']
 
 /** 一个任务的进度与逐题结果；执行中每 2 秒刷新。 */
-function JobView({ id }: { id: string }) {
+function JobView({ id, onDeleted }: { id: string; onDeleted: () => void }) {
   const [job, setJob] = useState<ValsetJob>()
   const [error, setError] = useState<string>()
   const [attempt, setAttempt] = useState(0)
   const [cancelling, setCancelling] = useState(false)
+  const [confirming, setConfirming] = useState(false)
+  const [deleting, setDeleting] = useState(false)
+  const [deleteError, setDeleteError] = useState<string>()
+  const deleted = useRef(false)
   // 取消按钮随任务结束消失，焦点交给导出按钮
   const focusExport = useRef(false)
   useEffect(() => {
@@ -180,6 +198,21 @@ function JobView({ id }: { id: string }) {
       })
       .finally(() => setCancelling(false))
   }
+  const remove = () => {
+    if (deleting) return
+    setDeleting(true)
+    setDeleteError(undefined)
+    deleteValsetJob(id)
+      .then(
+        () => {
+          deleted.current = true
+          setConfirming(false)
+        },
+        (failure: unknown) => setDeleteError(message(failure, '删除失败，请重试。')),
+      )
+      .finally(() => setDeleting(false))
+  }
+  const sessions = job.rows.filter((row) => row.sessionId).length
   const counts = STATUSES.map((status) => [
     status,
     job.rows.filter((row) => row.status === status).length,
@@ -200,6 +233,17 @@ function JobView({ id }: { id: string }) {
           {job.state === 'running' && (
             <Button variant="outline" aria-disabled={cancelling || undefined} onClick={cancel}>
               取消
+            </Button>
+          )}
+          {!busy && (
+            <Button
+              variant="outline"
+              onClick={() => {
+                setDeleteError(undefined)
+                setConfirming(true)
+              }}
+            >
+              删除任务
             </Button>
           )}
           {busy ? (
@@ -299,6 +343,48 @@ function JobView({ id }: { id: string }) {
           </tbody>
         </table>
       </div>
+      <DialogPrimitive.Root
+        open={confirming}
+        onOpenChange={(next) => {
+          if (!next && !deleting) setConfirming(false)
+        }}
+      >
+        <DialogPrimitive.Portal>
+          <DialogPrimitive.Overlay className="fixed inset-0 z-50 bg-overlay" />
+          <DialogPrimitive.Content
+            role="alertdialog"
+            onCloseAutoFocus={(event) => {
+              // 删除后任务连同按钮消失，由页面安排焦点；取消时回到“删除任务”
+              if (!deleted.current) return
+              event.preventDefault()
+              onDeleted()
+            }}
+            className="fixed top-1/2 left-1/2 z-50 flex w-[calc(100vw-2rem)] max-w-sm -translate-x-1/2 -translate-y-1/2 flex-col gap-3 rounded-xl border border-popover-border bg-popover p-5 shadow-md"
+          >
+            <DialogPrimitive.Title className="text-ui-base font-semibold">
+              删除验证集任务？
+            </DialogPrimitive.Title>
+            <DialogPrimitive.Description className="text-ui-base text-foreground-subtle wrap-anywhere">
+              「{job.name}」的逐题结果和 {sessions} 个题目会话将永久删除，无法恢复。
+            </DialogPrimitive.Description>
+            {deleteError && (
+              <p role="alert" className="text-ui-caption text-destructive">
+                {deleteError}
+              </p>
+            )}
+            <div className="flex justify-end gap-2 pt-1">
+              <DialogPrimitive.Close asChild>
+                <Button variant="outline" className="rounded-md">
+                  取消
+                </Button>
+              </DialogPrimitive.Close>
+              <Button className="rounded-md" aria-disabled={deleting || undefined} onClick={remove}>
+                {deleting ? '删除中…' : '删除'}
+              </Button>
+            </div>
+          </DialogPrimitive.Content>
+        </DialogPrimitive.Portal>
+      </DialogPrimitive.Root>
     </section>
   )
 }

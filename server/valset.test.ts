@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { once } from 'node:events'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { access, mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test, type TestContext } from 'node:test'
@@ -117,6 +117,65 @@ test('reads the organizers template layout that ExcelJS cannot open', async () =
   assert.deepEqual(await parseValset(data), [
     { question: '图书馆周末开放时间是几点到几点？', expected: '周六、周日 9:00—21:00。' },
   ])
+})
+
+test('the organizers templates 4 and 5 themselves parse (A1 comment, openpyxl layout)', async () => {
+  const fixture = (name: string) =>
+    readFile(new URL(`../tests/fixtures/${name}`, import.meta.url)).then(
+      (data) => Uint8Array.from(data).buffer,
+    )
+  const expected = [
+    {
+      question: '图书馆周末开放时间是几点到几点？',
+      expected: '周六、周日 9:00—21:00（法定节假日另行通知）。',
+    },
+    {
+      question: '学生如何申请校级奖学金？',
+      expected: '登录学生事务系统，进入“奖励申请”提交材料，经学院与学校评审后公示。',
+    },
+    {
+      question: '校园卡丢失后如何补办？',
+      expected: '先在“一卡通”App挂失，再持身份证到校园卡服务中心补办，工本费20元。',
+    },
+  ]
+  // 模板 5 是导出示例，多出的三列忽略，同样能作为验证集上传
+  for (const name of ['valset-template-4.xlsx', 'valset-template-5.xlsx'])
+    assert.deepEqual(await parseValset(await fixture(name)), expected, name)
+})
+
+test('a sheet with far more rows than the limit is rejected at the limit without loading it all', async () => {
+  // 30 万行压缩后约 1 MB；整表读入内存时常驻内存要涨数百 MB
+  const rows = 300_000
+  const sheet = ['<worksheet><sheetData>']
+  sheet.push(
+    '<row r="1"><c r="A1" t="inlineStr"><is><t>问题</t></is></c><c r="B1" t="inlineStr"><is><t>预期答案</t></is></c></row>',
+  )
+  for (let n = 2; n <= rows; n++)
+    // 上限之后的第一行问题超长：读到它说明没有在上限处停下
+    sheet.push(
+      `<row r="${n}"><c r="A${n}" t="inlineStr"><is><t>${n === 1003 ? '长'.repeat(9000) : `问题${n}`}</t></is></c></row>`,
+    )
+  sheet.push('</sheetData></worksheet>')
+  const zip = new JSZip()
+  zip.file(
+    'xl/workbook.xml',
+    '<workbook><sheets><sheet name="Sheet1" sheetId="1" r:id="rId1" xmlns:r="r"/></sheets></workbook>',
+  )
+  zip.file(
+    'xl/_rels/workbook.xml.rels',
+    '<Relationships><Relationship Id="rId1" Type="worksheet" Target="worksheets/sheet1.xml"/></Relationships>',
+  )
+  zip.file('xl/worksheets/sheet1.xml', sheet.join(''))
+  sheet.length = 0
+  const data = await zip.generateAsync({ type: 'arraybuffer', compression: 'DEFLATE' })
+  global.gc?.()
+  const before = process.memoryUsage().rss
+  let peak = before
+  const sample = setInterval(() => (peak = Math.max(peak, process.memoryUsage().rss)), 5)
+  await rejects(data, /最多 1000 条/)
+  clearInterval(sample)
+  peak = Math.max(peak, process.memoryUsage().rss)
+  assert.ok(peak - before < 100 * 2 ** 20, `rss grew ${Math.round((peak - before) / 2 ** 20)} MB`)
 })
 
 test('plain text drops Markdown syntax, link targets and citation numbers', () => {
@@ -242,6 +301,44 @@ test('a question past the time limit is stopped and reported as 超时 with no r
   assert.deepEqual(store.list(user.id), [], 'validation sessions stay out of the research list')
 })
 
+test('single questions queue for the same slots as jobs', async (t) => {
+  const { store, agents, user } = await fixture(t)
+  const valset = new Valset(store, agents, { concurrency: 1, timeoutMs: 5000 })
+  const job = await valset.create(
+    user.id,
+    '占满.xlsx',
+    await xlsx([
+      ['问题', '预期答案'],
+      ['持续生成', ''],
+    ]),
+  )
+  const asked = valset.ask(user.id, '你好')
+  assert.equal(valset.waiting.length, 1, 'the single question waits while the job holds the slot')
+  assert.equal(agents.active.size, 1)
+  valset.cancel(valset.job(user.id, job.id))
+  const result = await asked
+  assert.equal(result.status, '正常')
+  assert.equal(valset.busy, 0)
+})
+
+test('questions interrupted by shutdown are not logged as failures', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'gczy-valset-close-'))
+  const store = new Store(root)
+  const agents = await new Agents(store, { adapter: new TestModel() }).init()
+  t.after(async () => {
+    store.close()
+    await rm(root, { recursive: true, force: true })
+  })
+  const errors = t.mock.method(console, 'error', () => {})
+  const valset = new Valset(store, agents, { concurrency: 1, timeoutMs: 5000 })
+  const user = store.user('valset-close', 'Test')
+  const asked = valset.ask(user.id, '持续生成')
+  while (!agents.active.size) await new Promise((resolve) => setTimeout(resolve, 10))
+  await agents.close()
+  await asked
+  assert.equal(errors.mock.callCount(), 0)
+})
+
 test('jobs run over HTTP, survive a restart, cancel, and the bearer token only opens valset', async (t) => {
   const { store, agents } = await fixture(t)
   const server = createApp(store, agents, {
@@ -332,6 +429,31 @@ test('jobs run over HTTP, survive a restart, cancel, and the bearer token only o
   assert.equal(final.state, 'cancelled')
   assert.ok(final.rows.every((row) => row.status === '已取消'))
   assert.equal(agents.active.size, 0)
+
+  // 删除任务时一并删除各题会话，任务文件随之删除
+  const owner = store.user('valset-a', 'A').id
+  const running = (await (
+    await upload([
+      ['问题', '预期答案'],
+      ['持续生成', ''],
+    ])
+  ).json()) as ValsetJob
+  assert.equal((await api(`/jobs/${running.id}`, { method: 'DELETE' })).status, 409)
+  await api(`/jobs/${running.id}/cancel`, { method: 'POST' })
+  for (const job of [done, final]) {
+    for (;;) {
+      const response = await api(`/jobs/${job.id}`, { method: 'DELETE' })
+      if (response.status !== 409) {
+        assert.equal(response.status, 200)
+        break
+      }
+      await new Promise((resolve) => setTimeout(resolve, 50))
+    }
+    assert.equal((await api(`/jobs/${job.id}`)).status, 404)
+    for (const row of job.rows)
+      if (row.sessionId) assert.throws(() => store.session(owner, row.sessionId!), /没有找到会话/)
+    await assert.rejects(access(join(store.root, 'valset', `${job.id}.json`)))
+  }
 
   const bearer = (token: string, path: string, body?: unknown) =>
     fetch(`http://127.0.0.1:${address.port}/api${path}`, {

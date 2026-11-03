@@ -5,6 +5,7 @@ import {
   readdirSync,
   readFileSync,
   renameSync,
+  rmSync,
   writeFileSync,
 } from 'node:fs'
 import type { IncomingMessage, ServerResponse } from 'node:http'
@@ -27,8 +28,10 @@ const MAX_FILE = 10 * 2 ** 20
 const MAX_QUESTION = 8000
 const ANSWER_HEADER = /^(?:预期答案|参考答案)(?:[（(](?:预期答案|参考答案)[)）])?$/
 
-/** 解压后单个部件的上限，挡住压缩炸弹 */
+/** 解压后单个部件最多读取的字节数，挡住压缩炸弹；工作簿与关系部件另限 1 MB */
 const MAX_PART = 64 * 2 ** 20
+/** 未读完的一行或一个共享字符串最多累积的文字，正常的两列一行远小于此 */
+const MAX_ELEMENT = 4 * 2 ** 20
 const xml = new XMLParser({
   ignoreAttributes: false,
   attributeNamePrefix: '',
@@ -63,21 +66,80 @@ const column = (ref: string) =>
     0,
   )
 
+/** 边解压边交出文字；超过 limit 字节时报错，onText 返回 false 时停止解压。部件不存在时返回 false。 */
+function inflate(
+  zip: JSZip,
+  path: string | undefined,
+  limit: number,
+  onText: (text: string) => unknown,
+) {
+  const file = path ? zip.file(path) : null
+  if (!file) return Promise.resolve(false)
+  const decoder = new TextDecoder()
+  let size = 0
+  return new Promise<boolean>((resolve, reject) => {
+    // 暂停后适配器的缓冲一满就停止解压；未读完的流随后被回收
+    const stream = file.nodeStream('nodebuffer')
+    const stop = (settle: () => void) => {
+      stream.pause()
+      stream.removeAllListeners('data')
+      settle()
+    }
+    stream
+      .on('data', (chunk: Buffer) => {
+        try {
+          size += chunk.length
+          if (size > limit) throw new HttpError(413, '文件解压后过大。')
+          if (onText(decoder.decode(chunk, { stream: true })) === false) stop(() => resolve(true))
+        } catch (error) {
+          stop(() => reject(error))
+        }
+      })
+      .on('error', reject)
+      .on('end', () => resolve(true))
+  })
+}
+/** 逐个交出部件中完整的 tag 元素（可带命名空间前缀），读到 container 结束或 visit 返回 false 时停止 */
+function elements(
+  zip: JSZip,
+  path: string | undefined,
+  tag: string,
+  container: string,
+  visit: (element: string) => unknown,
+) {
+  const element = new RegExp(`<(?:\\w+:)?${tag}\\b[^>]*?(?:/>|>[\\s\\S]*?</(?:\\w+:)?${tag}>)`, 'g')
+  const closed = new RegExp(`</(?:\\w+:)?${container}>`)
+  let pending = ''
+  return inflate(zip, path, MAX_PART, (chunk) => {
+    pending += chunk
+    let end = 0
+    for (const match of pending.matchAll(element)) {
+      end = match.index + match[0].length
+      if (visit(match[0]) === false) return false
+    }
+    pending = pending.slice(end)
+    if (closed.test(pending)) return false
+    if (pending.length > MAX_ELEMENT) throw new HttpError(400, '文件中有过长的行或单元格。')
+  })
+}
+
 /**
  * 首个工作表前两列的文字，按行号。直接读 OOXML，不用 ExcelJS：组委会模板由 openpyxl 生成（带批注、
- * 关系用绝对路径、行内字符串），ExcelJS 4.4 读取时抛错。
+ * 关系用绝对路径、行内字符串），ExcelJS 4.4 读取时抛错。工作表与共享字符串都边解压边解析，
+ * 首列有内容的行超过 MAX_ROWS 题即停，不把整表读进内存。
+ * ponytail: 首列引用的共享字符串在计数时都算有内容；超限的表里若有空白共享字符串会被多算，需要时先扫一遍共享字符串标出空白项
  */
 async function readTable(data: ArrayBuffer) {
   const zip = await JSZip.loadAsync(data)
-  const part = async (path: string | undefined) => {
-    const file = path ? zip.file(path) : null
-    if (!file) return undefined
-    // ponytail: 解压前用 JSZip 内部记录的原始大小挡压缩炸弹；JSZip 改了内部字段时改为流式计数
-    const size = (file as unknown as { _data?: { uncompressedSize?: number } })._data
-    if ((size?.uncompressedSize ?? 0) > MAX_PART) throw new HttpError(413, '文件解压后过大。')
-    return xml.parse(await file.async('string')) as unknown
+  const whole = async (path: string | undefined) => {
+    let content = ''
+    return (await inflate(zip, path, 2 ** 20, (chunk) => {
+      content += chunk
+    }))
+      ? (xml.parse(content) as unknown)
+      : undefined
   }
-  const rels = list(at(await part('xl/_rels/workbook.xml.rels'), 'Relationships', 'Relationship'))
+  const rels = list(at(await whole('xl/_rels/workbook.xml.rels'), 'Relationships', 'Relationship'))
   // 关系目标可写相对 xl/ 的路径或以 / 开头的包内绝对路径
   const target = (match: (rel: unknown) => boolean) => {
     const path = at(rels.find(match), 'Target')
@@ -85,44 +147,69 @@ async function readTable(data: ArrayBuffer) {
       ? new URL(path, 'http://package/xl/').pathname.slice(1)
       : undefined
   }
-  const sheet = at(await part('xl/workbook.xml'), 'workbook', 'sheets', 'sheet', 0, 'id')
-  const sheetData = at(
-    await part(target((rel) => at(rel, 'Id') === sheet)),
-    'worksheet',
+  const sheet = at(await whole('xl/workbook.xml'), 'workbook', 'sheets', 'sheet', 0, 'id')
+  // 单元格先记原文或共享字符串序号，读完工作表再只取用到的共享字符串
+  const rows = new Map<number, (string | number)[]>()
+  let questions = 0
+  let last = 0
+  const found = await elements(
+    zip,
+    target((rel) => at(rel, 'Id') === sheet),
+    'row',
     'sheetData',
+    (element) => {
+      const row = at(xml.parse(element), 'row', 0)
+      last = Number(at(row, 'r')) || last + 1
+      const cells: (string | number)[] = []
+      let index = 0
+      for (const cell of list(at(row, 'c'))) {
+        const ref = at(cell, 'r')
+        index = typeof ref === 'string' ? column(ref) : index + 1
+        if (index > 2) continue
+        const type = at(cell, 't')
+        const value = text(at(cell, 'v'))
+        cells[index - 1] =
+          type === 's'
+            ? Number(value)
+            : type === 'inlineStr'
+              ? richText(at(cell, 'is'))
+              : type === 'b'
+                ? value === '1'
+                  ? 'TRUE'
+                  : 'FALSE'
+                : value
+      }
+      const first = cells[0]
+      if (last > 1 && (first === undefined || (typeof first === 'string' && !first.trim()))) return
+      if (last > 1 && ++questions > MAX_ROWS)
+        throw new HttpError(400, `一次最多 ${MAX_ROWS} 条问题。`)
+      rows.set(last, cells)
+    },
   )
-  if (sheetData === undefined) throw new Error('没有工作表')
-  const shared = list(
-    at(
-      await part(target((rel) => String(at(rel, 'Type')).endsWith('/sharedStrings'))),
-      'sst',
+  if (!found) throw new Error('没有工作表')
+  const needed = new Set(
+    [...rows.values()].flat().filter((cell): cell is number => Number.isInteger(cell)),
+  )
+  const shared = new Map<number, string>()
+  let next = 0
+  const lastNeeded = Math.max(...needed)
+  if (needed.size)
+    await elements(
+      zip,
+      target((rel) => String(at(rel, 'Type')).endsWith('/sharedStrings')),
       'si',
-    ),
-  ).map(richText)
-  const table = new Map<number, string[]>()
-  for (const row of list(at(sheetData, 'row'))) {
-    const cells: string[] = []
-    let index = 0
-    for (const cell of list(at(row, 'c'))) {
-      const ref = at(cell, 'r')
-      index = typeof ref === 'string' ? column(ref) : index + 1
-      if (index > 2) continue
-      const type = at(cell, 't')
-      const value = text(at(cell, 'v'))
-      cells[index - 1] =
-        type === 's'
-          ? (shared[Number(value)] ?? '')
-          : type === 'inlineStr'
-            ? richText(at(cell, 'is'))
-            : type === 'b'
-              ? value === '1'
-                ? 'TRUE'
-                : 'FALSE'
-              : value
-    }
-    table.set(Number(at(row, 'r')) || Math.max(0, ...table.keys()) + 1, cells)
-  }
-  return table
+      'sst',
+      (element) => {
+        if (needed.has(next)) shared.set(next, richText(at(xml.parse(element), 'si', 0)))
+        return ++next <= lastNeeded
+      },
+    )
+  return new Map(
+    [...rows].map(([n, cells]) => [
+      n,
+      cells.map((cell) => (typeof cell === 'number' ? (shared.get(cell) ?? '') : cell)),
+    ]),
+  )
 }
 
 /** 读取上传的验证集：首个工作表，第一行表头“问题”“预期答案”，其后每行一题；问题为空的行跳过，其余列忽略。 */
@@ -146,8 +233,6 @@ export async function parseValset(data: ArrayBuffer) {
     rows.push({ question, expected: cells[1]?.trim() ?? '' })
   }
   if (!rows.length) throw new HttpError(400, '文件中没有问题。')
-  if (rows.length > MAX_ROWS)
-    throw new HttpError(400, `一次最多 ${MAX_ROWS} 条问题，文件中有 ${rows.length} 条。`)
   return rows
 }
 
@@ -309,7 +394,10 @@ const setting = (name: string, fallback: number) => {
 export class Valset {
   jobs = new Map<string, Job>()
   aborts = new Map<string, AbortController>()
+  /** 正在作答的题数，任务与单题接口合计不超过 concurrency */
   busy = 0
+  /** 等候名额的单题接口调用；有人等候时任务的题不再开始，名额先交给等候者 */
+  waiting: (() => void)[] = []
   dir: string
   store: Store
   agents: Agents
@@ -397,11 +485,25 @@ export class Valset {
     }
     return view(job)
   }
+  acquire() {
+    if (this.busy < this.options.concurrency && !this.waiting.length) {
+      this.busy++
+      return Promise.resolve()
+    }
+    return new Promise<void>((resolve) => this.waiting.push(resolve))
+  }
+  release() {
+    const next = this.waiting.shift()
+    if (next) return next()
+    this.busy--
+    this.pump()
+  }
   pump() {
     for (const job of this.jobs.values())
       for (const row of job.state === 'running' ? job.rows : [])
         if (
           this.busy < this.options.concurrency &&
+          !this.waiting.length &&
           !this.agents.closing &&
           !row.status &&
           !row.running
@@ -426,14 +528,36 @@ export class Valset {
       // 关闭服务而中断的题不记结果，重启后重新执行
       if (!this.agents.closing) Object.assign(row, result)
     } finally {
-      this.busy--
       delete row.running
       if (!this.agents.closing) {
         if (job.state === 'running' && job.rows.every((item) => item.status)) job.state = 'done'
         this.save(job)
-        this.pump()
       }
+      this.release()
     }
+  }
+  /**
+   * 删除任务及各题会话（历史、文件与沙箱随会话删除）。某个会话删不掉时保留任务与其余会话的线索，
+   * 原样报错，重试时已删的会话按 404 跳过。
+   */
+  async remove(job: Job) {
+    if (job.state === 'running' || job.rows.some((row) => row.running))
+      throw new HttpError(409, '任务仍在执行，请先取消。')
+    for (const row of job.rows) {
+      if (!row.sessionId) continue
+      try {
+        await this.agents.remove(job.userId, row.sessionId)
+      } catch (error) {
+        if (!(error instanceof HttpError && error.status === 404)) {
+          this.save(job)
+          throw error
+        }
+      }
+      delete row.sessionId
+    }
+    rmSync(join(this.dir, `${job.id}.json`), { force: true })
+    this.jobs.delete(job.id)
+    this.aborts.delete(job.id)
   }
   /** 在新会话中回答一题，直到完成、失败、超时或被取消；超时与取消会停止该会话。 */
   async answer(
@@ -485,12 +609,21 @@ export class Valset {
       const answer = plainText(finalText(message))
       return answer ? end('正常', { answer }) : end('失败', { error: '未返回正文。' })
     } catch (error) {
-      if (!(error instanceof HttpError)) console.error('验证集作答失败：', error)
+      // 关闭服务时在途的题被中断，不当作故障记录
+      if (!(error instanceof HttpError) && !this.agents.closing)
+        console.error('验证集作答失败：', error)
       return end('失败', { error: error instanceof HttpError ? error.message : '执行失败。' })
     }
   }
+  /** 单题接口与任务共用并发名额，名额满时排队；耗时从开始作答算起 */
   async ask(userId: string, question: string) {
-    const result = await this.answer(userId, question, this.selection())
+    await this.acquire()
+    let result: Awaited<ReturnType<Valset['answer']>>
+    try {
+      result = await this.answer(userId, question, this.selection())
+    } finally {
+      this.release()
+    }
     try {
       appendFileSync(
         join(this.dir, 'ask.jsonl'),
@@ -577,6 +710,10 @@ export class Valset {
     if (!match) throw new HttpError(404, '接口不存在。')
     const job = this.job(userId, match[1])
     if (!match[2] && method === 'GET') return json(200, view(job))
+    if (!match[2] && method === 'DELETE') {
+      await this.remove(job)
+      return json(200, {})
+    }
     if (match[2] === 'cancel' && method === 'POST') return json(200, this.cancel(job))
     if (match[2] === 'export' && method === 'GET') {
       if (job.state === 'running' || job.rows.some((row) => row.running))
