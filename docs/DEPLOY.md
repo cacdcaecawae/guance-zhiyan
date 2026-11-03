@@ -14,13 +14,51 @@
 
 ## 访问方式与登录
 
-目前只有**本机模式**（`APP_MODE=local`，即 `pnpm chat` 用的入口）可用：免登录，所有会话属于同一个“本机研究者”，只接受来自 `127.0.0.1:端口` 的请求。从其他电脑访问时经 SSH 隧道转发，**本机端口必须与服务端口一致**（页面会核对地址）：
+`deploy/.env` 的 `APP_MODE` 选择访问方式：
 
-```bash
-ssh -N -L 3001:127.0.0.1:3001 用户名@服务器    # 保持窗口打开，再访问 http://127.0.0.1:3001
+- **本机模式**（`APP_MODE=local`，即 `pnpm chat` 用的入口）：免登录，所有会话属于同一个“本机研究者”，只接受来自 `127.0.0.1:端口` 的请求。从其他电脑访问时经 SSH 隧道转发，**本机端口必须与服务端口一致**（页面会核对地址）：
+
+  ```bash
+  ssh -N -L 3001:127.0.0.1:3001 用户名@服务器    # 保持窗口打开，再访问 http://127.0.0.1:3001
+  ```
+
+  不要把本机模式通过反向代理或公网端口开放给别人：任何能访问它的人都能看到全部会话。
+
+- **服务器模式**（`APP_MODE=server`）：浏览器直接打开网址，用管理员创建的账号登录，每个账号的会话与文件互相隔离；不开放注册。账号命令与登录规则见 README“服务器模式与账号”。
+
+### 启用服务器模式
+
+1. `deploy/.env` 设 `APP_MODE=server`。
+2. `server/.env` 设 `APP_ORIGIN` 为浏览器地址栏里的来源（协议、主机与端口，不带路径）；登录等写操作只接受这个来源，Cookie 是否加 `Secure` 也由它是否 `https:` 决定。二选一：
+   - **直接访问**（校园网内最简单）：`HOST=0.0.0.0`、`PORT=3001`、`APP_ORIGIN=http://<服务器校园网 IP>:3001`，服务器防火墙放行该端口。这是明文 HTTP，密码与 Cookie 在网络上不加密，只在可信的校园网内这样用。
+   - **经反向代理**（可加 HTTPS，推荐）：网站保持 `HOST=127.0.0.1`，由 nginx 等对外，`APP_ORIGIN=https://<域名>`，并设 `TRUST_PROXY=1`。
+
+   `HOST` 只用 `127.0.0.1` 或 `0.0.0.0`：`status` 的健康检查固定访问 `127.0.0.1`。
+
+3. 建账号：在仓库目录执行 `pnpm account add <用户名>`，按提示输入两次密码。不要把密码写在命令行参数里；批量创建时从标准输入传入，例如 `read -rs PW && printf '%s
+' "$PW" | pnpm account add judge01`。服务运行中也可增删账号、改密码，立即生效。
+4. `deploy/guance.sh install`（已安装过时 `sudo systemctl restart guance-app`），打开 `APP_ORIGIN` 登录。没有账号时网站日志会提示先建账号。
+
+`TRUST_PROXY=1` 表示网站只经一层反向代理访问，由代理在 `X-Forwarded-For` 末尾追加真实来访地址，登录失败按该地址计数。直接访问时不要设：任何人都能伪造这个请求头，绕过按地址的限制。应用不读 `X-Forwarded-Proto`。
+
+nginx 参考配置（未在本仓库实测；域名与证书路径按实际修改）：
+
+```nginx
+server {
+  listen 443 ssl;
+  server_name guance.example.edu.cn;
+  ssl_certificate     /etc/nginx/certs/guance.crt;
+  ssl_certificate_key /etc/nginx/certs/guance.key;
+  client_max_body_size 40m;                                       # 提问可附约 30 MB 图片
+  location / {
+    proxy_pass http://127.0.0.1:3001;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;  # 末尾是真实来访地址
+    proxy_buffering off;                                          # 回答实时流（SSE）
+  }
+}
 ```
-
-多人共用、通过网址直接访问需要先接入学校身份认证（`server/auth.ts`），之后改用 `APP_MODE=server` 并按 README 配置 `APP_ORIGIN`、反向代理与 HTTPS。认证接入前普通服务器模式的业务接口一律返回 401。不要把本机模式通过反向代理或公网端口开放给别人：任何能访问它的人都能看到全部会话。
 
 ## 首次准备（Linux 或 WSL Ubuntu）
 
@@ -89,7 +127,7 @@ deploy/guance.sh install                     # 重新生成服务、重启全部
 
 ## 备份
 
-停止服务后一起备份 `DATA_DIR`、Qdrant 数据目录（或 Docker 卷 `guance-rag-backend_qdrant-data`）和 `server/.env`；只恢复其中一部分会出现文献与向量不一致，需要 `pnpm rag reindex`。启用沙箱时另按沙箱文档备份。
+停止服务后一起备份 `DATA_DIR`（含账号与登录状态）、Qdrant 数据目录（或 Docker 卷 `guance-rag-backend_qdrant-data`）和 `server/.env`；只恢复其中一部分会出现文献与向量不一致，需要 `pnpm rag reindex`。启用沙箱时另按沙箱文档备份。
 
 ## 排查
 
@@ -110,7 +148,7 @@ deploy/guance.sh install                     # 重新生成服务、重启全部
 ## 迁移到学校服务器前需要确认
 
 - 操作系统与权限：是否用 systemd；运行服务的账号能否使用 `sudo`（`install` 写入单元、更新时停启网站需要），或用 Docker 开机自启。
-- 网络：服务器能否访问校内模型 `10.27.66.12`、能否访问 GitHub 与 npm（拉代码、装依赖）；访问者如何连到服务器（SSH 隧道，或待认证接入后的网址）。
+- 网络：服务器能否访问校内模型 `10.27.66.12`、能否访问 GitHub 与 npm（拉代码、装依赖）；访问者如何连到服务器（SSH 隧道，或服务器模式的网址）；能否申请域名与证书以启用 HTTPS。
 - 算力：有无 NVIDIA 显卡跑 BGE-M3；没有时检索查询仍可用但更慢（未实测具体耗时），全量导入不宜在这样的服务器上做，改为从已有部署迁移数据。
 - 磁盘：`DATA_DIR` 约 15 GB，另加 Qdrant 数据与备份空间。
-- 多人使用：需要学校身份认证方式，确定后再接入 `server/auth.ts`。
+- 学校统一身份认证：可用后在 `server/auth.ts` 接入；在此之前服务器模式使用本地账号。

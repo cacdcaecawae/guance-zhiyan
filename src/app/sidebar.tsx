@@ -1,8 +1,9 @@
-import { BookOpenIcon, FileTextIcon, PlusIcon } from 'lucide-react'
-import { Link, NavLink } from 'react-router'
+import { BookOpenIcon, FileTextIcon, LogOutIcon, PlusIcon } from 'lucide-react'
+import { useState } from 'react'
+import { Link, NavLink, useNavigate } from 'react-router'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/cn'
-import { useResearch } from '@/services/research'
+import { logout, useResearch } from '@/services/research'
 import { SlipsMark, Wordmark } from './logo'
 import { SessionList } from './session-list'
 import { ThemeToggle } from './theme-toggle'
@@ -20,6 +21,22 @@ const linkClass = ({ isActive }: { isActive: boolean }) =>
 
 export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
   const { user } = useResearch()
+  const navigate = useNavigate()
+  const [leaving, setLeaving] = useState(false)
+  const [logoutError, setLogoutError] = useState<string | null>(null)
+  const signOut = async () => {
+    if (leaving) return
+    setLeaving(true)
+    setLogoutError(null)
+    // 先回到空白工作台：下一位登录的人不会落在上一位的会话地址上
+    void navigate('/workspace')
+    try {
+      await logout()
+    } catch (error) {
+      setLogoutError(error instanceof Error ? error.message : '退出失败，请重试。')
+      setLeaving(false)
+    }
+  }
   return (
     <nav aria-label="主导航" className="flex h-full min-h-0 flex-col gap-4 p-3">
       {/* 竹简标志、字标与校名署名 */}
@@ -54,11 +71,33 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
 
       <SessionList onNavigate={onNavigate} />
 
+      {logoutError && (
+        <p role="alert" className="px-2 text-ui-caption text-destructive">
+          {logoutError}
+        </p>
+      )}
       <div className="flex items-center justify-between gap-2 border-t border-border pt-3">
-        <span className="min-w-0 truncate text-ui-sm text-foreground-subtle" title={user?.name}>
+        <span
+          className="min-w-0 truncate text-ui-sm text-foreground-subtle"
+          title={user?.login ? `当前账号：${user.name}` : user?.name}
+        >
           {user?.name}
         </span>
-        <ThemeToggle />
+        <div className="flex shrink-0 items-center gap-1">
+          {user?.login && (
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              aria-label="退出登录"
+              title="退出登录"
+              aria-disabled={leaving}
+              onClick={() => void signOut()}
+            >
+              <LogOutIcon />
+            </Button>
+          )}
+          <ThemeToggle />
+        </div>
       </div>
     </nav>
   )
