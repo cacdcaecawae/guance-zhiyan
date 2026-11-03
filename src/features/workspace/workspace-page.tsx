@@ -1,4 +1,4 @@
-import { CircleAlertIcon, DownloadIcon, PaperclipIcon } from 'lucide-react'
+import { CircleAlertIcon } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router'
 import { TopBar } from '@/app/shell'
@@ -6,7 +6,6 @@ import { Button } from '@/components/ui/button'
 import { Sheet, SheetContent } from '@/components/ui/sheet'
 import { useMediaQuery } from '@/lib/use-media-query'
 import {
-  artifactUrl,
   askQuestion,
   createSession,
   stopAnswer,
@@ -16,7 +15,7 @@ import {
 } from '@/services/research'
 import { OpenPassage } from './citations'
 import { Composer } from './composer'
-import { FilePreview, FormatBlock, PreviewPane } from './file-preview'
+import { FilePreview, PreviewPane } from './file-preview'
 import { MessageList } from './message-list'
 import { ModelPicker } from './model-picker'
 import { PassagePreview } from './passage-preview'
@@ -253,56 +252,13 @@ export function WorkspacePage({ sessionId }: { sessionId?: string }) {
                     onRetry={(message) => {
                       void retry(message.attemptId ?? message.id)
                     }}
-                  >
-                    {!!session?.artifacts.length && (
-                      <section aria-label="会话文件" className="mt-10">
-                        <h2 className="mb-3 flex items-center gap-2 font-serif text-ui-base font-semibold">
-                          <PaperclipIcon className="size-4 text-foreground-subtlest" aria-hidden />
-                          会话文件
-                          <span className="font-sans text-ui-sm font-normal text-foreground-subtlest">
-                            {session.artifacts.length} 个
-                          </span>
-                        </h2>
-                        {/* 文件卡片：朱红格式块 + 文件名，整卡可点开预览，与正文明显区分 */}
-                        <ul className="grid grid-cols-[repeat(auto-fill,minmax(16rem,1fr))] gap-3">
-                          {session.artifacts.map((file) => (
-                            <li
-                              key={file.id}
-                              className={`relative flex min-w-0 items-center gap-3 rounded-xl border p-3 transition-colors has-[button:focus-visible]:ring-2 has-[button:focus-visible]:ring-ring ${previewId === file.id ? 'border-brand bg-accent' : 'border-card-border bg-card hover:border-border-hover hover:bg-surface-hover'}`}
-                            >
-                              <FormatBlock format={file.format} />
-                              <div className="min-w-0 flex-1">
-                                <button
-                                  type="button"
-                                  id={`artifact-${file.id}`}
-                                  aria-pressed={previewId === file.id}
-                                  onClick={() => {
-                                    setCited(null)
-                                    setPreviewId(previewId === file.id ? null : file.id)
-                                  }}
-                                  className="block max-w-full truncate rounded-sm text-left text-ui-base font-medium outline-none after:absolute after:inset-0 after:rounded-xl"
-                                >
-                                  {file.name}
-                                </button>
-                                <p className="text-ui-sm text-foreground-subtlest">
-                                  {Math.ceil(file.size / 1024)} KB
-                                  {previewId === file.id && ' · 预览中'}
-                                </p>
-                              </div>
-                              <a
-                                href={artifactUrl(file)}
-                                aria-label={`下载 ${file.name}`}
-                                title="下载"
-                                className="relative z-10 flex size-8 shrink-0 items-center justify-center rounded-md text-foreground-subtle outline-none transition-colors hover:bg-hover hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
-                              >
-                                <DownloadIcon className="size-4" />
-                              </a>
-                            </li>
-                          ))}
-                        </ul>
-                      </section>
-                    )}
-                  </MessageList>
+                    artifacts={session.artifacts}
+                    previewId={previewId}
+                    onPreview={(id) => {
+                      setCited(null)
+                      setPreviewId(previewId === id ? null : id)
+                    }}
+                  />
                 </OpenPassage>
               ) : (
                 <Welcome
