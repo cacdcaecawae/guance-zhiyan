@@ -2,7 +2,13 @@ import { randomUUID } from 'node:crypto'
 import { mkdirSync, chmodSync, openSync, closeSync, fchmodSync } from 'node:fs'
 import { join } from 'node:path'
 import { DatabaseSync, type SQLOutputValue } from 'node:sqlite'
-import type { Artifact, ModelSelection, SessionSummary, User } from '../src/types/index.ts'
+import type {
+  Artifact,
+  ArtifactPreview,
+  ModelSelection,
+  SessionSummary,
+  User,
+} from '../src/types/index.ts'
 
 export class HttpError extends Error {
   status: number
@@ -72,14 +78,13 @@ export class Store {
     // 验证集每题一个会话，不列入研究记录，从验证集页面打开
     if (!columns.some((column) => column.name === 'valset'))
       this.db.exec('ALTER TABLE sessions ADD COLUMN valset INTEGER NOT NULL DEFAULT 0;')
-    if (
-      !this.db
-        .prepare('PRAGMA table_info(artifacts)')
-        .all()
-        .some((column) => column.name === 'generated')
-    ) {
+    const fileColumns = this.db.prepare('PRAGMA table_info(artifacts)').all()
+    if (!fileColumns.some((column) => column.name === 'generated')) {
       this.db.exec('ALTER TABLE artifacts ADD COLUMN generated INTEGER NOT NULL DEFAULT 0;')
     }
+    // 生成文件的预览原文：docx、pptx 为 Markdown，xlsx 为 CSV；随文件行一起删除
+    if (!fileColumns.some((column) => column.name === 'preview'))
+      this.db.exec('ALTER TABLE artifacts ADD COLUMN preview TEXT;')
     if (this.db.prepare('PRAGMA user_version').get()?.user_version === 0) {
       // Early local builds marked unknown origins trusted; revoke that once without deleting files.
       this.db.exec('BEGIN; UPDATE artifacts SET generated=0; PRAGMA user_version=1; COMMIT;')
@@ -193,9 +198,13 @@ export class Store {
     this.session(userId, sessionId)
     return this.db
       .prepare(
-        'SELECT id, session_id AS sessionId, name, format, size FROM artifacts WHERE session_id=?',
+        'SELECT id, session_id AS sessionId, name, format, size, preview IS NOT NULL AS preview FROM artifacts WHERE session_id=?',
       )
-      .all(sessionId) as unknown as Artifact[]
+      .all(sessionId)
+      .map(({ preview, ...file }) => ({
+        ...(file as unknown as Artifact),
+        ...(preview === 1 && { preview: true }),
+      }))
   }
   artifact(userId: string, id: string): Artifact {
     const row = this.db
@@ -210,11 +219,17 @@ export class Store {
     this.artifact(userId, id)
     return this.db.prepare('SELECT generated FROM artifacts WHERE id=?').get(id)?.generated === 1
   }
-  addArtifact(userId: string, artifact: Artifact, generated = false) {
+  preview(userId: string, id: string): ArtifactPreview {
+    const { format } = this.artifact(userId, id)
+    const text = this.db.prepare('SELECT preview FROM artifacts WHERE id=?').get(id)?.preview
+    if (typeof text !== 'string') throw new HttpError(404, '该文件没有在线预览。')
+    return { kind: format === 'xlsx' ? 'csv' : 'markdown', text }
+  }
+  addArtifact(userId: string, artifact: Artifact, generated = false, preview?: string) {
     this.session(userId, artifact.sessionId)
     this.db
       .prepare(
-        'INSERT INTO artifacts(id, session_id, name, format, size, generated) VALUES(?, ?, ?, ?, ?, ?)',
+        'INSERT INTO artifacts(id, session_id, name, format, size, generated, preview) VALUES(?, ?, ?, ?, ?, ?, ?)',
       )
       .run(
         artifact.id,
@@ -223,6 +238,7 @@ export class Store {
         artifact.format,
         artifact.size,
         generated ? 1 : 0,
+        preview ?? null,
       )
   }
   /** Stored question images are never deleted; a user's total counts against the image quota. */

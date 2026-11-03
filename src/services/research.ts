@@ -1,6 +1,7 @@
 import { useSyncExternalStore } from 'react'
 import type {
   Artifact,
+  ArtifactPreview,
   ImageAttachment,
   ModelCatalog,
   ModelSelection,
@@ -315,3 +316,7 @@ export async function readArtifactText(file: Pick<Artifact, 'id'>, signal?: Abor
   if (!response.ok) throw new Error(`文件读取失败（${response.status}），请重试。`)
   return response.text().catch(offline(signal))
 }
+
+/** 读取系统生成的 Office 文件的预览原文；只对 preview 为真的文件调用。 */
+export const readArtifactPreview = (file: Pick<Artifact, 'id'>, signal?: AbortSignal) =>
+  request<ArtifactPreview>(`/files/${encodeURIComponent(file.id)}/preview`, { signal })

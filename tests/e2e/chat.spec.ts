@@ -124,9 +124,9 @@ test('真实文件工具、执行追踪和 Word 下载；其他用户不能访�
   const link = page.getByRole('link', { name: /研究报告.docx/ })
   await expect(link).toBeVisible()
   await page.getByRole('button', { name: '研究报告.docx' }).click()
-  await expect(page.getByRole('complementary', { name: '文件预览' })).toContainText(
-    'DOCX 文件暂不支持在线预览',
-  )
+  const preview = page.getByRole('complementary', { name: '文件预览' })
+  await expect(preview.getByRole('heading', { name: '研究报告' })).toBeVisible()
+  await expect(preview.getByText('自动化测试文档。')).toBeVisible()
   const downloadPromise = page.waitForEvent('download')
   await link.click()
   const download = await downloadPromise
@@ -153,10 +153,9 @@ test('真实文件工具、执行追踪和 Word 下载；其他用户不能访�
   const other = await browser.newContext()
   try {
     await other.addCookies([{ name: 'test_user', value: 'outsider', url: 'http://localhost:4173' }])
-    const response = await other.request.get(
-      'http://localhost:4173' + (await link.getAttribute('href')),
-    )
-    expect(response.status()).toBe(404)
+    const href = 'http://localhost:4173' + (await link.getAttribute('href'))
+    for (const url of [href, href + '/preview'])
+      expect((await other.request.get(url)).status()).toBe(404)
     const session = await other.request.get(page.url().replace('/workspace/', '/api/sessions/'))
     expect(session.status()).toBe(404)
   } finally {

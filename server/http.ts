@@ -241,7 +241,9 @@ export function createApp(
         if (request.method === 'GET') return json(response, 200, store.list(user.id))
         if (request.method === 'POST') return json(response, 201, store.create(user.id))
       }
-      const file = /^\/api\/files\/([0-9a-f-]{36})$/.exec(path)
+      const file = /^\/api\/files\/([0-9a-f-]{36})(\/preview)?$/.exec(path)
+      if (file?.[2] && request.method === 'GET')
+        return json(response, 200, store.preview(user.id, file[1]))
       if (file && request.method === 'GET') {
         const artifact = store.artifact(user.id, file[1])
         const handle = await open(agents.files.path(artifact.id), 'r')

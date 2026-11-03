@@ -24,6 +24,29 @@ it('Markdown 渲染为格式文本，CSV 渲染为表格', async () => {
   expect(screen.getByRole('cell', { name: '面板,多期' })).toBeInTheDocument()
 })
 
+it('系统生成的 Word 读取保留的 Markdown 渲染，Excel 读取保留的 CSV 渲染为表格', async () => {
+  const fetch = vi.fn().mockResolvedValue(
+    Response.json({
+      kind: 'markdown',
+      text: '# 研究报告\n\n见[原文](/api/library/passages/00000000-0000-4000-8000-000000000000)',
+    }),
+  )
+  vi.stubGlobal('fetch', fetch)
+  const { unmount } = render(<FilePreview file={{ ...file('docx'), preview: true }} />)
+  expect(await screen.findByRole('heading', { name: '研究报告' })).toBeInTheDocument()
+  expect(fetch.mock.calls[0][0]).toBe('/api/files/00000000-0000-4000-8000-000000000001/preview')
+  // 与 md 预览相同，生成文件里的原文片段路径按普通文字显示
+  expect(screen.getByText('原文').closest('a')).toBeNull()
+  unmount()
+  vi.stubGlobal(
+    'fetch',
+    vi.fn().mockResolvedValue(Response.json({ kind: 'csv', text: '"指标","数值"\r\n"快递","12"' })),
+  )
+  render(<FilePreview file={{ ...file('xlsx'), preview: true }} />)
+  expect(await screen.findByRole('columnheader', { name: '指标' })).toBeInTheDocument()
+  expect(screen.getByRole('cell', { name: '12' })).toBeInTheDocument()
+})
+
 it('CSV 空表头和空值行保留，不把第一条数据提升为表头', async () => {
   vi.stubGlobal(
     'fetch',
