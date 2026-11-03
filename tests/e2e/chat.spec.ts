@@ -121,9 +121,11 @@ test('真实文件工具、执行追踪和 Word 下载；其他用户不能访�
   await expect(reasoning).toHaveCount(2)
   for (const item of await reasoning.all()) await item.click()
   await expect(answer.getByText('测试适配器：检查请求内容。', { exact: true })).toHaveCount(2)
-  const link = page.getByRole('link', { name: /研究报告.docx/ })
+  // 文件卡片在生成它的那一轮回答里，末尾没有未归属的“会话文件”区块
+  const link = answer.getByRole('link', { name: /研究报告.docx/ })
   await expect(link).toBeVisible()
-  await page.getByRole('button', { name: '研究报告.docx' }).click()
+  await expect(page.getByRole('region', { name: '会话文件' })).toHaveCount(0)
+  await answer.getByRole('button', { name: '研究报告.docx' }).click()
   const preview = page.getByRole('complementary', { name: '文件预览' })
   await expect(preview.getByRole('heading', { name: '研究报告' })).toBeVisible()
   await expect(preview.getByText('自动化测试文档。')).toBeVisible()

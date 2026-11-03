@@ -1,7 +1,7 @@
 import { act, fireEvent, render, screen, within } from '@testing-library/react'
 import { expect, it, vi } from 'vitest'
 import { MessageList } from './message-list'
-import type { AssistantMessage } from '@/types'
+import type { Artifact, AssistantMessage } from '@/types'
 
 it('只对最后失败回答原位重试；忙时阻止重复触发，操作后焦点保留在回答', () => {
   const first: AssistantMessage = {
@@ -177,6 +177,67 @@ it('进行中每秒更新用时并保持展开；停止与失败写明状态与�
     expect(label).toHaveTextContent(text)
     expect(label.closest('details')).toHaveAttribute('open')
   }
+})
+
+it('文件显示在生成它的那一轮下，归不到任何一轮的放在末尾“会话文件”；点击卡片切换预览', () => {
+  const file = (id: string, name: string): Artifact => ({
+    id,
+    sessionId: 's',
+    name,
+    format: 'docx',
+    size: 2048,
+  })
+  const files = [file('a', '第一轮.docx'), file('b', '第二轮.docx'), file('c', '旧尝试.docx')]
+  const turn = (id: string, name: string, output: string): AssistantMessage => ({
+    ...answer,
+    id,
+    parts: [
+      answer.parts[0],
+      { id: `${id}-tool`, type: 'tool', name, input: '{}', output, status: 'done' },
+    ],
+  })
+  const messages = [
+    turn('turn-1', 'create_file', JSON.stringify(files[0])),
+    turn('turn-2', 'export_file', JSON.stringify(files[1])),
+    // 输出不是文件 JSON 时跳过，不影响其他轮
+    turn('turn-3', 'create_file', '文件名称或格式无效。'),
+  ]
+  const onPreview = vi.fn()
+  const { rerender } = render(
+    <MessageList
+      sessionId="s"
+      messages={messages}
+      busy={false}
+      onRetry={() => {}}
+      artifacts={files}
+      previewId="b"
+      onPreview={onPreview}
+    />,
+  )
+  const [first, second, third] = screen.getAllByRole('article')
+  expect(within(first).getAllByRole('listitem')).toHaveLength(1)
+  expect(within(second).getAllByRole('listitem')).toHaveLength(1)
+  expect(within(third).queryByRole('listitem')).toBeNull()
+  expect(within(second).getByRole('button', { name: '第二轮.docx' })).toHaveAttribute(
+    'aria-pressed',
+    'true',
+  )
+  expect(within(second).getByText('2 KB · 预览中')).toBeInTheDocument()
+  const rest = screen.getByRole('region', { name: '会话文件' })
+  expect(within(rest).getAllByRole('listitem')).toHaveLength(1)
+  expect(within(rest).getByRole('link', { name: '下载 旧尝试.docx' })).toBeInTheDocument()
+  fireEvent.click(within(first).getByRole('button', { name: '第一轮.docx' }))
+  expect(onPreview).toHaveBeenCalledExactlyOnceWith('a')
+  rerender(
+    <MessageList
+      sessionId="s"
+      messages={messages}
+      busy={false}
+      onRetry={() => {}}
+      artifacts={files.slice(0, 2)}
+    />,
+  )
+  expect(screen.queryByRole('region', { name: '会话文件' })).toBeNull()
 })
 
 it('离开底部时出现“回到底部”，点击滚到容器底部', () => {

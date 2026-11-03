@@ -1,10 +1,63 @@
-import { ArrowDownIcon, CheckIcon, CircleAlertIcon, CopyIcon, RotateCcwIcon } from 'lucide-react'
+import {
+  ArrowDownIcon,
+  CheckIcon,
+  CircleAlertIcon,
+  CopyIcon,
+  DownloadIcon,
+  PaperclipIcon,
+  RotateCcwIcon,
+} from 'lucide-react'
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { Button } from '@/components/ui/button'
-import { imageUrl } from '@/services/research'
-import type { AssistantMessage, Message } from '@/types'
+import { artifactUrl, imageUrl } from '@/services/research'
+import type { Artifact, AssistantMessage, Message } from '@/types'
 import { AnswerContent } from './execution-process'
+import { FormatBlock } from './file-preview'
 import { splitAnswer } from './tool-display'
+
+/** 成功时输出所生成文件 JSON 的工具，据此把文件归到生成它的那一轮 */
+const FILE_TOOLS = new Set(['create_file', 'export_file'])
+
+type Preview = { previewId?: string | null; onPreview?: (id: string) => void }
+
+/** 文件卡片：朱红格式块 + 文件名，整卡可点开预览，与正文明显区分 */
+function FileCards({ files, previewId, onPreview }: { files: Artifact[] } & Preview) {
+  return (
+    <ul className="grid grid-cols-[repeat(auto-fill,minmax(16rem,1fr))] gap-3">
+      {files.map((file) => (
+        <li
+          key={file.id}
+          className={`relative flex min-w-0 items-center gap-3 rounded-xl border p-3 transition-colors has-[button:focus-visible]:ring-2 has-[button:focus-visible]:ring-ring ${previewId === file.id ? 'border-brand bg-accent' : 'border-card-border bg-card hover:border-border-hover hover:bg-surface-hover'}`}
+        >
+          <FormatBlock format={file.format} />
+          <div className="min-w-0 flex-1">
+            <button
+              type="button"
+              id={`artifact-${file.id}`}
+              aria-pressed={previewId === file.id}
+              onClick={() => onPreview?.(file.id)}
+              className="block max-w-full truncate rounded-sm text-left text-ui-base font-medium outline-none after:absolute after:inset-0 after:rounded-xl"
+            >
+              {file.name}
+            </button>
+            <p className="text-ui-sm text-foreground-subtlest">
+              {Math.ceil(file.size / 1024)} KB
+              {previewId === file.id && ' · 预览中'}
+            </p>
+          </div>
+          <a
+            href={artifactUrl(file)}
+            aria-label={`下载 ${file.name}`}
+            title="下载"
+            className="relative z-10 flex size-8 shrink-0 items-center justify-center rounded-md text-foreground-subtle outline-none transition-colors hover:bg-hover hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            <DownloadIcon className="size-4" />
+          </a>
+        </li>
+      ))}
+    </ul>
+  )
+}
 
 /** 复制最终回答的 Markdown 原文；剪贴板只在 HTTPS 或本机可用，失败时明确提示。 */
 function CopyAnswer({ text }: { text: string }) {
@@ -50,19 +103,35 @@ export function MessageList({
   messages,
   busy,
   onRetry,
-  children,
+  artifacts = [],
+  previewId,
+  onPreview,
 }: {
   sessionId: string
   messages: Message[]
   busy: boolean
   onRetry: (message: AssistantMessage) => void
-  /** 列表之后的内容（会话文件），与消息同在一个容器里，“回到底部”在整段内容中都保持吸底 */
-  children?: ReactNode
-}) {
+  /** 会话文件：显示在生成它的那一轮回答下，归不到任何一轮的放在列表末尾 */
+  artifacts?: Artifact[]
+} & Preview) {
   const end = useRef<HTMLDivElement>(null)
   const follow = useRef(true)
   const [away, setAway] = useState(false)
-  // 会话文件卡片排在列表之后、同一滚动容器内，所以滚到容器底部而不是列表末尾。
+  // 文件 id 对应生成它的回答；重新生成前旧尝试留下的文件、解析不出 id 的输出都不归属任何一轮
+  const owner = new Map<string, string>()
+  for (const message of messages)
+    if (message.role === 'assistant')
+      for (const part of message.parts)
+        if (part.type === 'tool' && FILE_TOOLS.has(part.name) && part.status === 'done')
+          try {
+            owner.set(JSON.parse(part.output).id, message.id)
+          } catch {
+            // 输出不是文件 JSON，跳过
+          }
+  const cards = (files: Artifact[]) =>
+    files.length > 0 && <FileCards files={files} previewId={previewId} onPreview={onPreview} />
+  const unclaimed = artifacts.filter((file) => !owner.has(file.id))
+  // 未归属的文件卡片排在列表之后、同一滚动容器内，所以滚到容器底部而不是列表末尾。
   const scrollToBottom = () => {
     const scroller = end.current?.closest('[data-message-scroll]')
     scroller?.scrollTo({ top: scroller.scrollHeight })
@@ -126,12 +195,24 @@ export function MessageList({
                 busy={busy}
                 onRetry={onRetry}
                 latest={message === messages.at(-1)}
+                files={cards(artifacts.filter((file) => owner.get(file.id) === message.id))}
               />
             </li>
           ),
         )}
       </ol>
-      {children}
+      {unclaimed.length > 0 && (
+        <section aria-label="会话文件" className="mt-10">
+          <h2 className="mb-3 flex items-center gap-2 font-serif text-ui-base font-semibold">
+            <PaperclipIcon className="size-4 text-foreground-subtlest" aria-hidden />
+            会话文件
+            <span className="font-sans text-ui-sm font-normal text-foreground-subtlest">
+              {unclaimed.length} 个
+            </span>
+          </h2>
+          {cards(unclaimed)}
+        </section>
+      )}
       <div ref={end} tabIndex={-1} className="outline-none" />
       {away && (
         <div className="pointer-events-none sticky bottom-3 flex justify-center">
@@ -160,11 +241,14 @@ function AnswerArticle({
   busy,
   onRetry,
   latest,
+  files,
 }: {
   message: AssistantMessage
   busy: boolean
   latest: boolean
   onRetry: (message: AssistantMessage) => void
+  /** 本轮生成的文件卡片，排在回答正文之后 */
+  files: ReactNode
 }) {
   // 只去掉开头空行与末尾空白，保留开头缩进（如缩进代码块），复制出的 Markdown 含义不变
   const joined = splitAnswer(message)
@@ -175,6 +259,7 @@ function AnswerArticle({
   return (
     <article aria-label="回答" tabIndex={-1} className="flex min-w-0 flex-col gap-2 outline-none">
       <AnswerContent message={message} />
+      {files}
       {message.status === 'stopped' && (
         <p role="status" className="text-ui-caption text-foreground-subtle">
           {message.error ?? '已停止'}
