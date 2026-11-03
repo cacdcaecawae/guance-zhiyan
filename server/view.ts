@@ -271,6 +271,11 @@ const contentChars = (text: string) =>
     .toLowerCase() ?? ''
 const grams = (text: string) =>
   Array.from({ length: Math.max(0, text.length - 7) }, (_, i) => text.slice(i, i + 8))
+/** A line of citations alone, such as "> [planid 38366·原文](…)": it cites the excerpt above it. */
+const citationOnly = (line: string) =>
+  CITED.test(line) && !contentChars(line.replace(/\[[^\]]*\]\([^)]*\)/g, ''))
+/** A blank line, in or out of a quote ("", ">"). */
+const blank = (line: string) => !line.replace(/^[\s>]*/, '')
 /** Full-width digits and decimal point as half-width; one character each, so lengths match. */
 const halfWidth = (text: string) =>
   text.replace(/[０-９．]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xfee0))
@@ -342,13 +347,29 @@ function sourcedPart(sentence: string, facts: Facts) {
  * rejected as information outside the passages: replayed, 55.0% to 56.2% on the 506-document sample
  * (CI +0.2 to +2.2), unchanged on the full library, no category worse. Questions asking for
  * comparison or analysis (a government work report alone does not count), and answers with fewer
- * than two cited lines (refusals, clarifying questions), are left whole. Returns each line as kept
- * (possibly shortened) or undefined when dropped.
+ * than two cited lines (refusals, clarifying questions), are left whole. A line of citations alone
+ * goes with the excerpt above it, dropped when all of that excerpt is, and a heading loses only its
+ * unsourced notes and counts: replayed from the session events of three rounds on the 506-document
+ * sample, 37 citations left without their excerpt (16 of 450 answers) went to none, pass rate
+ * unchanged (58.2%, 37 answers changed, no category changed). Keeping the excerpt with its
+ * citation instead scored the same but showed non-verbatim quotes as cited excerpts. Returns each
+ * line as kept (possibly shortened) or undefined when dropped.
  * ponytail: keyword rules; an analysis question without these words is trimmed like a factual one.
  */
 function trimAnswer(lines: string[], question: string, facts: Facts) {
   const cited = lines.map((line) => CITED.test(line))
   if (ASKS_ANALYSIS.test(question) || cited.filter(Boolean).length < 2) return lines
+  // The excerpt a citation-only line cites: the lines above it up to a blank line, a heading or
+  // another citation, past the blank and citation-only lines between them.
+  const excerpts = lines.map((line, index) => {
+    if (!citationOnly(line)) return []
+    let n = index - 1
+    while (n >= 0 && (blank(lines[n]) || citationOnly(lines[n]))) n--
+    const excerpt: number[] = []
+    for (; n >= 0 && !blank(lines[n]) && !cited[n] && !HEADING.test(lines[n].trim()); n--)
+      excerpt.push(n)
+    return excerpt
+  })
   const kept: (string | undefined)[] = lines.map(() => undefined)
   // Table rows, as Markdown reads them: a header line that is not a heading, a separator row
   // ("|---|", "--- | ---"), then the lines with a pipe up to a heading. Each table is found on its
@@ -419,10 +440,29 @@ function trimAnswer(lines: string[], question: string, facts: Facts) {
     const head = sourcedPart(label, facts)
     if (head === label && rest === sentences.join('')) continue
     const shown = prefix + head + rest
+    // A heading is structure: instead of the line it loses an unsourced note ("（六大方向）",
+    // "（2011—2015）") or count, and keeps a bare number.
+    // An ordinal ("第一部分") is the heading's own numbering and stays; a heading left with no
+    // content goes.
+    if (!rest.trim() && !ABSENT.test(head)) {
+      const heading = HEADING.test(line.trim())
+        ? prefix +
+          body
+            .replace(/[（(][^（）()]*[）)]/g, (note) => (unsourced(note, facts) ? '' : note))
+            .replace(COUNT, (count, at: number, text: string) =>
+              text[at - 1] === '第' || facts.counts.has(count) ? count : '',
+            )
+        : ''
+      kept[index] = contentChars(heading) ? heading : undefined
+    }
     // Bold a dropped sentence opened or closed is removed rather than shown as a stray "**".
-    if (!rest.trim() && !ABSENT.test(head)) kept[index] = undefined
     else kept[index] = (shown.match(/\*\*/g)?.length ?? 0) % 2 ? shown.replaceAll('**', '') : shown
   }
+  // A citation-only line goes, with the blank lines before it, when all of its excerpt went, so no
+  // citation is shown without the text it cites.
+  for (const [index, excerpt] of excerpts.entries())
+    if (excerpt.length && excerpt.every((n) => kept[n] === undefined))
+      for (let n = excerpt[0] + 1; n <= index; n++) kept[n] = undefined
   return kept
 }
 
