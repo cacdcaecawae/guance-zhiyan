@@ -34,7 +34,10 @@ export function ModelPicker({
       }}
     >
       {/* 可访问名称包含屏幕上显示的文字，语音控制可按所见名称点中 */}
-      <SelectTrigger aria-label={`模型：${label}`} className="text-foreground-subtlest">
+      <SelectTrigger
+        aria-label={`模型：${label}`}
+        className="rounded-full px-2.5 text-foreground-subtlest"
+      >
         <SelectValue>
           <span className="truncate">{label}</span>
         </SelectValue>

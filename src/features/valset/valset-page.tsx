@@ -359,7 +359,7 @@ function JobView({ id, onDeleted }: { id: string; onDeleted: () => void }) {
               event.preventDefault()
               onDeleted()
             }}
-            className="fixed top-1/2 left-1/2 z-50 flex w-[calc(100vw-2rem)] max-w-sm -translate-x-1/2 -translate-y-1/2 flex-col gap-3 rounded-xl border border-popover-border bg-popover p-5 shadow-md"
+            className="fixed top-1/2 left-1/2 z-50 flex w-[calc(100vw-2rem)] max-w-sm -translate-x-1/2 -translate-y-1/2 flex-col gap-3 rounded-2xl border border-popover-border bg-popover p-6 shadow-md"
           >
             <DialogPrimitive.Title className="text-ui-base font-semibold">
               删除验证集任务？
@@ -374,11 +374,9 @@ function JobView({ id, onDeleted }: { id: string; onDeleted: () => void }) {
             )}
             <div className="flex justify-end gap-2 pt-1">
               <DialogPrimitive.Close asChild>
-                <Button variant="outline" className="rounded-md">
-                  取消
-                </Button>
+                <Button variant="outline">取消</Button>
               </DialogPrimitive.Close>
-              <Button className="rounded-md" aria-disabled={deleting || undefined} onClick={remove}>
+              <Button aria-disabled={deleting || undefined} onClick={remove}>
                 {deleting ? '删除中…' : '删除'}
               </Button>
             </div>

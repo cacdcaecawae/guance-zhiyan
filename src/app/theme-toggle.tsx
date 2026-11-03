@@ -1,4 +1,5 @@
 import { MonitorIcon, MoonIcon, SunIcon } from 'lucide-react'
+import { Tooltip } from '@/components/ui/tooltip'
 import { cn } from '@/lib/cn'
 import { useTheme, type Theme } from './theme'
 
@@ -17,20 +18,20 @@ export function ThemeToggle() {
       className="inline-flex gap-0.5 rounded-lg border border-border bg-surface p-0.5"
     >
       {OPTIONS.map(({ value, label, Icon }) => (
-        <button
-          key={value}
-          type="button"
-          aria-label={label}
-          title={label}
-          aria-pressed={theme === value}
-          onClick={() => setTheme(value)}
-          className={cn(
-            'inline-flex size-7 items-center justify-center rounded-md text-foreground-subtle outline-none transition-colors hover:bg-hover hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring',
-            theme === value && 'bg-selected text-foreground',
-          )}
-        >
-          <Icon className="size-4" />
-        </button>
+        <Tooltip key={value} label={label}>
+          <button
+            type="button"
+            aria-label={label}
+            aria-pressed={theme === value}
+            onClick={() => setTheme(value)}
+            className={cn(
+              'inline-flex size-7 items-center justify-center rounded-md text-foreground-subtle outline-none transition-colors hover:bg-hover hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring',
+              theme === value && 'bg-selected text-foreground',
+            )}
+          >
+            <Icon className="size-4" />
+          </button>
+        </Tooltip>
       ))}
     </div>
   )

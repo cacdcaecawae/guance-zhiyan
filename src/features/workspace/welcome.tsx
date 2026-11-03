@@ -28,7 +28,7 @@ export function Welcome({ onPick }: WelcomeProps) {
             <button
               type="button"
               onClick={() => onPick(q)}
-              className="w-full rounded-md border border-card-border bg-card px-3 py-1.5 text-left text-ui-caption sm:w-auto sm:text-center text-foreground-subtle outline-none transition-colors hover:border-brand/40 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+              className="w-full rounded-xl border border-card-border bg-card px-3.5 py-2 text-left text-ui-caption sm:w-auto sm:rounded-full sm:py-1.5 sm:text-center text-foreground-subtle outline-none transition-colors hover:border-brand/40 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
             >
               {q}
             </button>

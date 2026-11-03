@@ -11,6 +11,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
+import { Tooltip } from '@/components/ui/tooltip'
 import { cn } from '@/lib/cn'
 import { deleteSession, updateSession, useResearch } from '@/services/research'
 import type { SessionSummary } from '@/types'
@@ -134,7 +135,7 @@ export function SessionList({ onNavigate }: { onNavigate?: () => void }) {
                   ?.querySelector<HTMLElement>('a[href="/workspace"]')
                   ?.focus()
             }}
-            className="fixed top-1/2 left-1/2 z-50 flex w-[calc(100vw-2rem)] max-w-sm -translate-x-1/2 -translate-y-1/2 flex-col gap-3 rounded-xl border border-popover-border bg-popover p-5 shadow-md"
+            className="fixed top-1/2 left-1/2 z-50 flex w-[calc(100vw-2rem)] max-w-sm -translate-x-1/2 -translate-y-1/2 flex-col gap-3 rounded-2xl border border-popover-border bg-popover p-6 shadow-md"
           >
             <DialogPrimitive.Title className="text-ui-base font-semibold">
               删除研究记录？
@@ -149,11 +150,9 @@ export function SessionList({ onNavigate }: { onNavigate?: () => void }) {
             )}
             <div className="flex justify-end gap-2 pt-1">
               <DialogPrimitive.Close asChild>
-                <Button variant="outline" className="rounded-md">
-                  取消
-                </Button>
+                <Button variant="outline">取消</Button>
               </DialogPrimitive.Close>
-              <Button className="rounded-md" aria-disabled={deleting} onClick={remove}>
+              <Button aria-disabled={deleting} onClick={remove}>
                 {deleting ? '删除中…' : '删除'}
               </Button>
             </div>
@@ -198,7 +197,7 @@ function SessionItem({
           to={`/workspace/${session.id}`}
           className={({ isActive }) =>
             cn(
-              'flex h-8 min-w-0 items-center gap-2 rounded-md pr-8 pl-2 text-ui-base outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring',
+              'flex h-8 min-w-0 items-center gap-2 rounded-lg pr-8 pl-2 text-ui-base outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring',
               isActive
                 ? 'bg-selected font-medium text-foreground'
                 : 'text-foreground-subtle group-hover:bg-hover',
@@ -233,13 +232,15 @@ function SessionItem({
       )}
       {!editing && (
         <DropdownMenu>
-          <DropdownMenuTrigger
-            data-actions={session.id}
-            aria-label="更多操作"
-            className="absolute top-1 right-1 inline-flex size-6 items-center justify-center rounded-md text-foreground-subtle outline-none transition-colors hover:bg-hover hover:text-foreground focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring data-[state=open]:bg-hover data-[state=open]:opacity-100 pointer-fine:opacity-0 pointer-fine:group-hover:opacity-100"
-          >
-            <EllipsisIcon className="size-4" />
-          </DropdownMenuTrigger>
+          <Tooltip label="更多操作">
+            <DropdownMenuTrigger
+              data-actions={session.id}
+              aria-label="更多操作"
+              className="absolute top-1 right-1 inline-flex size-6 items-center justify-center rounded-md text-foreground-subtle outline-none transition-colors hover:bg-hover hover:text-foreground focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring aria-expanded:bg-hover aria-expanded:opacity-100 pointer-fine:opacity-0 pointer-fine:group-hover:opacity-100"
+            >
+              <EllipsisIcon className="size-4" />
+            </DropdownMenuTrigger>
+          </Tooltip>
           <DropdownMenuContent
             align="start"
             onCloseAutoFocus={(e) => {

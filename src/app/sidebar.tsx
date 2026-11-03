@@ -2,6 +2,7 @@ import { BookOpenIcon, ClipboardCheckIcon, FileTextIcon, LogOutIcon, PlusIcon } 
 import { useState } from 'react'
 import { Link, NavLink, useNavigate } from 'react-router'
 import { Button } from '@/components/ui/button'
+import { Tooltip } from '@/components/ui/tooltip'
 import { cn } from '@/lib/cn'
 import { logout, useResearch } from '@/services/research'
 import { SlipsMark, Wordmark } from './logo'
@@ -16,7 +17,7 @@ const NAV = [
 
 const linkClass = ({ isActive }: { isActive: boolean }) =>
   cn(
-    'flex h-8 min-w-0 items-center gap-2 rounded-md px-2 text-ui-base outline-none transition-colors hover:bg-hover focus-visible:ring-2 focus-visible:ring-ring',
+    'flex h-8 min-w-0 items-center gap-2 rounded-lg px-2 text-ui-base outline-none transition-colors hover:bg-hover focus-visible:ring-2 focus-visible:ring-ring',
     isActive ? 'bg-selected font-medium text-foreground' : 'text-foreground-subtle',
   )
 
@@ -86,16 +87,17 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
         </span>
         <div className="flex shrink-0 items-center gap-1">
           {user?.login && (
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              aria-label="退出登录"
-              title="退出登录"
-              aria-disabled={leaving}
-              onClick={() => void signOut()}
-            >
-              <LogOutIcon />
-            </Button>
+            <Tooltip label="退出登录">
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                aria-label="退出登录"
+                aria-disabled={leaving}
+                onClick={() => void signOut()}
+              >
+                <LogOutIcon />
+              </Button>
+            </Tooltip>
           )}
           <ThemeToggle />
         </div>

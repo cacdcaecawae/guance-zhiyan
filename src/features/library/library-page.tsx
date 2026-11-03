@@ -81,7 +81,7 @@ export function LibraryPage() {
               {MODES.map((item) => (
                 <label
                   key={item.id}
-                  className="flex h-7 cursor-pointer items-center rounded-lg px-2 text-ui-sm text-foreground-subtle transition-colors hover:bg-hover hover:text-foreground has-checked:bg-accent has-checked:font-medium has-checked:text-foreground has-focus-visible:ring-2 has-focus-visible:ring-ring"
+                  className="flex h-7 cursor-pointer items-center rounded-lg px-2 text-ui-sm text-foreground-subtle transition-colors hover:bg-hover hover:text-foreground has-checked:bg-selected has-checked:font-medium has-checked:text-foreground has-focus-visible:ring-2 has-focus-visible:ring-ring"
                 >
                   <input
                     type="radio"

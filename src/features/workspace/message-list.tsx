@@ -9,6 +9,7 @@ import {
 } from 'lucide-react'
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { Button } from '@/components/ui/button'
+import { Tooltip } from '@/components/ui/tooltip'
 import { artifactUrl, imageUrl } from '@/services/research'
 import type { Artifact, AssistantMessage, Message } from '@/types'
 import { AnswerContent } from './execution-process'
@@ -45,14 +46,15 @@ function FileCards({ files, previewId, onPreview }: { files: Artifact[] } & Prev
               {previewId === file.id && ' · 预览中'}
             </p>
           </div>
-          <a
-            href={artifactUrl(file)}
-            aria-label={`下载 ${file.name}`}
-            title="下载"
-            className="relative z-10 flex size-8 shrink-0 items-center justify-center rounded-md text-foreground-subtle outline-none transition-colors hover:bg-hover hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
-          >
-            <DownloadIcon className="size-4" />
-          </a>
+          <Tooltip label="下载">
+            <a
+              href={artifactUrl(file)}
+              aria-label={`下载 ${file.name}`}
+              className="relative z-10 flex size-8 shrink-0 items-center justify-center rounded-lg text-foreground-subtle outline-none transition-colors hover:bg-hover hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              <DownloadIcon className="size-4" />
+            </a>
+          </Tooltip>
         </li>
       ))}
     </ul>
@@ -78,16 +80,17 @@ function CopyAnswer({ text }: { text: string }) {
   }
   return (
     <>
-      <Button
-        variant="ghost"
-        size="icon-sm"
-        aria-label="复制回答"
-        title="复制回答"
-        onClick={copy}
-        className="rounded-md"
-      >
-        {state === 'copied' ? <CheckIcon /> : <CopyIcon />}
-      </Button>
+      <Tooltip label="复制回答">
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          aria-label="复制回答"
+          onClick={copy}
+          className="text-foreground-subtlest"
+        >
+          {state === 'copied' ? <CheckIcon /> : <CopyIcon />}
+        </Button>
+      </Tooltip>
       <span
         aria-live="polite"
         className={`text-ui-sm ${state === 'failed' ? 'text-destructive' : 'text-foreground-subtlest'}`}
@@ -160,23 +163,24 @@ export function MessageList({
                 <ul aria-label="问题附图" className="flex max-w-[85%] flex-wrap justify-end gap-2">
                   {message.images.map((image, index) => (
                     <li key={index}>
-                      <a
-                        href={imageUrl(sessionId, image)}
-                        target="_blank"
-                        rel="noreferrer"
-                        title="在新标签页查看原图"
-                        className="block rounded-xl outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                      >
-                        {/* 宽高属性先占位，图片加载后列表高度不跳；过窄的长图（如手机长截图）至少 96px 宽，裁切显示顶部 */}
-                        <img
-                          src={imageUrl(sessionId, image)}
-                          alt={image.name || '图片'}
-                          width={image.width}
-                          height={image.height}
-                          loading="lazy"
-                          className="h-40 w-auto max-w-full min-w-24 rounded-xl border border-card-border bg-card object-cover object-top"
-                        />
-                      </a>
+                      <Tooltip label="在新标签页查看原图">
+                        <a
+                          href={imageUrl(sessionId, image)}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="block rounded-xl outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                        >
+                          {/* 宽高属性先占位，图片加载后列表高度不跳；过窄的长图（如手机长截图）至少 96px 宽，裁切显示顶部 */}
+                          <img
+                            src={imageUrl(sessionId, image)}
+                            alt={image.name || '图片'}
+                            width={image.width}
+                            height={image.height}
+                            loading="lazy"
+                            className="h-40 w-auto max-w-full min-w-24 rounded-xl border border-card-border bg-card object-cover object-top"
+                          />
+                        </a>
+                      </Tooltip>
                     </li>
                   ))}
                 </ul>
@@ -220,20 +224,21 @@ export function MessageList({
       <div ref={end} tabIndex={-1} className="outline-none" />
       {away && (
         <div className="pointer-events-none sticky bottom-3 flex justify-center">
-          <Button
-            variant="outline"
-            size="icon"
-            aria-label="回到底部"
-            title="回到底部"
-            className="pointer-events-auto rounded-full bg-popover shadow-md"
-            onClick={() => {
-              scrollToBottom()
-              // 按钮随即消失，焦点移到列表末尾，而不是掉回页面开头
-              end.current?.focus({ preventScroll: true })
-            }}
-          >
-            <ArrowDownIcon />
-          </Button>
+          <Tooltip label="回到底部">
+            <Button
+              variant="outline"
+              size="icon"
+              aria-label="回到底部"
+              className="pointer-events-auto rounded-full border-popover-border bg-popover shadow-md"
+              onClick={() => {
+                scrollToBottom()
+                // 按钮随即消失，焦点移到列表末尾，而不是掉回页面开头
+                end.current?.focus({ preventScroll: true })
+              }}
+            >
+              <ArrowDownIcon />
+            </Button>
+          </Tooltip>
         </div>
       )}
     </div>
@@ -294,7 +299,7 @@ function AnswerArticle({
                 event.currentTarget.closest('article')?.focus({ preventScroll: true })
                 onRetry(message)
               }}
-              className="ml-1 rounded-md text-foreground first:ml-1.5"
+              className="ml-1 text-foreground first:ml-1.5"
             >
               <RotateCcwIcon className="size-3.5" />
               重新生成

@@ -59,7 +59,7 @@ export function Trajectory({ entries }: { entries: TraceEntry[] }) {
               type="button"
               aria-pressed={action ? undefined : value}
               onClick={() => set(!value)}
-              className={`flex h-7 items-center gap-1 rounded-md px-2.5 text-ui-caption outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring ${value && !action ? 'bg-selected font-medium text-foreground' : 'text-foreground-subtle hover:bg-hover hover:text-foreground'}`}
+              className={`flex h-7 items-center gap-1 rounded-lg px-2.5 text-ui-caption outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring ${value && !action ? 'bg-selected font-medium text-foreground' : 'text-foreground-subtle hover:bg-hover hover:text-foreground'}`}
             >
               <Icon className="size-3.5" aria-hidden />
               {label}

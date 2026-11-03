@@ -4,6 +4,7 @@ import { Outlet } from 'react-router'
 import { Button } from '@/components/ui/button'
 import { ResizeHandle } from '@/components/ui/resize-handle'
 import { Sheet, SheetContent } from '@/components/ui/sheet'
+import { Tooltip } from '@/components/ui/tooltip'
 import { readPref, writePref } from '@/lib/storage'
 import { useMediaQuery } from '@/lib/use-media-query'
 import { Sidebar } from './sidebar'
@@ -84,15 +85,17 @@ export function TopBar({ title, children }: { title: string; children?: ReactNod
   }, [title])
   return (
     <header className="flex h-12 shrink-0 items-center gap-2 border-b border-border px-3">
-      <Button
-        variant="ghost"
-        size="icon"
-        aria-label="切换侧栏"
-        aria-expanded={expanded}
-        onClick={toggle}
-      >
-        <PanelLeftIcon />
-      </Button>
+      <Tooltip label="切换侧栏">
+        <Button
+          variant="ghost"
+          size="icon"
+          aria-label="切换侧栏"
+          aria-expanded={expanded}
+          onClick={toggle}
+        >
+          <PanelLeftIcon />
+        </Button>
+      </Tooltip>
       <h1
         className="min-w-0 flex-1 truncate font-serif text-ui-lg font-bold tracking-wide"
         title={title}

@@ -133,6 +133,10 @@
   --color-glint: var(--glint);
   --color-ring: var(--brand);
 
+  /* 提问框外壳的柔和投影，聚焦时略加深；深色下主要靠边框分层 */
+  --shadow-soft: 0 1px 2px rgb(0 0 0 / 0.04), 0 4px 16px -6px rgb(0 0 0 / 0.08);
+  --shadow-soft-focus: 0 1px 2px rgb(0 0 0 / 0.05), 0 6px 22px -6px rgb(0 0 0 / 0.14);
+
   /* 字体：系统无衬线栈，兼容中文 */
   --font-sans:
     system-ui, -apple-system, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei',

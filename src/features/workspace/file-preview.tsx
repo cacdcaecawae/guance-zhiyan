@@ -160,7 +160,7 @@ export const FilePreview = memo(function FilePreview({
         <span className="min-w-0 flex-1 truncate text-ui-caption font-medium" title={file.name}>
           {file.name}
         </span>
-        <Button asChild variant="outline" size="sm" className="rounded-md">
+        <Button asChild variant="outline" size="sm">
           <a href={artifactUrl(file)}>下载</a>
         </Button>
         {onClose && (

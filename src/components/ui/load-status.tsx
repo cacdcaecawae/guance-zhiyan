@@ -1,4 +1,4 @@
-import { Loader2Icon } from 'lucide-react'
+import { CircleAlertIcon, Loader2Icon } from 'lucide-react'
 import { Button } from './button'
 
 /** 读取中与读取失败的统一显示；失败写明原因并提供重试。 */
@@ -20,7 +20,8 @@ export function LoadStatus({
     )
   return (
     <div className="flex flex-col items-start gap-2">
-      <p role="alert" className="text-ui-caption text-destructive">
+      <p role="alert" className="flex items-start gap-1.5 text-ui-caption text-destructive">
+        <CircleAlertIcon className="mt-0.5 size-3.5 shrink-0" aria-hidden />
         {error}
       </p>
       <Button variant="outline" size="sm" onClick={onRetry}>
