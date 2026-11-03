@@ -521,6 +521,44 @@ test('Markdown that would stall or overflow the parser is rejected quickly with 
   }
 })
 
+test('Markdown with too many lines is rejected quickly instead of exhausting time and memory', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'gczy-markdown-lines-test-'))
+  const store = new Store(root)
+  try {
+    const files = new Artifacts(store)
+    const user = store.user('test:office-text', 'Test')
+    const session = store.create(user.id)
+    const inputs = [
+      'a\n'.repeat(100000),
+      'a  \n'.repeat(50000),
+      'a\\\n'.repeat(66000),
+      'a\r'.repeat(100000),
+      '- 项\n'.repeat(33000),
+      '## 节\n'.repeat(28000),
+    ]
+    for (const [format, code] of [
+      ['docx', 'FILE_INVALID_DOCX_CONTENT'],
+      ['pptx', 'FILE_INVALID_PPTX_CONTENT'],
+      ['xlsx', 'FILE_INVALID_TABLE'],
+      ['csv', 'FILE_INVALID_TABLE'],
+    ] as const)
+      for (const content of inputs) {
+        const start = performance.now()
+        await assert.rejects(files.create(user.id, session.id, '报告', format, content), { code })
+        assert.ok(
+          performance.now() - start < 2000,
+          `${format} ${JSON.stringify(content.slice(0, 6))}`,
+        )
+      }
+    assert.equal(store.artifacts(user.id, session.id).length, 0)
+    // 5000 行以内照常生成
+    await files.create(user.id, session.id, '报告', 'docx', '- 项\n'.repeat(4999))
+  } finally {
+    store.close()
+    await rm(root, { recursive: true })
+  }
+})
+
 test('setext underlines do not turn body lines into headings', async () => {
   const root = await mkdtemp(join(tmpdir(), 'gczy-setext-test-'))
   const store = new Store(root)

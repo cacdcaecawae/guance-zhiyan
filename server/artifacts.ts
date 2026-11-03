@@ -173,11 +173,14 @@ const MAX_ROWS = 2000
 const MAX_COLUMNS = 50
 /**
  * 解析前的守卫。remark 处理强调符号（* _ ~）与方括号（链接）是二次方的，20 万字节的病态输入能卡住事件循环数分钟；
+ * 行数极多时（每行一字、硬换行、列表项、标题）解析与生成要十几秒、数百 MB 内存；
  * 一行开头的引用、列表标记或缩进嵌套过深会爆栈或拖到秒级。
- * ponytail: 上限取评测中 8 份真实报告最大值（124 个强调符号、36 个原文链接、嵌套 1 层、缩进 2 格）按 200 KB 篇幅放大后
- * 再留数倍余量；在上限内最坏的输入本机约 0.4 秒解析完。要放宽就把解析挪到子进程或换线性解析器。
+ * ponytail: 上限取评测中 8 份真实报告最大值（124 个强调符号、36 个原文链接、嵌套 1 层、缩进 2 格；
+ * 最密的每行 52 字节，按 200 KB 篇幅约 3850 行）放大后再留余量，2000 行的表格也在其内；
+ * 在上限内最坏的输入本机约 0.5 秒。要放宽就把解析挪到子进程或换线性解析器。
  */
 const tooComplex = (content: string) =>
+  (content.match(/\r\n?|\n/g)?.length ?? 0) >= 5000 ||
   (content.match(/[*_]/g)?.length ?? 0) > 6000 ||
   (content.match(/~/g)?.length ?? 0) > 2000 ||
   (content.match(/\[/g)?.length ?? 0) > 3000 ||
@@ -283,7 +286,10 @@ function flatten(content: string, code: string) {
     }
   }
   const fail = () =>
-    new HarnessError('正文的强调符号、链接或嵌套层级过多，无法排版，请精简格式后重试。', code)
+    new HarnessError(
+      '正文超过 5000 行，或强调符号、链接、嵌套层级过多，无法排版，请精简后重试。',
+      code,
+    )
   if (tooComplex(content)) throw fail()
   try {
     // 解析器在文字中保留原样的换行符，统一成 \n 再按行拆分。
