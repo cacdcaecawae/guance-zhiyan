@@ -10,7 +10,9 @@ const buttonVariants = cva(
   {
     variants: {
       variant: {
-        default: 'bg-primary text-primary-foreground hover:bg-primary/90',
+        // 禁用的主按钮换成 bg-tag 而不是半透明藏青（同发送按钮），一眼看出不可用
+        default:
+          'bg-primary text-primary-foreground hover:bg-primary/90 disabled:bg-tag disabled:text-foreground-subtlest disabled:opacity-100',
         outline: 'border border-border bg-surface hover:border-border-hover hover:bg-hover',
         ghost: 'text-foreground-subtle hover:bg-hover hover:text-foreground',
       },

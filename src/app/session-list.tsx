@@ -1,5 +1,13 @@
 import * as DialogPrimitive from '@radix-ui/react-dialog'
-import { CircleIcon, EllipsisIcon, PencilIcon, PinIcon, PinOffIcon, Trash2Icon } from 'lucide-react'
+import {
+  CircleAlertIcon,
+  CircleIcon,
+  EllipsisIcon,
+  PencilIcon,
+  PinIcon,
+  PinOffIcon,
+  Trash2Icon,
+} from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { flushSync } from 'react-dom'
 import { NavLink, useMatch, useNavigate } from 'react-router'
@@ -90,7 +98,8 @@ export function SessionList({ onNavigate }: { onNavigate?: () => void }) {
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-1">
       {error && (
-        <p role="alert" className="px-2 text-ui-caption text-destructive">
+        <p role="alert" className="flex items-start gap-1.5 px-2 text-ui-caption text-destructive">
+          <CircleAlertIcon className="mt-0.5 size-3.5 shrink-0" aria-hidden />
           {error}
         </p>
       )}
@@ -315,7 +324,7 @@ function RenameInput({
         }
       }}
       onBlur={(e) => settle(e.currentTarget.value, false)}
-      className="h-8 w-full min-w-0 rounded-md border border-input-border-focused bg-input px-2 text-ui-base text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      className="h-8 w-full min-w-0 rounded-lg border border-input-border-focused bg-input px-2 text-ui-base text-foreground outline-none"
     />
   )
 }

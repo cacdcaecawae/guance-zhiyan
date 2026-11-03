@@ -1,4 +1,11 @@
-import { BookOpenIcon, ClipboardCheckIcon, FileTextIcon, LogOutIcon, PlusIcon } from 'lucide-react'
+import {
+  BookOpenIcon,
+  CircleAlertIcon,
+  ClipboardCheckIcon,
+  FileTextIcon,
+  LogOutIcon,
+  PlusIcon,
+} from 'lucide-react'
 import { useState } from 'react'
 import { Link, NavLink, useNavigate } from 'react-router'
 import { Button } from '@/components/ui/button'
@@ -74,7 +81,8 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
       <SessionList onNavigate={onNavigate} />
 
       {logoutError && (
-        <p role="alert" className="px-2 text-ui-caption text-destructive">
+        <p role="alert" className="flex items-start gap-1.5 px-2 text-ui-caption text-destructive">
+          <CircleAlertIcon className="mt-0.5 size-3.5 shrink-0" aria-hidden />
           {logoutError}
         </p>
       )}

@@ -53,7 +53,7 @@ export function Reasoning({
           aria-hidden
         />
       </summary>
-      <div className="mb-2 ml-5 rounded-md bg-surface-hover p-3 text-ui-caption text-foreground-subtle">
+      <div className="mb-2 ml-5 rounded-lg bg-surface-hover p-3 text-ui-caption text-foreground-subtle">
         <Markdown text={text} citations={citations} />
       </div>
     </details>

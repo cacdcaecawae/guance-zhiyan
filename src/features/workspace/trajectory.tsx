@@ -151,7 +151,7 @@ export function Trajectory({ entries }: { entries: TraceEntry[] }) {
                           aria-hidden
                         />
                       </summary>
-                      <div className="mx-4 mb-3 rounded-md bg-surface-hover p-3 md:ml-10">
+                      <div className="mx-4 mb-3 rounded-lg bg-surface-hover p-3 md:ml-10">
                         <p className="mb-2 text-ui-sm text-foreground-subtlest">
                           {entry.label} · {new Date(entry.time).toLocaleString('zh-CN')}{' '}
                           {entry.step !== undefined ? `· 步骤 ${entry.step}` : ''}

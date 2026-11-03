@@ -76,12 +76,13 @@ export function LibraryPage() {
               submit(event.currentTarget)
             }}
           >
-            <fieldset className="flex gap-1">
+            {/* 分段控件，外观同主题切换 */}
+            <fieldset className="inline-flex w-fit gap-0.5 rounded-lg border border-border bg-surface p-0.5">
               <legend className="sr-only">检索方式</legend>
               {MODES.map((item) => (
                 <label
                   key={item.id}
-                  className="flex h-7 cursor-pointer items-center rounded-lg px-2 text-ui-sm text-foreground-subtle transition-colors hover:bg-hover hover:text-foreground has-checked:bg-selected has-checked:font-medium has-checked:text-foreground has-focus-visible:ring-2 has-focus-visible:ring-ring"
+                  className="flex h-7 cursor-pointer items-center rounded-md px-2.5 text-ui-caption text-foreground-subtle transition-colors hover:bg-hover hover:text-foreground has-checked:bg-selected has-checked:font-medium has-checked:text-foreground has-focus-visible:ring-2 has-focus-visible:ring-ring"
                 >
                   <input
                     type="radio"
@@ -136,7 +137,7 @@ const snippet = (text: string) =>
     .trim()
 
 const listLink =
-  'rounded-sm outline-none transition-colors hover:bg-surface-hover focus-visible:ring-2 focus-visible:ring-ring'
+  'rounded-lg outline-none transition-colors hover:bg-surface-hover focus-visible:ring-2 focus-visible:ring-ring'
 
 function TitleResults({
   title,
@@ -176,7 +177,7 @@ function TitleResults({
                 state={{ from }}
                 className={`flex flex-col gap-0.5 px-2 py-2.5 ${listLink}`}
               >
-                <span className="text-ui-base wrap-anywhere">{item.title}</span>
+                <span className="text-ui-base font-medium wrap-anywhere">{item.title}</span>
                 <span className="text-ui-sm text-foreground-subtlest">
                   文献编号 {item.id}
                   {item.publishedAt && ` · ${item.publishedAt}`}
@@ -241,7 +242,7 @@ function ContentResults({ query, from }: { query: string; from: string }) {
                 state={{ from }}
                 className={`flex flex-col gap-1 px-2 py-3 ${listLink}`}
               >
-                <span className="text-ui-base wrap-anywhere">{hit.title}</span>
+                <span className="text-ui-base font-medium wrap-anywhere">{hit.title}</span>
                 <span className="text-ui-sm text-foreground-subtlest wrap-anywhere">
                   文献编号 {hit.documentId} · 片段 {hit.ordinal + 1}
                   {hit.heading && ` · ${headingPath(hit.heading)}`}

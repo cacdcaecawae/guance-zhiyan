@@ -9,7 +9,8 @@ import {
 } from '@/components/ui/select'
 import type { ModelCatalog, ModelSelection } from '@/types'
 
-// 输入框右下方的模型下拉：按平台分组；两个平台有同名模型，所以触发器文字带平台名，选项只写模型名。
+// 输入框右下方的模型下拉：触发器只写模型名，平台名放在分组标题和读屏名称里（两个平台有同名模型）；
+// 只有一个平台时不显示分组标题。
 export function ModelPicker({
   catalog,
   selection,
@@ -23,7 +24,9 @@ export function ModelPicker({
 }) {
   const provider = catalog.providers.find((item) => item.id === selection.provider)
   const model = provider?.models.find((item) => item.id === selection.model)
-  const label = `${model?.name ?? selection.model} · ${provider?.name ?? selection.provider}${provider && !provider.configured ? '（未配置密钥）' : ''}`
+  const missingKey = provider && !provider.configured ? '（未配置密钥）' : ''
+  const name = model?.name ?? selection.model
+  const grouped = catalog.providers.length > 1
   return (
     <Select
       disabled={disabled}
@@ -33,22 +36,31 @@ export function ModelPicker({
         onChange({ provider: value.slice(0, split), model: value.slice(split + 1) })
       }}
     >
-      {/* 可访问名称包含屏幕上显示的文字，语音控制可按所见名称点中 */}
+      {/* 可访问名称以屏幕上显示的模型名开头，语音控制可按所见名称点中 */}
       <SelectTrigger
-        aria-label={`模型：${label}`}
+        aria-label={`模型：${name} · ${provider?.name ?? selection.provider}${missingKey}`}
         className="rounded-full px-2.5 text-foreground-subtlest"
       >
         <SelectValue>
-          <span className="truncate">{label}</span>
+          <span className="truncate">
+            {name}
+            {missingKey}
+          </span>
         </SelectValue>
       </SelectTrigger>
       <SelectContent side="bottom" align="end" className="min-w-60">
         {catalog.providers.map((item) => (
-          <SelectGroup key={item.id}>
-            <SelectLabel>
-              {item.name}
-              {!item.configured && <span className="font-normal"> · 未配置密钥</span>}
-            </SelectLabel>
+          // 分组之间一道细线，扫读时分得清平台
+          <SelectGroup
+            key={item.id}
+            className="not-first:mt-1 not-first:border-t not-first:border-border not-first:pt-1"
+          >
+            {grouped && (
+              <SelectLabel>
+                {item.name}
+                {!item.configured && <span className="font-normal"> · 未配置密钥</span>}
+              </SelectLabel>
+            )}
             {item.models.map((option) => (
               <SelectItem
                 key={option.id}
