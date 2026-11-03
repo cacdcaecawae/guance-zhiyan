@@ -73,6 +73,9 @@ export function createApp(
       if (!request.complete) request.destroy()
     }, 30000).unref()
     try {
+      // 校园网的安全设备会断开 DELETE 请求，浏览器改用 POST 加此请求头删除
+      if (request.method === 'POST' && request.headers['x-http-method-override'] === 'DELETE')
+        request.method = 'DELETE'
       const url = new URL(request.url ?? '/', 'http://localhost')
       const path = url.pathname
       if (path === '/api/health' && request.method === 'GET')
