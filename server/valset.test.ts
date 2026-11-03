@@ -407,6 +407,7 @@ test('jobs run over HTTP, survive a restart, cancel, and the bearer token only o
 
   // 重启后从数据目录读回同一结果
   const restarted = new Valset(store, agents)
+  assert.equal(restarted.options.concurrency, 2, 'default concurrency')
   assert.deepEqual(
     restarted.list(store.user('valset-a', 'A').id).map((job) => job.state),
     ['done'],

@@ -406,7 +406,7 @@ export class Valset {
     store: Store,
     agents: Agents,
     options = {
-      concurrency: setting('VALSET_CONCURRENCY', 3),
+      concurrency: setting('VALSET_CONCURRENCY', 2),
       timeoutMs: setting('VALSET_TIMEOUT_SECONDS', 180) * 1000,
     },
   ) {
