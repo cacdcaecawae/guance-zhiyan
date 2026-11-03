@@ -442,13 +442,19 @@ function trimAnswer(lines: string[], question: string, facts: Facts) {
     const shown = prefix + head + rest
     // A heading is structure: instead of the line it loses an unsourced note ("（六大方向）",
     // "（2011—2015）") or count, and keeps a bare number.
-    if (!rest.trim() && !ABSENT.test(head))
-      kept[index] = HEADING.test(line.trim())
+    // An ordinal ("第一部分") is the heading's own numbering and stays; a heading left with no
+    // content goes.
+    if (!rest.trim() && !ABSENT.test(head)) {
+      const heading = HEADING.test(line.trim())
         ? prefix +
           body
             .replace(/[（(][^（）()]*[）)]/g, (note) => (unsourced(note, facts) ? '' : note))
-            .replace(COUNT, (count) => (facts.counts.has(count) ? count : ''))
-        : undefined
+            .replace(COUNT, (count, at: number, text: string) =>
+              text[at - 1] === '第' || facts.counts.has(count) ? count : '',
+            )
+        : ''
+      kept[index] = contentChars(heading) ? heading : undefined
+    }
     // Bold a dropped sentence opened or closed is removed rather than shown as a stray "**".
     else kept[index] = (shown.match(/\*\*/g)?.length ?? 0) % 2 ? shown.replaceAll('**', '') : shown
   }

@@ -569,6 +569,8 @@ test('a citation on its own line goes with the excerpt above it; a heading loses
     `（${cite}）`,
     '**三、发展目标**（2011—2015）',
     '## 四、2019年工作安排',
+    '## 第一部分 总体要求',
+    '## 六项',
   ]
   const messages: Message[] = [
     {
@@ -601,7 +603,8 @@ test('a citation on its own line goes with the excerpt above it; a heading loses
       '',
       '**三、发展目标**',
       answer[11],
+      answer[12],
     ],
-    'an excerpt kept keeps its citation line; an excerpt dropped takes its citation line, and the blank lines between them, with it, in or out of a quote; a heading drops an unsourced note or count and keeps a bare number',
+    'an excerpt kept keeps its citation line; an excerpt dropped takes its citation line, and the blank lines between them, with it, in or out of a quote; a heading drops an unsourced note or count, keeps a bare number and its own ordinal, and goes when nothing is left',
   )
 })
