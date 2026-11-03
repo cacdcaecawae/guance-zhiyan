@@ -75,7 +75,7 @@ test('Word renders Markdown tables, lists, emphasis, links and quotes as Word st
       '# 对比报告',
       '## 一、要点',
       `正文**加粗**与*强调*，见[planid 7·原文](${a})与[统计局](https://www.stats.gov.cn/)。`,
-      `**结论：**目标"十三五"，'快递进邮站'，it's "ok"，再见[planid 7·原文](${a})与[planid 8·原文](${b})。`,
+      `**结论：**目标"十三五"，'快递进邮站'，China's 规划，"ok"，\`"代码" **原样**\`，再见[planid 7·原文](${a})与[planid 8·原文](${b})。`,
       '',
       '---',
       '',
@@ -97,6 +97,10 @@ test('Word renders Markdown tables, lists, emphasis, links and quotes as Word st
       '段<br><br>落  ',
       '',
       '2. 丁',
+      '',
+      '段落',
+      '',
+      '2024. 年度',
     ].join('\n')
     const artifact = await files.create(user.id, session.id, '报告', 'docx', content)
     const zip = await JSZip.loadAsync(await readFile(files.path(artifact.id)))
@@ -110,15 +114,16 @@ test('Word renders Markdown tables, lists, emphasis, links and quotes as Word st
         '对比报告',
         '一、要点',
         '正文加粗与强调，见planid 7·原文[1]与统计局。',
-        '结论：目标“十三五”，‘快递进邮站’，it\'s "ok"，再见planid 7·原文[1]与planid 8·原文[2]。',
+        // 只把引号内含汉字的双引号换成弯引号，单引号与行内代码不动
+        '结论：目标“十三五”，\'快递进邮站\'，China\'s 规划，"ok"，"代码" **原样**，再见planid 7·原文[1]与planid 8·原文[2]。',
         ...['第一条', '子条目', '甲', '乙', '地区', '目标', '上海', '4.5%', '左右', '江苏', '', ''],
-        ...['原文摘录', '丙', '段', '落', '丁', '引用来源'],
+        ...['原文摘录', '丙', '段', '落', '丁', '段落', '年度', '引用来源'],
         `[1]\tplanid 7·原文　片段 ${a.slice(-36).toLowerCase()}`,
         `[2]\tplanid 8·原文　片段 ${b.slice(-36)}`,
         '',
       ].join('\n'),
     )
-    assert.doesNotMatch(text, /[|*]|\]\(|\/api\/|---/)
+    assert.doesNotMatch(text.replace('**原样**', ''), /[|*]|\]\(|\/api\/|---/)
     assert.match(xml, /<w:b\/>(?:(?!<\/w:r>).)*>结论：</)
     assert.equal(
       xml.match(/<w:vertAlign w:val="superscript"\/>(?:(?!<\/w:r>).)*>\[\d\]</g)?.length,
@@ -141,16 +146,19 @@ test('Word renders Markdown tables, lists, emphasis, links and quotes as Word st
     const levels = [...xml.matchAll(/<w:numPr><w:ilvl w:val="(\d)"\/><w:numId w:val="(\d+)"\/>/g)]
     assert.deepEqual(
       levels.map((match) => match[1]),
-      ['0', '1', '0', '0', '0', '0'],
+      ['0', '1', '0', '0', '0', '0', '0'],
     )
-    // 无序与有序列表用不同的编号定义；同一有序列表共用一个编号实例，新列表从 1 重新编号，
-    // 被段落隔开、从 2 起编的列表接着上一列表编号
+    // 无序与有序列表用不同的编号定义；每个有序列表用自己的编号实例，从原文写的起始号编起
     const ids = levels.map((match) => match[2])
+    const numbering = await zip.file('word/numbering.xml')!.async('string')
+    const start = (id: string) =>
+      new RegExp(`<w:num w:numId="${id}">(?:(?!</w:num>).)*<w:startOverride w:val="(\\d+)"/>`).exec(
+        numbering,
+      )?.[1]
     assert.notEqual(ids[0], ids[2])
     assert.equal(ids[2], ids[3])
-    assert.notEqual(ids[4], ids[2])
-    assert.equal(ids[5], ids[4])
-    const numbering = await zip.file('word/numbering.xml')!.async('string')
+    assert.equal(new Set(ids.slice(3)).size, 4)
+    assert.deepEqual(ids.slice(2).map(start), ['1', '1', '1', '2', '2024'])
     assert.match(numbering, /w:numFmt w:val="bullet"/)
     assert.match(numbering, /w:numFmt w:val="decimal"/)
     const rels = await zip.file('word/_rels/document.xml.rels')!.async('string')
@@ -276,7 +284,8 @@ test('generated spreadsheets style the header, fit column widths and freeze the 
     const rows = [
       ['地区', '目标', '说明', '编号'],
       ['上海', '4.5', '长'.repeat(40), '00123'],
-      ['江苏', 3, '第一行\n"十三五"规划', '1234567890'],
+      ['江苏', 3, '{"键":"值"}\n"十三五"规划', '1234567890'],
+      ['浙江', '1.10', '', '0.50'],
     ]
     const artifact = await files.create(user.id, session.id, '对比', 'xlsx', JSON.stringify(rows))
     const data = await readFile(files.path(artifact.id))
@@ -307,14 +316,22 @@ test('generated spreadsheets style the header, fit column widths and freeze the 
     assert.equal(sheet.getCell(2, 1).font?.bold, undefined)
     assert.equal(sheet.getCell(2, 1).alignment.horizontal, 'center')
     assert.equal(sheet.getCell(2, 3).alignment.horizontal, undefined)
-    // 表头以下的纯数字文本存为数值；有前导零或超过 9 位的保留文本；中文引号换成弯引号
+    // 表头以下的纯数字文本存为数值；有前导零、尾零或超过 9 位的保留文本；单元格文字原样，不换引号
     assert.deepEqual(
-      [2, 3].map((i) => [2, 3, 4].map((j) => sheet.getCell(i, j).value)),
+      [2, 3, 4].map((i) => [2, 3, 4].map((j) => sheet.getCell(i, j).value)),
       [
         [4.5, '长'.repeat(40), '00123'],
-        [3, '第一行\n“十三五”规划', '1234567890'],
+        [3, '{"键":"值"}\n"十三五"规划', '1234567890'],
+        ['1.10', '', '0.50'],
       ],
     )
+    // 工作表名遇 Excel 保留名或截断出半个代理对时改用默认名
+    for (const name of ['History', '甲'.repeat(30) + '😀']) {
+      const other = await files.create(user.id, session.id, name, 'xlsx', '[["a"]]')
+      const otherBook = new ExcelJS.Workbook()
+      await otherBook.xlsx.load(Uint8Array.from(await readFile(files.path(other.id))).buffer)
+      assert.equal(otherBook.worksheets[0].name, '研究资料', name)
+    }
     const zip = await JSZip.loadAsync(data)
     const xml = await zip.file('xl/worksheets/sheet1.xml')!.async('string')
     assert.match(xml, /<autoFilter ref="A1:D1"\/>/)
@@ -451,6 +468,174 @@ test('quotes in file names become Chinese quotes so Windows downloads keep them'
     const session = store.create(user.id)
     const artifact = await files.create(user.id, session.id, '淮安市"十三五"规划"', 'md', '正文')
     assert.equal(artifact.name, '淮安市“十三五”规划”.md')
+  } finally {
+    store.close()
+    await rm(root, { recursive: true })
+  }
+})
+
+test('Markdown that would stall or overflow the parser is rejected quickly with the format error', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'gczy-markdown-guard-test-'))
+  const store = new Store(root)
+  try {
+    const files = new Artifacts(store)
+    const user = store.user('test:office-text', 'Test')
+    const session = store.create(user.id)
+    const inputs = [
+      '*a'.repeat(60000),
+      '_*'.repeat(40000) + 'a' + '*_'.repeat(40000),
+      '~a'.repeat(60000),
+      '[a]('.repeat(40000),
+      '['.repeat(20000) + 'a' + ']'.repeat(20000),
+      '>'.repeat(100000) + ' a',
+      '1. '.repeat(50000) + 'a',
+      Array.from({ length: 440 }, (_, i) => ' '.repeat(2 * i) + '- a').join('\n'),
+      // 在数量限制之内，但层层嵌套的脚注里再套多层粗体仍会爆栈：解析出错同样转成格式错误码
+      '[^a]: '.repeat(2900) + '*'.repeat(2990) + 'a' + '*'.repeat(2990),
+    ]
+    for (const [format, code] of [
+      ['docx', 'FILE_INVALID_DOCX_CONTENT'],
+      ['pptx', 'FILE_INVALID_PPTX_CONTENT'],
+      ['xlsx', 'FILE_INVALID_TABLE'],
+      ['csv', 'FILE_INVALID_TABLE'],
+    ] as const)
+      for (const content of inputs) {
+        const start = performance.now()
+        await assert.rejects(files.create(user.id, session.id, '报告', format, content), { code })
+        assert.ok(performance.now() - start < 2000, `${format} ${content.slice(0, 8)}`)
+      }
+    assert.match(toolError('FILE_INVALID_DOCX_CONTENT'), /嵌套/)
+    assert.equal(store.artifacts(user.id, session.id).length, 0)
+    // 真实报告的写法远在上限之内：每行都有粗体标签、引用与原文链接的长报告照常生成
+    const line = `- **标签：**内容“十三五”[planid 1·原文](/api/library/passages/00000000-0000-4000-8000-000000000000)`
+    const report = [
+      '# 报告',
+      ...Array.from({ length: 900 }, (_, i) => `## ${i}\n${line}\n> 引用`),
+    ].join('\n')
+    const start = performance.now()
+    await files.create(user.id, session.id, '报告', 'docx', report)
+    assert.ok(performance.now() - start < 5000)
+  } finally {
+    store.close()
+    await rm(root, { recursive: true })
+  }
+})
+
+test('setext underlines do not turn body lines into headings', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'gczy-setext-test-'))
+  const store = new Store(root)
+  try {
+    const files = new Artifacts(store)
+    const user = store.user('test:office-text', 'Test')
+    const session = store.create(user.id)
+    const docx = await files.create(
+      user.id,
+      session.id,
+      '报告',
+      'docx',
+      '# 报告\n正文\n---\n下一段\n===\n## 一\n## 二',
+    )
+    const zip = await JSZip.loadAsync(await readFile(files.path(docx.id)))
+    const xml = await zip.file('word/document.xml')!.async('string')
+    assert.equal(await files.read(user.id, session.id, docx.id), '报告\n正文\n下一段\n一\n二\n')
+    assert.deepEqual(
+      [...xml.matchAll(/<w:pStyle w:val="(\w+)"\/>/g)].map((match) => match[1]),
+      ['Title', 'Heading1', 'Heading1'],
+    )
+    const pptx = await files.create(
+      user.id,
+      session.id,
+      '汇报',
+      'pptx',
+      '# 汇报\n## 一\n要点\n---\n续写',
+    )
+    const deck = await JSZip.loadAsync(await readFile(files.path(pptx.id)))
+    assert.equal(deck.file(/^ppt\/slides\/slide\d+\.xml$/).length, 2)
+    assert.deepEqual(texts(await deck.file('ppt/slides/slide2.xml')!.async('string')), [
+      '一',
+      '要点',
+      '续写',
+    ])
+  } finally {
+    store.close()
+    await rm(root, { recursive: true })
+  }
+})
+
+test('file names that cannot be written into Office XML are rejected for every format', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'gczy-file-name-xml-test-'))
+  const store = new Store(root)
+  try {
+    const files = new Artifacts(store)
+    const user = store.user('test:office-text', 'Test')
+    const session = store.create(user.id)
+    for (const format of ['docx', 'pptx', 'xlsx', 'csv', 'md'] as const)
+      for (const name of ['报告￾', '报告\ud800'])
+        await assert.rejects(
+          files.create(user.id, session.id, name, format, '[["正文"]]'),
+          { code: 'FILE_INVALID_NAME' },
+          `${format} ${JSON.stringify(name)}`,
+        )
+    assert.equal(store.artifacts(user.id, session.id).length, 0)
+  } finally {
+    store.close()
+    await rm(root, { recursive: true })
+  }
+})
+
+test('decks cap list levels and start numbers to what PowerPoint opens', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'gczy-pptx-caps-test-'))
+  const store = new Store(root)
+  try {
+    const files = new Artifacts(store)
+    const user = store.user('test:office-text', 'Test')
+    const session = store.create(user.id)
+    const nested = Array.from({ length: 10 }, (_, i) => `${'  '.repeat(i)}- 第${i + 1}层`)
+    const content = ['# 汇报', '## 一', ...nested, '', '99999. 大号'].join('\n')
+    const artifact = await files.create(user.id, session.id, '汇报', 'pptx', content)
+    const zip = await JSZip.loadAsync(await readFile(files.path(artifact.id)))
+    const xml = await zip.file('ppt/slides/slide2.xml')!.async('string')
+    const levels = [...xml.matchAll(/<a:pPr lvl="(\d+)"/g)].map((match) => Number(match[1]))
+    assert.equal(Math.max(...levels), 8)
+    assert.match(xml, /<a:buAutoNum type="arabicPeriod" startAt="32767"\/>/)
+    // Word 的编号起始号同样封顶
+    const word = await files.create(user.id, session.id, '报告', 'docx', '99999. 大号')
+    const numbering = await (
+      await JSZip.loadAsync(await readFile(files.path(word.id)))
+    )
+      .file('word/numbering.xml')!
+      .async('string')
+    assert.match(numbering, /<w:start w:val="32767"\/>/)
+    assert.doesNotMatch(numbering, /99999/)
+  } finally {
+    store.close()
+    await rm(root, { recursive: true })
+  }
+})
+
+test('Word and deck tables over 2000 rows or 50 columns are rejected like spreadsheets', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'gczy-table-columns-test-'))
+  const store = new Store(root)
+  try {
+    const files = new Artifacts(store)
+    const user = store.user('test:office-text', 'Test')
+    const session = store.create(user.id)
+    const table = (columns: number) =>
+      [
+        `|${' 列 |'.repeat(columns)}`,
+        `|${' --- |'.repeat(columns)}`,
+        `|${' 值 |'.repeat(columns)}`,
+      ].join('\n')
+    const long = (rows: number) => ['| 列 |', '| --- |', ...Array(rows).fill('| 值 |')].join('\n')
+    for (const format of ['docx', 'pptx'] as const) {
+      for (const content of [table(51), long(2000)])
+        await assert.rejects(files.create(user.id, session.id, '表', format, content), {
+          code: 'FILE_INVALID_TABLE',
+        })
+      await files.create(user.id, session.id, '表', format, table(50))
+    }
+    await files.create(user.id, session.id, '表', 'docx', long(1999))
+    assert.equal(store.artifacts(user.id, session.id).length, 3)
   } finally {
     store.close()
     await rm(root, { recursive: true })

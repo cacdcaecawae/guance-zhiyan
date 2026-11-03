@@ -80,7 +80,7 @@ export const contentOutput = {
 const markdown = unified().use(remarkParse).use(remarkGfm)
 type Block = ReturnType<typeof markdown.parse>['children'][number]
 type Inline = Extract<Block, { type: 'paragraph' }>['children'][number]
-/** sup 为文献引用编号 */
+/** sup 为文献引用编号，code 为行内代码 */
 type Seg = {
   text: string
   bold?: boolean
@@ -88,6 +88,7 @@ type Seg = {
   strike?: boolean
   link?: string
   sup?: boolean
+  code?: boolean
 }
 type Align = NonNullable<Extract<Block, { type: 'table' }>['align']>
 /** depth 为列表嵌套层数（0 不在列表中）；mark 只在列表项的第一行 */
@@ -96,7 +97,8 @@ type Line = {
   segs: Seg[]
   depth: number
   quote: boolean
-  mark?: { list: number; ordered: boolean; n: number }
+  /** list 区分各个列表，start 为列表起始号，n 为本项编号 */
+  mark?: { list: number; ordered: boolean; start: number; n: number }
 }
 type Item =
   | { type: 'heading'; depth: number; segs: Seg[] }
@@ -108,13 +110,23 @@ const RED = 'B0302A'
 const PASSAGE = /^\/api\/library\/passages\/([0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})$/i
 const plain = (segs: Seg[]) => segs.map((seg) => seg.text).join('')
 const cjk = /[㐀-鿿]/
-/** 中文语境的直引号换成弯引号：引号内含汉字才换，不动英文撇号；替换前后长度不变 */
+/** 中文语境的直双引号换成弯引号：引号内含汉字才换；单引号常是英文撇号（China's），不动。替换前后长度不变 */
 const curly = (text: string) =>
-  text
-    .replace(/"([^"\n]*)"/g, (match, inner: string) => (cjk.test(inner) ? `“${inner}”` : match))
-    .replace(/'([^'\n]*)'/g, (match, inner: string) => (cjk.test(inner) ? `‘${inner}’` : match))
-/** 一行文字换弯引号，并补上粗体：** 紧挨中文标点时（如 **加粗：**文字）CommonMark 不认作粗体，残留的成对 ** 在这里处理 */
+  text.replace(/"([^"\n]*)"/g, (match, inner: string) => (cjk.test(inner) ? `“${inner}”` : match))
+/** 一行文字换弯引号，并补上粗体：** 紧挨中文标点时（如 **加粗：**文字）CommonMark 不认作粗体，残留的成对 ** 在这里处理。
+ * 行内代码原样保留。 */
 const tidy = (segs: Seg[]) => {
+  const out: Seg[] = []
+  for (let i = 0; i < segs.length;) {
+    let j = i
+    while (j < segs.length && !segs[j].code) j++
+    for (const seg of tidyText(segs.slice(i, j))) out.push(seg)
+    if (j < segs.length) out.push(segs[j])
+    i = j + 1
+  }
+  return out
+}
+const tidyText = (segs: Seg[]) => {
   const text = curly(plain(segs))
   const owner = segs.flatMap((seg) => Array<Seg>(seg.text.length).fill(seg))
   const bold: boolean[] = []
@@ -153,13 +165,32 @@ const fitColumns = (needs: number[], total: number) => {
   return widths.map((width) => (width * total) / sum)
 }
 
+// PowerPoint 的段落层级最多 9 级（0–8），自动编号起始号与 Word 一样最大 32767
+const MAX_LEVEL = 8
+const MAX_START = 32767
+/** 表格与 Excel 一致最多 2000 行、50 列（Word 表格最多 63 列，行数过多时生成要数秒） */
+const MAX_ROWS = 2000
+const MAX_COLUMNS = 50
+/**
+ * 解析前的守卫。remark 处理强调符号（* _ ~）与方括号（链接）是二次方的，20 万字节的病态输入能卡住事件循环数分钟；
+ * 一行开头的引用、列表标记或缩进嵌套过深会爆栈或拖到秒级。
+ * ponytail: 上限取评测中 8 份真实报告最大值（124 个强调符号、36 个原文链接、嵌套 1 层、缩进 2 格）按 200 KB 篇幅放大后
+ * 再留数倍余量；在上限内最坏的输入本机约 0.4 秒解析完。要放宽就把解析挪到子进程或换线性解析器。
+ */
+const tooComplex = (content: string) =>
+  (content.match(/[*_]/g)?.length ?? 0) > 6000 ||
+  (content.match(/~/g)?.length ?? 0) > 2000 ||
+  (content.match(/\[/g)?.length ?? 0) > 3000 ||
+  /^(?:[ \t]*(?:>|[-*+](?=[ \t])|\d{1,9}[.)](?=[ \t]))){17}/m.test(content) ||
+  /^[ \t]{65}/m.test(content)
+
 /** Markdown 展开为标题、文字行与表格的序列，Word、演示文稿与表格共用。空行、分隔线、链接定义等不输出。
- * 文献库原文链接只留文字，后附引用编号（同一片段同一编号），sources 按编号列出片段。 */
-function flatten(content: string) {
+ * 文献库原文链接只留文字，后附引用编号（同一片段同一编号），sources 按编号列出片段。
+ * 正文过于复杂或解析失败时按 code 报错。 */
+function flatten(content: string, code: string) {
   const items: Item[] = []
   const sources: { id: string; label: string }[] = []
   let lists = 0
-  let lastOrdered = 0
   let mark: Line['mark']
   /** 行内内容拆成行（换行、<br> 各起一行），每行为带格式的文字段。HTML 标签不显示；
    * 其他相对链接在下载后的文件里打不开，只保留文字，http(s) 链接保留地址。 */
@@ -168,7 +199,8 @@ function flatten(content: string) {
       if (node.type === 'text' || node.type === 'inlineCode')
         node.value.split('\n').forEach((text, i) => {
           if (i) out.push([])
-          if (text) out.at(-1)!.push({ ...style, text })
+          if (text)
+            out.at(-1)!.push({ ...style, text, ...(node.type === 'inlineCode' && { code: true }) })
         })
       else if (node.type === 'break' || (node.type === 'html' && /^<br\s*\/?>$/i.test(node.value)))
         out.push([])
@@ -223,17 +255,21 @@ function flatten(content: string) {
           quote,
         )
       else if (node.type === 'list') {
-        const start = node.start ?? 1
-        // ponytail: 起始号大于 1 的有序列表视为被段落隔开的上一列表的延续，接着编号；单独从 n 起编的列表仍从 1 编
-        const list = node.ordered && start > 1 && lastOrdered ? lastOrdered : ++lists
-        if (node.ordered) lastOrdered = list
+        // 每个列表单独编号，从原文写的起始号编起
+        const list = ++lists
+        const start = Math.min(node.start ?? 1, MAX_START)
         node.children.forEach((item, i) => {
-          mark = { list, ordered: !!node.ordered, n: start + i }
+          mark = { list, ordered: !!node.ordered, start, n: Math.min(start + i, MAX_START) }
           walk(item.children, depth + 1, quote)
           mark = undefined
         })
       } else if (node.type === 'table') {
         const columns = node.children[0].children.length
+        if (columns > MAX_COLUMNS || node.children.length > MAX_ROWS)
+          throw new HarnessError(
+            `表格最多 ${MAX_ROWS} 行、${MAX_COLUMNS} 列。`,
+            'FILE_INVALID_TABLE',
+          )
         items.push({
           type: 'table',
           align: node.align ?? [],
@@ -246,8 +282,19 @@ function flatten(content: string) {
       else if (node.type === 'footnoteDefinition') walk(node.children, depth, quote)
     }
   }
-  // 解析器在文字中保留原样的换行符，统一成 \n 再按行拆分
-  walk(markdown.parse(content.replace(/\r\n?/g, '\n')).children, 0, false)
+  const fail = () =>
+    new HarnessError('正文的强调符号、链接或嵌套层级过多，无法排版，请精简格式后重试。', code)
+  if (tooComplex(content)) throw fail()
+  try {
+    // 解析器在文字中保留原样的换行符，统一成 \n 再按行拆分。
+    // 只由 - 或 = 组成的行去掉：分隔线本就不输出，紧跟正文时 Markdown 会把上一行当成标题（setext）。
+    // 代码块里这样的行也会去掉。
+    const source = content.replace(/\r\n?/g, '\n').replace(/^ {0,3}(?:-+|=+)[ \t]*$/gm, '')
+    walk(markdown.parse(source).children, 0, false)
+  } catch (error) {
+    if (error instanceof RangeError || error instanceof SyntaxError) throw fail()
+    throw error
+  }
   return { items, sources }
 }
 
@@ -266,9 +313,14 @@ const headingStyle = (size: number, before: number, outlineLevel: number) => ({
 })
 /** A4 默认页边距下的正文宽度（缇） */
 const PAGE_WIDTH = 11906 - 2 * 1440
-const listLevels = (format: (typeof LevelFormat)[keyof typeof LevelFormat], text: string[]) =>
+const listLevels = (
+  format: (typeof LevelFormat)[keyof typeof LevelFormat],
+  text: string[],
+  start = 1,
+) =>
   text.map((text, level) => ({
     level,
+    start,
     format,
     text,
     alignment: AlignmentType.LEFT,
@@ -283,7 +335,7 @@ const listLevels = (format: (typeof LevelFormat)[keyof typeof LevelFormat], text
  * 正文首行缩进两字，表格表头加底色并跨页重复；页眉为短标题，页脚“第 X 页 / 共 Y 页”。
  * 一级章节不少于 3 个的长报告加封面，标题与首个章节前的说明放在封面上。文末列出引用来源。 */
 function docx(content: string, name: string) {
-  const { items, sources } = flatten(content)
+  const { items, sources } = flatten(content, 'FILE_INVALID_DOCX_CONTENT')
   const head = items[0]
   const titled = head?.type === 'heading' && head.depth === 1
   const next = items[1]
@@ -302,7 +354,7 @@ function docx(content: string, name: string) {
       )
     : []
   const runs = (segs: Seg[], size?: number) =>
-    segs.map(({ link, sup, ...seg }) => {
+    segs.map(({ link, sup, code: _code, ...seg }) => {
       const run = new TextRun({
         ...seg,
         size,
@@ -384,7 +436,8 @@ function docx(content: string, name: string) {
     if (item.mark)
       return new Paragraph({
         numbering: {
-          reference: item.mark.ordered ? 'ordered' : 'bullet',
+          // 有序列表按起始号分编号定义，每个列表一个实例
+          reference: item.mark.ordered ? `ordered-${item.mark.start}` : 'bullet',
           level,
           instance: item.mark.ordered ? item.mark.list : 0,
         },
@@ -530,7 +583,16 @@ function docx(content: string, name: string) {
       numbering: {
         config: [
           { reference: 'bullet', levels: listLevels(LevelFormat.BULLET, ['•', '◦', '▪']) },
-          { reference: 'ordered', levels: listLevels(LevelFormat.DECIMAL, ['%1.', '(%2)', '%3)']) },
+          ...[
+            ...new Set(
+              items.flatMap((item) =>
+                item.type === 'line' && item.mark?.ordered ? [item.mark.start] : [],
+              ),
+            ),
+          ].map((start) => ({
+            reference: `ordered-${start}`,
+            levels: listLevels(LevelFormat.DECIMAL, ['%1.', '(%2)', '%3)'], start),
+          })),
         ],
       },
       sections: cover
@@ -596,7 +658,9 @@ export class Artifacts {
       !name.trim() ||
       name.length > 100 ||
       /[/\\]/.test(name) ||
-      Array.from(name).some((char) => char.charCodeAt(0) < 32)
+      Array.from(name).some((char) => char.charCodeAt(0) < 32) ||
+      // 文件名会写进 Office 文件的标题、页眉和工作表名
+      xmlInvalid(name)
     )
       throw new HarnessError('文件名称或格式无效。', 'FILE_INVALID_NAME')
     if (!content.trim() || Buffer.byteLength(content) > MAX_CONTENT)
@@ -606,11 +670,7 @@ export class Artifacts {
       .replace(/\.[a-z0-9]+$/i, '')
       .replace(/"([^"]*)"/g, '“$1”')
       .replaceAll('"', '”')
-    // 演示文稿封面可能取文件名，文件名也要能写入 XML
-    if (
-      (format === 'docx' || format === 'pptx') &&
-      xmlInvalid(format === 'pptx' ? title + content : content)
-    )
+    if ((format === 'docx' || format === 'pptx') && xmlInvalid(content))
       throw new HarnessError(
         `${format === 'docx' ? 'Word ' : '演示文稿'}正文含有不支持的字符，请移除无效字符或改用 Markdown。`,
         `FILE_INVALID_${format.toUpperCase()}_CONTENT`,
@@ -621,7 +681,7 @@ export class Artifacts {
       // 与 Word 同样解析 Markdown：每个标题开一页，其下文字行与表格归该页，列表项显示项目符号或编号，
       // > 引用作页底注；文献引用编号列在末页“引用来源”。
       type Section = { title: string; level: number; items: Exclude<Item, { type: 'heading' }>[] }
-      const { items, sources } = flatten(content)
+      const { items, sources } = flatten(content, 'FILE_INVALID_PPTX_CONTENT')
       const sections: Section[] = [{ title, level: 0, items: [] }]
       for (const item of items) {
         if (item.type === 'heading')
@@ -818,7 +878,7 @@ export class Artifacts {
                       ? { type: 'number', numberStartAt: mark.n }
                       : true
                     : false,
-                indentLevel: Math.max(item.depth - 1, 0),
+                indentLevel: Math.min(Math.max(item.depth - 1, 0), MAX_LEVEL),
               }),
             )
             used += cost
@@ -918,7 +978,9 @@ export class Artifacts {
             .filter((line) => line.trim())
             .map((line) => JSON.parse(line))
         } catch {
-          const table = flatten(content).items.find((item) => item.type === 'table')
+          const table = flatten(content, 'FILE_INVALID_TABLE').items.find(
+            (item) => item.type === 'table',
+          )
           rows = table?.rows.map((row) =>
             row.map((lines) =>
               lines.map((line) => plain(line.filter((seg) => !seg.sup))).join('\n'),
@@ -928,11 +990,11 @@ export class Artifacts {
       }
       if (
         !Array.isArray(rows) ||
-        rows.length > 2000 ||
+        rows.length > MAX_ROWS ||
         !rows.every(
           (row) =>
             Array.isArray(row) &&
-            row.length <= 50 &&
+            row.length <= MAX_COLUMNS &&
             row.every(
               (cell) =>
                 typeof cell === 'string' || (typeof cell === 'number' && Number.isFinite(cell)),
@@ -955,9 +1017,13 @@ export class Artifacts {
           )
         const book = new ExcelJS.Workbook()
         const columns = Math.max(0, ...rows.map((row) => row.length))
+        // 工作表以文件名命名：去掉 Excel 不允许的字符、截到 31 个字符；为空、是保留名或截出半个代理对时用默认名
+        const sheetName = title.replace(/[\\/?*[\]:']/g, '').slice(0, 31)
         // 横向 A4、适应一页宽，每页重复表头，页眉为标题、页脚为页码
         const sheet = book.addWorksheet(
-          title.replace(/[\\/?*[\]:']/g, '').slice(0, 31) || '研究资料',
+          sheetName && sheetName.isWellFormed() && !/^history$/i.test(sheetName)
+            ? sheetName
+            : '研究资料',
           {
             views: [{ state: 'frozen', ySplit: 1 }],
             pageSetup: {
@@ -979,11 +1045,12 @@ export class Artifacts {
             row.map((cell: string | number) =>
               typeof cell !== 'string'
                 ? cell
-                : // 表头以下的纯数字文本存为数值（不超过 9 位整数、无前导零），免得 Excel 标“以文本形式存储的数字”
-                  i && /^-?(0|[1-9]\d{0,8})(\.\d{1,6})?$/.test(cell)
+                : // 表头以下的纯数字文本存为数值（不超过 9 位整数、无前导零与小数尾零，转换后显示不变），
+                  // 免得 Excel 标“以文本形式存储的数字”；其余文字原样
+                  i && /^-?(0|[1-9]\d{0,8})(\.\d{0,5}[1-9])?$/.test(cell)
                   ? Number(cell)
                   : // ExcelJS decodes OOXML escapes when reading but does not escape literal text on write.
-                    curly(cell).replace(/_(?=x[0-9a-fA-F]{4}_)/g, '_x005F_'),
+                    cell.replace(/_(?=x[0-9a-fA-F]{4}_)/g, '_x005F_'),
             ),
           ),
         )
