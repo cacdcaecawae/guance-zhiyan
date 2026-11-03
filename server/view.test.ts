@@ -366,17 +366,22 @@ test('trimming drops uncited sentences giving numbers or counts the results and 
     [
       '依据《莱芜市2010年政府工作报告》（planid 11729）。',
       answer[1],
+      answer[2],
       answer[3],
       answer[4],
       answer[5],
+      '## 2019年规划 | 任务',
       answer[7],
       '文献库中未检索到2030年的人才目标。',
+      '## 五、人才开发',
       answer[14],
       answer[15],
+      '**二、总体要求**',
       answer[17],
+      answer[18],
       answer[19],
     ],
-    'checks each sentence and, in a not-found sentence, each clause (a thousands separator is not a clause break); keeps tables whole, sourced numbers (10,000 = 10000), numbered headings and counts of the asked aspects; drops invented counts and years (also in link text and at a line start), "第一章" when only "第十一章" was returned, "六十项" when only "一百六十项" was, and a heading with a pipe, even right above or below a table',
+    'checks each sentence and, in a not-found sentence, each clause (a thousands separator is not a clause break); keeps tables whole, sourced numbers (10,000 = 10000), numbered headings and counts of the asked aspects; drops invented counts and years (also in link text and at a line start), "第一章" when only "第十一章" was returned and "六十项" when only "一百六十项" was; a heading with a pipe, even right above or below a table, is a heading: it loses an invented count or note and keeps a bare year',
   )
 })
 
@@ -428,9 +433,12 @@ test('number and count trimming reads tables, list numbers and thousands separat
   const cases: [string[], string[]][] = [
     [
       [...table, '## 2019年 | 六大任务', ...other],
-      [...table, ...other],
+      [...table, '## 2019年 | 任务', ...other],
     ],
-    [['## 2019年 | 表', ...table, '## 2019年规划 | 六大任务'], table],
+    [
+      ['## 2019年 | 表', ...table, '## 2019年规划 | 六大任务'],
+      ['## 2019年 | 表', ...table, '## 2019年规划 | 任务'],
+    ],
     [
       ['指标 | 目标', '--- | ---', '人才 | 2030年20万人'],
       ['指标 | 目标', '--- | ---', '人才 | 2030年20万人'],
@@ -467,7 +475,10 @@ test('number and count trimming reads tables, list numbers and thousands separat
         '27、保障措施',
       ],
     ],
-    [['## 27. 2019年撤市设区', '12.5万人才完成培训。', '2019 年撤市设区。'], []],
+    [
+      ['## 27. 2019年撤市设区', '12.5万人才完成培训。', '2019 年撤市设区。'],
+      ['## 27. 2019年撤市设区'],
+    ],
     [['共实施一百六十项重点工程。', '共实施六十项重点工程。'], ['共实施一百六十项重点工程。']],
     [
       [
@@ -532,6 +543,7 @@ test('number and count trimming reads tables, list numbers and thousands separat
         '人才总量达到12.0万人。',
         '绿地率３６.４０%。',
         '## 36.4 万亩绿地',
+        '## 12.5 万人完成培训',
         '- 4.3 人才发展',
         '**5.1 规划逻辑判断**',
         '详见[规划](/docs/第九章)。',
@@ -539,4 +551,57 @@ test('number and count trimming reads tables, list numbers and thousands separat
     ],
   ]
   for (const [head, kept] of cases) assert.deepEqual(trim(head), kept, head.join(' / '))
+})
+
+test('a citation on its own line goes with the excerpt above it; a heading loses only unsourced notes and counts', () => {
+  const passage = '全市人才总量达到12.5万人，建设产业园区和配套设施。'
+  const cite = `[planid 1·原文](${path(returned)})`
+  const answer = [
+    `- **园区**：“建设产业园区和配套设施” ${cite}`,
+    '## 二、重点培育的产业方向（六大方向）',
+    '> “全市人才总量达到12.5万人”',
+    `> ${cite}`,
+    '> “新建三个高新技术产业园区和人才公寓”',
+    `> ${cite}`,
+    '',
+    '“新建三个高新技术产业园区和人才公寓”',
+    '',
+    `（${cite}）`,
+    '**三、发展目标**（2011—2015）',
+    '## 四、2019年工作安排',
+  ]
+  const messages: Message[] = [
+    {
+      id: 'turn-1',
+      role: 'assistant',
+      question: '该市人才和园区有哪些安排？',
+      status: 'done',
+      parts: [
+        {
+          id: 't1',
+          type: 'tool',
+          name: 'library_search',
+          input: '{}',
+          status: 'done',
+          output: JSON.stringify({ id: returned, documentId: '1', text: passage }),
+        },
+        { id: 'x1', type: 'text', step: 1, text: answer.join('\n') },
+      ],
+    },
+  ]
+  trimAnswers(messages)
+  const part = messages[0].role === 'assistant' ? messages[0].parts[1] : undefined
+  assert.deepEqual(
+    part?.type === 'text' && part.text.split('\n'),
+    [
+      answer[0],
+      '## 二、重点培育的产业方向',
+      answer[2],
+      answer[3],
+      '',
+      '**三、发展目标**',
+      answer[11],
+    ],
+    'an excerpt kept keeps its citation line; an excerpt dropped takes its citation line, and the blank lines between them, with it, in or out of a quote; a heading drops an unsourced note or count and keeps a bare number',
+  )
 })
