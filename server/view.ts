@@ -41,7 +41,7 @@ export function toolError(code?: string): string {
     FILE_INVALID_PPTX_CONTENT: '演示文稿正文含有不支持的字符，请移除无效字符或改用 Markdown。',
     FILE_INVALID_XLSX_CONTENT: '表格含有 Excel 不支持的字符，请移除无效字符或改用 CSV。',
     FILE_INVALID_TABLE:
-      '表格内容必须为二维 JSON 数组，最多 2000 行、50 列，单元格仅支持文本或数字。',
+      '表格内容必须为二维 JSON 数组或 Markdown 表格，最多 2000 行、50 列，单元格仅支持文本或数字。',
     FILE_TOO_LARGE: '文件名称无效或文件超过 50 MiB。',
     FILE_QUOTA: '文件空间已达上限，请联系管理员。',
     FILE_SESSION_ONLY: '只能读取当前会话的文件。',
