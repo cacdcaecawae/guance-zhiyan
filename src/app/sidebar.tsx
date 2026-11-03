@@ -1,4 +1,4 @@
-import { BookOpenIcon, FileTextIcon, PlusIcon } from 'lucide-react'
+import { BookOpenIcon, ClipboardCheckIcon, FileTextIcon, PlusIcon } from 'lucide-react'
 import { Link, NavLink } from 'react-router'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/cn'
@@ -10,6 +10,7 @@ import { ThemeToggle } from './theme-toggle'
 const NAV = [
   { to: '/library', label: '文献库', Icon: BookOpenIcon },
   { to: '/outputs', label: '研究成果', Icon: FileTextIcon },
+  { to: '/valset', label: '验证集测试', Icon: ClipboardCheckIcon },
 ]
 
 const linkClass = ({ isActive }: { isActive: boolean }) =>

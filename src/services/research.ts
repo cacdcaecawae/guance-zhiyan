@@ -54,7 +54,11 @@ export async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await send(`/api${path}`, {
     credentials: 'same-origin',
     ...init,
-    headers: { 'Content-Type': 'application/json', ...init?.headers },
+    // 上传文件时由浏览器生成带分隔符的 multipart 类型
+    headers: {
+      ...(!(init?.body instanceof FormData) && { 'Content-Type': 'application/json' }),
+      ...init?.headers,
+    },
   })
   const value = await response.json().catch(() => null)
   if (!response.ok) throw new Error(value?.error ?? `请求失败（${response.status}），请重试。`)

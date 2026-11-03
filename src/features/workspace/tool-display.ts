@@ -1,4 +1,4 @@
-import type { AnswerPart, AssistantMessage } from '@/types'
+import type { AnswerPart, AssistantMessage } from '../../types/index.ts'
 
 export const toolNames: Record<string, string> = {
   web_search: '搜索网页',

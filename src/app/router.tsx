@@ -14,6 +14,7 @@ import { ThemeToggle } from './theme-toggle'
 import { LibraryDocumentPage } from '@/features/library/library-document'
 import { LibraryPage } from '@/features/library/library-page'
 import { OutputsPage } from '@/features/outputs/outputs-page'
+import { ValsetPage } from '@/features/valset/valset-page'
 import { WorkspacePage } from '@/features/workspace/workspace-page'
 import { AppShell } from './shell'
 import { SlipsMark } from './logo'
@@ -44,6 +45,7 @@ export function AppRouter() {
             <Route path="/library" element={<LibraryPage />} />
             <Route path="/library/document" element={<LibraryDocumentPage />} />
             <Route path="/outputs" element={<OutputsPage />} />
+            <Route path="/valset" element={<ValsetPage />} />
             <Route path="*" element={<Navigate to="/workspace" replace />} />
           </Route>
         </Routes>
