@@ -81,9 +81,9 @@ server {
      ```
    - `PATH`：systemd 启动的服务只有系统默认 PATH，node 装在用户目录等处时补上。
    - 只能写 `PATH`、`QDRANT_BIN`、`QDRANT_STORAGE`、`EMBED_CMD`、`APP_MODE`。数据目录、端口等应用配置只写在 `server/.env`：网站与 `pnpm rag` 导入命令都只读那里，分两处写会让导入写进网站看不到的目录，所以 `deploy/.env` 出现应用配置、有语法错误、或 `APP_MODE` 不是 `local` / `server` 时拒绝安装；已装的服务启动时同样检查，出错即停（不反复重启），`status` 显示原因。相对路径按仓库根目录解析。
-5. **从已有部署迁移数据**（新导入跳过这一步）：先停止原部署的服务（本机已装过服务时本机也停），再**一起**复制 `DATA_DIR`（含 `app.sqlite`，全库约 15 GB）与 Qdrant 数据目录（或 Docker 卷），并保持 `EMBEDDING_URL`、`EMBEDDING_MODEL`、`EMBEDDING_DIMENSIONS`、`QDRANT_URL` 四项原样。向量集合名和索引完成标记由文献库编号（在 `DATA_DIR` 里）和这几项共同决定，任何一项变化都会被视为新索引，需要 `pnpm rag reindex` 全量重算。数据目录不要放在 `/tmp`（服务有自己独立的 `/tmp`），也不要放在 `/usr`、`/etc` 下（服务对它们只读）。
+5. **从已有部署迁移数据**（新导入跳过这一步）：先停止原部署的服务（本机已装过服务时本机也停），再**一起**复制 `DATA_DIR`（含 `app.sqlite`）与 Qdrant 数据目录（或 Docker 卷），并保持 `EMBEDDING_URL`、`EMBEDDING_MODEL`、`EMBEDDING_DIMENSIONS`、`QDRANT_URL` 四项原样。向量集合名和索引完成标记由文献库编号（在 `DATA_DIR` 里）和这几项共同决定，任何一项变化都会被视为新索引，需要 `pnpm rag reindex` 全量重算。数据目录不要放在 `/tmp`（服务有自己独立的 `/tmp`），也不要放在 `/usr`、`/etc` 下（服务对它们只读）。
 6. **安装服务**：在仓库根目录，以运行服务的账号（不必是 root）执行 `deploy/guance.sh install`。它生成 `guance-app`（以及配置了的 `guance-qdrant`、`guance-embedding`）单元，经 `sudo` 写入 `/etc/systemd/system/`，设为开机自启并启动，等这些服务都在运行且各自的健康检查（与 `status` 相同）通过才报告成功：最多等约 3 分钟（向量服务加载模型较慢），有服务启动后即退出时立即报出是哪一个并以失败结束。仓库里没有单元模板文件，不需要改任何仓库文件。
-7. **新导入数据**（迁移过来的跳过这一步）：导入要调用 Qdrant 与向量服务，所以在上一步之后、`deploy/guance.sh status` 显示两者正常时再执行 `pnpm rag import <文献.jsonl>`、`pnpm rag metadata <元数据.jsonl>`（见 RAG 说明），网站不必停。全库导入耗时很长，宜在有显卡的机器上完成。
+7. **新导入数据**（迁移过来的跳过这一步）：导入要调用 Qdrant 与向量服务，所以在上一步之后、`deploy/guance.sh status` 显示两者正常时再执行 `pnpm rag import <文献.jsonl>`、`pnpm rag metadata <元数据.jsonl>`（见 RAG 说明），网站不必停。文献量大时导入耗时很长，宜在有显卡的机器上完成。
 
 ## 日常命令
 
@@ -157,5 +157,5 @@ deploy/guance.sh install                     # 重新生成服务、重启全部
 - 操作系统与权限：是否用 systemd；运行服务的账号能否使用 `sudo`（`install` 写入单元、更新时停启网站需要），或用 Docker 开机自启。
 - 网络：服务器能否访问校内模型 `10.27.66.12`、能否访问 GitHub 与 npm（拉代码、装依赖）；访问者如何连到服务器（SSH 隧道，或服务器模式的网址）；能否申请域名与证书以启用 HTTPS。
 - 算力：有无 NVIDIA 显卡跑 BGE-M3；没有时检索查询仍可用但更慢（未实测具体耗时），全量导入不宜在这样的服务器上做，改为从已有部署迁移数据。
-- 磁盘：`DATA_DIR` 约 15 GB，另加 Qdrant 数据与备份空间。
+- 磁盘：`DATA_DIR` 随文献量增长（官方 506 篇样例库约 170 MB），另加 Qdrant 数据与备份空间。
 - 学校统一身份认证：可用后在 `server/auth.ts` 接入；在此之前服务器模式使用本地账号。
