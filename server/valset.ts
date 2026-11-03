@@ -10,6 +10,8 @@ import {
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { join } from 'node:path'
 import ExcelJS from 'exceljs'
+import { XMLParser } from 'fast-xml-parser'
+import JSZip from 'jszip'
 import type { AssistantMessage, ModelSelection } from '../src/types/index.ts'
 import type { ValsetJob, ValsetJobSummary, ValsetRow, ValsetStatus } from '../src/types/valset.ts'
 import { splitAnswer } from '../src/features/workspace/tool-display.ts'
@@ -25,26 +27,124 @@ const MAX_FILE = 10 * 2 ** 20
 const MAX_QUESTION = 8000
 const ANSWER_HEADER = /^(?:预期答案|参考答案)(?:[（(](?:预期答案|参考答案)[)）])?$/
 
+/** 解压后单个部件的上限，挡住压缩炸弹 */
+const MAX_PART = 64 * 2 ** 20
+const xml = new XMLParser({
+  ignoreAttributes: false,
+  attributeNamePrefix: '',
+  removeNSPrefix: true,
+  parseTagValue: false,
+  trimValues: false,
+  // 解码 &#38382; 这类数字字符引用（openpyxl 把中文都写成这样）
+  htmlEntities: true,
+  isArray: (name, _path, _leaf, attribute) =>
+    !attribute && ['Relationship', 'sheet', 'si', 'r', 'row', 'c'].includes(name),
+})
+/** 解析后的 XML 按路径取值，缺失时为 undefined */
+const at = (node: unknown, ...path: (string | number)[]): unknown =>
+  path.reduce<unknown>(
+    (value, key) =>
+      value && typeof value === 'object' ? (value as Record<string, unknown>)[key] : undefined,
+    node,
+  )
+const list = (value: unknown) => (Array.isArray(value) ? (value as unknown[]) : [])
+/** <t> 带属性（如 xml:space）时文字在 #text 里 */
+const text = (node: unknown) => (typeof node === 'string' ? node : String(at(node, '#text') ?? ''))
+/** 共享或行内字符串：一段 <t>，或富文本各段 <r><t> 相连（不含注音） */
+const richText = (node: unknown) =>
+  at(node, 't') !== undefined
+    ? text(at(node, 't'))
+    : list(at(node, 'r'))
+        .map((run) => text(at(run, 't')))
+        .join('')
+const column = (ref: string) =>
+  Array.from(/^[A-Z]+/.exec(ref)?.[0] ?? '').reduce(
+    (n, char) => n * 26 + char.charCodeAt(0) - 64,
+    0,
+  )
+
+/**
+ * 首个工作表前两列的文字，按行号。直接读 OOXML，不用 ExcelJS：组委会模板由 openpyxl 生成（带批注、
+ * 关系用绝对路径、行内字符串），ExcelJS 4.4 读取时抛错。
+ */
+async function readTable(data: ArrayBuffer) {
+  const zip = await JSZip.loadAsync(data)
+  const part = async (path: string | undefined) => {
+    const file = path ? zip.file(path) : null
+    if (!file) return undefined
+    // ponytail: 解压前用 JSZip 内部记录的原始大小挡压缩炸弹；JSZip 改了内部字段时改为流式计数
+    const size = (file as unknown as { _data?: { uncompressedSize?: number } })._data
+    if ((size?.uncompressedSize ?? 0) > MAX_PART) throw new HttpError(413, '文件解压后过大。')
+    return xml.parse(await file.async('string')) as unknown
+  }
+  const rels = list(at(await part('xl/_rels/workbook.xml.rels'), 'Relationships', 'Relationship'))
+  // 关系目标可写相对 xl/ 的路径或以 / 开头的包内绝对路径
+  const target = (match: (rel: unknown) => boolean) => {
+    const path = at(rels.find(match), 'Target')
+    return typeof path === 'string'
+      ? new URL(path, 'http://package/xl/').pathname.slice(1)
+      : undefined
+  }
+  const sheet = at(await part('xl/workbook.xml'), 'workbook', 'sheets', 'sheet', 0, 'id')
+  const sheetData = at(
+    await part(target((rel) => at(rel, 'Id') === sheet)),
+    'worksheet',
+    'sheetData',
+  )
+  if (sheetData === undefined) throw new Error('没有工作表')
+  const shared = list(
+    at(
+      await part(target((rel) => String(at(rel, 'Type')).endsWith('/sharedStrings'))),
+      'sst',
+      'si',
+    ),
+  ).map(richText)
+  const table = new Map<number, string[]>()
+  for (const row of list(at(sheetData, 'row'))) {
+    const cells: string[] = []
+    let index = 0
+    for (const cell of list(at(row, 'c'))) {
+      const ref = at(cell, 'r')
+      index = typeof ref === 'string' ? column(ref) : index + 1
+      if (index > 2) continue
+      const type = at(cell, 't')
+      const value = text(at(cell, 'v'))
+      cells[index - 1] =
+        type === 's'
+          ? (shared[Number(value)] ?? '')
+          : type === 'inlineStr'
+            ? richText(at(cell, 'is'))
+            : type === 'b'
+              ? value === '1'
+                ? 'TRUE'
+                : 'FALSE'
+              : value
+    }
+    table.set(Number(at(row, 'r')) || Math.max(0, ...table.keys()) + 1, cells)
+  }
+  return table
+}
+
 /** 读取上传的验证集：首个工作表，第一行表头“问题”“预期答案”，其后每行一题；问题为空的行跳过，其余列忽略。 */
 export async function parseValset(data: ArrayBuffer) {
-  const book = new ExcelJS.Workbook()
+  let table: Map<number, string[]>
   try {
-    await book.xlsx.load(data)
-  } catch {
+    table = await readTable(data)
+  } catch (error) {
+    if (error instanceof HttpError) throw error
     throw new HttpError(400, '无法读取文件，请上传 .xlsx 格式的验证集（.xls 请先另存为 .xlsx）。')
   }
-  const sheet = book.worksheets[0]
-  const header = (column: number) => sheet?.getRow(1).getCell(column).text.replace(/\s/g, '') ?? ''
-  if (header(1) !== '问题' || !ANSWER_HEADER.test(header(2)))
+  const header = (index: number) => (table.get(1)?.[index] ?? '').replace(/\s/g, '')
+  if (header(0) !== '问题' || !ANSWER_HEADER.test(header(1)))
     throw new HttpError(400, '第一行须为表头“问题”“预期答案”，请按模板填写。')
   const rows: { question: string; expected: string }[] = []
-  sheet.eachRow((row, n) => {
-    const question = row.getCell(1).text.trim()
-    if (n === 1 || !question) return
+  for (const [n, cells] of [...table].sort((a, b) => a[0] - b[0])) {
+    const question = cells[0]?.trim() ?? ''
+    if (n === 1 || !question) continue
     if (question.length > MAX_QUESTION)
       throw new HttpError(400, `第 ${n} 行的问题超过 ${MAX_QUESTION} 字。`)
-    rows.push({ question, expected: row.getCell(2).text.trim() })
-  })
+    rows.push({ question, expected: cells[1]?.trim() ?? '' })
+  }
   if (!rows.length) throw new HttpError(400, '文件中没有问题。')
   if (rows.length > MAX_ROWS)
     throw new HttpError(400, `一次最多 ${MAX_ROWS} 条问题，文件中有 ${rows.length} 条。`)

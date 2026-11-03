@@ -41,7 +41,12 @@ test('parses the two-column upload: header variants, blank rows and extra column
   const rows = await parseValset(
     await xlsx([
       [' 问题 ', '预期答案（参考答案）', '备注'],
-      ['  第一问  ', ' 答一 ', '忽略'],
+      // 富文本单元格按各段文字相连读取
+      [
+        { richText: [{ text: '  第一' }, { text: '问  ', font: { bold: true } }] },
+        ' 答一 ',
+        '忽略',
+      ],
       [],
       ['', '没有问题的行跳过'],
       [2026, null],
@@ -65,6 +70,53 @@ test('parses the two-column upload: header variants, blank rows and extra column
     /最多 1000 条/,
   )
   await rejects(new TextEncoder().encode('问题,预期答案\n').buffer as ArrayBuffer, /\.xlsx/)
+})
+
+/** 组委会模板的结构（openpyxl 生成）：行内字符串写成数字字符引用、关系用包内绝对路径、带批注 */
+async function openpyxlStyle(rows: string[][]) {
+  const escape = (text: string) => Array.from(text, (char) => `&#${char.codePointAt(0)};`).join('')
+  const zip = new JSZip()
+  const rel = (type: string, target: string, id: string) =>
+    `<Relationship Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/${type}" Target="${target}" Id="${id}"/>`
+  zip.file(
+    'xl/workbook.xml',
+    '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheets><sheet xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" name="Sheet1" sheetId="1" state="visible" r:id="rId1"/></sheets></workbook>',
+  )
+  zip.file(
+    'xl/_rels/workbook.xml.rels',
+    `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${rel('worksheet', '/xl/worksheets/sheet1.xml', 'rId1')}</Relationships>`,
+  )
+  zip.file(
+    'xl/worksheets/_rels/sheet1.xml.rels',
+    `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${rel('comments', '/xl/comments/comment1.xml', 'comments')}</Relationships>`,
+  )
+  zip.file('xl/comments/comment1.xml', '<comments/>')
+  zip.file(
+    'xl/worksheets/sheet1.xml',
+    `<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>${rows
+      .map(
+        (cells, i) =>
+          `<row r="${i + 1}">${cells
+            .map(
+              (cell, j) =>
+                `<c r="${'AB'[j]}${i + 1}" t="inlineStr"><is><t>${escape(cell)}</t></is></c>`,
+            )
+            .join('')}</row>`,
+      )
+      .join('')}</sheetData></worksheet>`,
+  )
+  return zip.generateAsync({ type: 'arraybuffer' })
+}
+
+test('reads the organizers template layout that ExcelJS cannot open', async () => {
+  const data = await openpyxlStyle([
+    ['问题', '预期答案'],
+    ['图书馆周末开放时间是几点到几点？', '周六、周日 9:00—21:00。'],
+  ])
+  await assert.rejects(new ExcelJS.Workbook().xlsx.load(data), 'ExcelJS 4.4 fails on this layout')
+  assert.deepEqual(await parseValset(data), [
+    { question: '图书馆周末开放时间是几点到几点？', expected: '周六、周日 9:00—21:00。' },
+  ])
 })
 
 test('plain text drops Markdown syntax, link targets and citation numbers', () => {
