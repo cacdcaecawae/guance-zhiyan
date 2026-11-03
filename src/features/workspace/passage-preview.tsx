@@ -20,7 +20,7 @@ export function PassagePreview({ id, onClose }: { id: string; onClose?: () => vo
       >
         <span className="min-w-0 flex-1 truncate text-ui-caption font-medium">原文片段</span>
         {passage && (
-          <Button asChild variant="outline" size="sm" className="rounded-md">
+          <Button asChild variant="outline" size="sm">
             {/* 被替代的旧片段不在现行版本里，只打开整篇，不定位 */}
             {/* 带上当前会话地址，文献页的返回链接回到这里而不是文献库列表 */}
             <Link

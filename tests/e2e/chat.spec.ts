@@ -72,22 +72,24 @@ test('同一列表按平台切换 DeepSeek 模型，刷新保留，沿用同一�
       .getByRole('option', { name, exact: true })
       .click()
   }
-  await expect(model).toContainText('DeepSeek V4.1 Flash · DeepSeek 官方')
+  // 触发器只显示模型名，平台名在读屏名称里
+  await expect(model).toHaveText('DeepSeek V4.1 Flash')
+  await expect(model).toHaveAccessibleName('模型：DeepSeek V4.1 Flash · DeepSeek 官方')
   await pick('千问 AI 平台', 'DeepSeek V4 Pro（0813）')
-  await expect(model).toContainText('DeepSeek V4 Pro（0813） · 千问 AI 平台')
+  await expect(model).toHaveAccessibleName('模型：DeepSeek V4 Pro（0813） · 千问 AI 平台')
   await page.getByRole('textbox', { name: '研究问题' }).fill('你好')
   await page.getByRole('button', { name: '发送' }).click()
   await expect(page.getByRole('heading', { name: '测试回答' })).toBeVisible()
   const url = page.url()
   await page.reload()
-  await expect(model).toContainText('DeepSeek V4 Pro（0813） · 千问 AI 平台')
+  await expect(model).toHaveAccessibleName('模型：DeepSeek V4 Pro（0813） · 千问 AI 平台')
   await pick('DeepSeek 官方', 'DeepSeek V4 Pro')
   await page.getByRole('textbox', { name: '研究问题' }).fill('继续')
   await page.getByRole('button', { name: '发送' }).click()
   await expect(page.getByRole('article', { name: '回答' })).toHaveCount(2)
   await expect(page).toHaveURL(url)
   await page.reload()
-  await expect(model).toContainText('DeepSeek V4 Pro · DeepSeek 官方')
+  await expect(model).toHaveAccessibleName('模型：DeepSeek V4 Pro · DeepSeek 官方')
 })
 
 test('真实文件工具、执行追踪和 Word 下载；其他用户不能访问', async ({ page, browser }) => {

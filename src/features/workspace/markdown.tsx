@@ -1,6 +1,7 @@
 import { createContext, useContext, type ComponentProps } from 'react'
 import ReactMarkdown, { type Components, type ExtraProps } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+import { Tooltip } from '@/components/ui/tooltip'
 import { OpenPassage, passagePath } from './citations'
 
 // U+2060 keeps a citation badge or footnote marker on the line of the word it follows; an
@@ -36,30 +37,33 @@ function Anchor({ href, children, node }: ComponentProps<'a'> & ExtraProps) {
     const badge = (
       <>
         {WORD_JOINER}
-        <a
-          href={href}
-          target="_blank"
-          rel="noopener noreferrer"
-          data-passage={id}
-          aria-label={`原文 ${number}`}
-          title={`${label?.[1] ? `文献编号 ${label[1]}，` : ''}${openPassage ? '查看原文' : '在新标签页打开原文'}`}
-          onClick={(event) => {
-            if (
-              !openPassage ||
-              event.button !== 0 ||
-              event.ctrlKey ||
-              event.metaKey ||
-              event.shiftKey ||
-              event.altKey
-            )
-              return
-            event.preventDefault()
-            openPassage(id, event.currentTarget)
-          }}
-          className="mx-0.5 rounded-sm bg-tag px-1.5 py-0.5 align-super text-ui-xs leading-none font-medium text-brand no-underline outline-none transition-colors hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring"
+        <Tooltip
+          label={`${label?.[1] ? `文献编号 ${label[1]}，` : ''}${openPassage ? '查看原文' : '在新标签页打开原文'}`}
         >
-          {number}
-        </a>
+          <a
+            href={href}
+            target="_blank"
+            rel="noopener noreferrer"
+            data-passage={id}
+            aria-label={`原文 ${number}`}
+            onClick={(event) => {
+              if (
+                !openPassage ||
+                event.button !== 0 ||
+                event.ctrlKey ||
+                event.metaKey ||
+                event.shiftKey ||
+                event.altKey
+              )
+                return
+              event.preventDefault()
+              openPassage(id, event.currentTarget)
+            }}
+            className="mx-0.5 rounded-sm bg-tag px-1.5 py-0.5 align-super text-ui-xs leading-none font-medium text-brand no-underline outline-none transition-colors hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            {number}
+          </a>
+        </Tooltip>
       </>
     )
     // A descriptive label stays as text before the number.

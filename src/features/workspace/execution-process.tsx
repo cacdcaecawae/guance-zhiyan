@@ -67,7 +67,7 @@ export function ToolRow({ part }: { part: Extract<AnswerPart, { type: 'tool' }> 
           aria-hidden
         />
       </summary>
-      <div className="mb-2 ml-5 min-w-0 rounded-md bg-surface-hover p-3 text-ui-caption">
+      <div className="mb-2 ml-5 min-w-0 rounded-lg bg-surface-hover p-3 text-ui-caption">
         <p className="mb-1 text-ui-sm font-medium text-foreground-subtle">调用参数</p>
         <pre className="max-h-48 overflow-auto font-mono text-ui-sm whitespace-pre-wrap text-foreground wrap-anywhere">
           {part.input}

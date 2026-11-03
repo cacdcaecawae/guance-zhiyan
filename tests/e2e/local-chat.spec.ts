@@ -255,7 +255,7 @@ for (const supplier of ['deepseek-official', 'qianwen']) {
           .getByRole('group', { name: platform })
           .getByRole('option', { name: 'DeepSeek V4.1 Flash', exact: true })
           .click()
-        await expect(model).toContainText(`DeepSeek V4.1 Flash · ${platform}`)
+        await expect(model).toHaveAccessibleName(`模型：DeepSeek V4.1 Flash · ${platform}`)
         await box.fill('你好')
         await box.press('Enter')
         await expect(page.getByRole('article', { name: '回答' })).toContainText('本机协议测试回答')

@@ -23,6 +23,7 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { ResizeHandle } from '@/components/ui/resize-handle'
 import { Textarea } from '@/components/ui/textarea'
+import { Tooltip } from '@/components/ui/tooltip'
 import { readPref, writePref } from '@/lib/storage'
 
 const HEIGHT_KEY = 'gczy.composer-height'
@@ -45,7 +46,7 @@ function Thumbnail({ file }: { file: File }) {
     <img
       ref={attach}
       alt={file.name}
-      className="size-14 rounded-lg border border-card-border bg-card object-cover"
+      className="size-14 rounded-xl border border-card-border bg-card object-cover"
     />
   )
 }
@@ -134,25 +135,26 @@ export function Composer({ onSubmit, busy = false, onStop, children, autoFocus }
           e.preventDefault()
           addImages(e.dataTransfer.files)
         }}
-        className="group/form relative flex flex-col gap-2 rounded-2xl border border-input-border bg-input p-2 shadow-sm transition-colors hover:border-input-border-hover focus-within:border-input-border-focused"
+        className="group/form relative flex flex-col gap-2 rounded-3xl border border-border bg-input p-2 shadow-soft transition-[border-color,box-shadow] hover:border-border-hover focus-within:border-brand/40 focus-within:shadow-soft-focus"
       >
         {images.length > 0 && (
-          <ul aria-label="待发送图片" className="flex flex-wrap gap-2 px-1 pt-1">
+          <ul aria-label="待发送图片" className="flex flex-wrap gap-3 px-2 pt-2">
             {images.map((file, index) => (
               <li key={index} className="relative">
                 <Thumbnail file={file} />
-                <button
-                  type="button"
-                  aria-label={`移除图片 ${file.name}`}
-                  title="移除"
-                  onClick={() => {
-                    setImages((current) => current.filter((item) => item !== file))
-                    box.current?.focus()
-                  }}
-                  className="absolute top-0.5 right-0.5 flex size-5 items-center justify-center rounded-sm border border-popover-border bg-popover text-foreground-subtle outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
-                >
-                  <XIcon className="size-3" />
-                </button>
+                <Tooltip label="移除图片">
+                  <button
+                    type="button"
+                    aria-label={`移除图片 ${file.name}`}
+                    onClick={() => {
+                      setImages((current) => current.filter((item) => item !== file))
+                      box.current?.focus()
+                    }}
+                    className="absolute -top-1.5 -right-1.5 flex size-5 items-center justify-center rounded-full border border-popover-border bg-popover text-foreground-subtle shadow-sm outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+                  >
+                    <XIcon className="size-3" />
+                  </button>
+                </Tooltip>
               </li>
             ))}
           </ul>
@@ -160,18 +162,19 @@ export function Composer({ onSubmit, busy = false, onStop, children, autoFocus }
         <div className="flex items-end gap-2">
           {/* 参照 Claude 的“+”入口；文件附件尚未上线，菜单里明确写“敬请期待” */}
           <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon"
-                aria-label="添加图片或文件"
-                title="添加图片或文件"
-                className="size-8 shrink-0 rounded-lg text-foreground-subtle data-[state=open]:bg-hover data-[state=open]:text-foreground"
-              >
-                <PlusIcon />
-              </Button>
-            </DropdownMenuTrigger>
+            <Tooltip label="添加图片或文件">
+              <DropdownMenuTrigger asChild>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  aria-label="添加图片或文件"
+                  className="shrink-0 rounded-full aria-expanded:bg-hover aria-expanded:text-foreground"
+                >
+                  <PlusIcon />
+                </Button>
+              </DropdownMenuTrigger>
+            </Tooltip>
             <DropdownMenuContent side="top" align="start" className="min-w-44">
               <DropdownMenuItem onSelect={() => picker.current?.click()}>
                 <ImagePlusIcon />
@@ -231,11 +234,11 @@ export function Composer({ onSubmit, busy = false, onStop, children, autoFocus }
             max={HEIGHT.max}
             onChange={setHeight}
             onCommit={(next) => writePref(HEIGHT_KEY, String(next))}
-            className="group/grip absolute inset-x-0 -top-1.5 flex h-3 justify-center rounded-t-2xl"
+            className="group/grip absolute inset-x-6 -top-1.5 flex h-3 justify-center rounded-full"
           />
           <span
             aria-hidden
-            className="pointer-events-none absolute -top-0.5 left-1/2 h-1 w-8 -translate-x-1/2 rounded-sm bg-border-hover opacity-0 transition-opacity group-hover/form:opacity-100"
+            className="pointer-events-none absolute -top-0.5 left-1/2 h-1 w-8 -translate-x-1/2 rounded-full bg-border-hover opacity-0 transition-opacity group-hover/form:opacity-100"
           />
           {onStop ? (
             <Button
@@ -244,21 +247,23 @@ export function Composer({ onSubmit, busy = false, onStop, children, autoFocus }
               size="sm"
               aria-label="停止生成"
               onClick={onStop}
-              className="h-8 shrink-0 rounded-lg border-brand/50 text-brand hover:text-brand"
+              className="h-8 shrink-0 rounded-full border-brand/50 px-3 text-brand hover:text-brand"
             >
               <SquareIcon className="size-3 fill-current" />
               停止
             </Button>
           ) : (
-            <Button
-              type="submit"
-              size="icon"
-              aria-label="发送"
-              aria-disabled={!canSubmit}
-              className="size-8 shrink-0 rounded-lg aria-disabled:bg-tag aria-disabled:text-foreground-subtlest aria-disabled:opacity-100"
-            >
-              <SendHorizontalIcon />
-            </Button>
+            <Tooltip label="发送">
+              <Button
+                type="submit"
+                size="icon"
+                aria-label="发送"
+                aria-disabled={!canSubmit}
+                className="shrink-0 rounded-full aria-disabled:bg-tag aria-disabled:text-foreground-subtlest aria-disabled:opacity-100"
+              >
+                <SendHorizontalIcon />
+              </Button>
+            </Tooltip>
           )}
         </div>
       </form>

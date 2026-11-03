@@ -62,7 +62,7 @@ function AuthenticationBoundary({ children }: { children: ReactNode }) {
   if (user) return children
   return (
     <main className="flex min-h-dvh items-center justify-center bg-background p-6">
-      <section className="flex w-full max-w-md flex-col gap-4 rounded-xl border border-border bg-card p-6">
+      <section className="flex w-full max-w-md flex-col gap-4 rounded-2xl border border-border bg-card p-6 sm:p-8">
         <h1 className="flex items-center gap-2 text-ui-lg font-semibold">
           <SlipsMark size={28} />
           管策智研
@@ -86,7 +86,9 @@ function AuthenticationBoundary({ children }: { children: ReactNode }) {
             </Button>
           </>
         )}
-        <ThemeToggle />
+        <div className="flex justify-center border-t border-border pt-4">
+          <ThemeToggle />
+        </div>
       </section>
     </main>
   )

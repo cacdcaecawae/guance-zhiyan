@@ -4,7 +4,7 @@ import type { ComponentProps } from 'react'
 import { cn } from '@/lib/cn'
 
 // shadcn/ui Select，绑定本项目 tokens。与上游差异：无入场动画（DESIGN：不做装饰性动效）；
-// 默认 popper 定位、向上展开，适合贴底的输入区；触发器是无边框小控件（h-7 rounded-md）。
+// 默认 popper 定位、向上展开，适合贴底的输入区；触发器是无边框小控件（h-7 rounded-lg）。弹层与选项圆角同 DropdownMenu。
 
 const Select = SelectPrimitive.Root
 const SelectGroup = SelectPrimitive.Group
@@ -21,7 +21,7 @@ function SelectTrigger({
   return (
     <SelectPrimitive.Trigger
       className={cn(
-        'flex h-7 max-w-full min-w-0 items-center gap-1 rounded-md px-2 text-ui-caption text-foreground-subtle outline-none transition-colors hover:bg-hover hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50 data-[state=open]:bg-hover data-[state=open]:text-foreground',
+        'flex h-7 max-w-full min-w-0 items-center gap-1 rounded-lg px-2 text-ui-caption text-foreground-subtle outline-none transition-colors hover:bg-hover hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50 data-[state=open]:bg-hover data-[state=open]:text-foreground',
         className,
       )}
       {...props}
@@ -51,7 +51,7 @@ function SelectContent({
         align={align}
         sideOffset={sideOffset}
         className={cn(
-          'relative z-50 max-h-(--radix-select-content-available-height) min-w-(--radix-select-trigger-width) overflow-hidden rounded-lg border border-popover-border bg-popover text-foreground shadow-md',
+          'relative z-50 max-h-(--radix-select-content-available-height) min-w-(--radix-select-trigger-width) overflow-hidden rounded-xl border border-popover-border bg-popover text-foreground shadow-md',
           className,
         )}
         {...props}
@@ -87,7 +87,7 @@ function SelectItem({
   return (
     <SelectPrimitive.Item
       className={cn(
-        'relative flex w-full cursor-default items-center rounded-md py-1.5 pr-7 pl-2 text-ui-caption outline-none select-none data-highlighted:bg-selected data-disabled:pointer-events-none data-disabled:opacity-50',
+        'relative flex w-full cursor-default items-center rounded-lg py-1.5 pr-7 pl-2 text-ui-caption outline-none select-none data-highlighted:bg-selected data-disabled:pointer-events-none data-disabled:opacity-50',
         className,
       )}
       {...props}

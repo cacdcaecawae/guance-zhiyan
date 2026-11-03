@@ -59,7 +59,7 @@ export function Trajectory({ entries }: { entries: TraceEntry[] }) {
               type="button"
               aria-pressed={action ? undefined : value}
               onClick={() => set(!value)}
-              className={`flex h-7 items-center gap-1 rounded-md px-2.5 text-ui-caption outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring ${value && !action ? 'bg-selected font-medium text-foreground' : 'text-foreground-subtle hover:bg-hover hover:text-foreground'}`}
+              className={`flex h-7 items-center gap-1 rounded-lg px-2.5 text-ui-caption outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring ${value && !action ? 'bg-selected font-medium text-foreground' : 'text-foreground-subtle hover:bg-hover hover:text-foreground'}`}
             >
               <Icon className="size-3.5" aria-hidden />
               {label}
@@ -151,7 +151,7 @@ export function Trajectory({ entries }: { entries: TraceEntry[] }) {
                           aria-hidden
                         />
                       </summary>
-                      <div className="mx-4 mb-3 rounded-md bg-surface-hover p-3 md:ml-10">
+                      <div className="mx-4 mb-3 rounded-lg bg-surface-hover p-3 md:ml-10">
                         <p className="mb-2 text-ui-sm text-foreground-subtlest">
                           {entry.label} · {new Date(entry.time).toLocaleString('zh-CN')}{' '}
                           {entry.step !== undefined ? `· 步骤 ${entry.step}` : ''}

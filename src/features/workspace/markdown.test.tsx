@@ -1,4 +1,5 @@
 import { fireEvent, render, screen } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { expect, it, vi } from 'vitest'
 import type { AssistantMessage } from '@/types'
 import { citationOrder, OpenPassage } from './citations'
@@ -73,12 +74,13 @@ it('描述性标签保留为文字并附编号；未在正文中出现的片段�
   expect(screen.getByRole('link', { name: '原文 1' })).toHaveAttribute('href', path)
 })
 
-it('检索结果 cite 的“planid 文献编号·原文”只显示编号，悬停提示文献编号', () => {
+it('检索结果 cite 的“planid 文献编号·原文”只显示编号，悬停提示文献编号', async () => {
   const path = '/api/library/passages/01234567-89ab-5def-a123-456789abcdef'
   render(checked(`养老服务：“原文摘录”[planid 33236·原文](${path})`))
   const link = screen.getByRole('link', { name: '原文 1' })
   expect(link).toHaveTextContent(/^1$/)
-  expect(link).toHaveAttribute('title', '文献编号 33236，在新标签页打开原文')
+  await userEvent.hover(link)
+  expect(await screen.findByRole('tooltip')).toHaveTextContent('文献编号 33236，在新标签页打开原文')
   expect(screen.queryByText(/planid/)).toBeNull()
 })
 
@@ -241,7 +243,7 @@ it('脚注不做页内跳转：正文标记显示为“注n”，不显示返回
   ])
 })
 
-it('工作区里点击引用编号在侧栏打开原文，组合键点击仍交给浏览器', () => {
+it('工作区里点击引用编号在侧栏打开原文，组合键点击仍交给浏览器', async () => {
   const id = '01234567-89ab-5def-a123-456789abcdef'
   const text = `正文[planid 2561·原文](/api/library/passages/${id.toUpperCase()})`
   const open = vi.fn()
@@ -251,7 +253,8 @@ it('工作区里点击引用编号在侧栏打开原文，组合键点击仍交�
     </OpenPassage>,
   )
   const badge = screen.getByRole('link', { name: '原文 1' })
-  expect(badge).toHaveAttribute('title', '文献编号 2561，查看原文')
+  await userEvent.hover(badge)
+  expect(await screen.findByRole('tooltip')).toHaveTextContent('文献编号 2561，查看原文')
   // fireEvent returns false when the default (navigation) was prevented
   expect(fireEvent.click(badge)).toBe(false)
   expect(open).toHaveBeenCalledExactlyOnceWith(id, badge)
