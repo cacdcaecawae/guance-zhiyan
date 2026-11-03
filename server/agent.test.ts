@@ -1059,7 +1059,12 @@ test('HTTP: rename, pin and delete sessions; deletion clears history and files',
     // 重命名经实时流推送：客户端只从这条路径更新当前会话的标题
     assert.equal((await call('PATCH', `/api/sessions/${first}`, { title: '第一稿' })).status, 200)
     assert.match((await reader.read()).value!, /"path":\["title"\]/)
-    assert.equal((await call('DELETE', `/api/sessions/${first}`)).status, 200)
+    // 校园网会断开 DELETE，浏览器用 POST 加请求头删除
+    const removed = await fetch(`${base}/api/sessions/${first}`, {
+      method: 'POST',
+      headers: { 'x-test-user': 'alice', 'X-HTTP-Method-Override': 'DELETE' },
+    })
+    assert.equal(removed.status, 200)
     let received = ''
     for (let chunk = await reader.read(); !chunk.done; chunk = await reader.read())
       received += chunk.value

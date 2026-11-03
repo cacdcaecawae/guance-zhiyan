@@ -11,6 +11,10 @@ import {
 } from './research'
 import type { Session } from '@/types'
 
+// 浏览器以 POST 加 X-HTTP-Method-Override 删除（校园网会断开 DELETE）
+const removing = (init?: RequestInit) =>
+  (init?.headers as Record<string, string> | undefined)?.['X-HTTP-Method-Override'] === 'DELETE'
+
 it('重新生成只提交当前尝试编号，不重新提交问题或图片', async () => {
   const send = vi.fn().mockResolvedValue(Response.json({}))
   vi.stubGlobal('fetch', send)
@@ -132,13 +136,14 @@ it('删除：会话已删但清理失败时返回提示；会话仍在时报错�
   vi.stubGlobal(
     'fetch',
     vi.fn(async (path: string, init?: RequestInit) => {
-      if (init?.method === 'POST') return Response.json({ id: server.shift(), title: '新研究' })
+      if (init?.method === 'POST' && !removing(init))
+        return Response.json({ id: server.shift(), title: '新研究' })
       if (path === '/api/sessions') return Response.json([{ id: 'kept', title: '新研究' }])
       if (path === '/api/sessions/kept')
-        return init?.method === 'DELETE'
+        return removing(init)
           ? Response.json({ error: '沙箱容器暂时无法回收' }, { status: 503 })
           : Response.json({})
-      return init?.method === 'DELETE'
+      return removing(init)
         ? Response.json({ error: '会话已删除，但未能完全清理' }, { status: 500 })
         : Response.json({ error: '没有找到会话。' }, { status: 404 })
     }),
@@ -166,7 +171,7 @@ it('置顶后的列表读取迟于其他会话的删除时，丢弃过时列表�
         return new Promise<Response>((resolve) => lists.push(resolve))
       if (init?.method === 'PATCH')
         return Promise.resolve(Response.json({ id: 'pin', title: '置顶', pinned: true }))
-      if (init?.method === 'POST')
+      if (init?.method === 'POST' && !removing(init))
         return Promise.resolve(Response.json({ id: 'removed', title: '删除' }))
       return Promise.resolve(Response.json({}))
     }),
@@ -199,7 +204,7 @@ it('同一会话连续重命名按提交顺序发送，后提交的标题不被�
   vi.stubGlobal(
     'fetch',
     vi.fn((_path: string, init?: RequestInit) => {
-      if (init?.method === 'POST')
+      if (init?.method === 'POST' && !removing(init))
         return Promise.resolve(Response.json({ id: 'order', title: '原名' }))
       const { title } = JSON.parse(String(init?.body)) as { title: string }
       return new Promise<Response>((resolve) => patches.push({ title, resolve }))
@@ -254,7 +259,8 @@ it('重命名后继续提问：标题只经实时流更新，旧标题是新标�
   vi.stubGlobal(
     'fetch',
     vi.fn(async (path: string, init?: RequestInit) => {
-      if (init?.method === 'POST') return Response.json({ id: 'renamed', title: '研究' })
+      if (init?.method === 'POST' && !removing(init))
+        return Response.json({ id: 'renamed', title: '研究' })
       if (init?.method === 'PATCH')
         return Response.json({ id: 'renamed', title: '研究补充', pinned: false })
       return Response.json(path === '/api/sessions/renamed' ? snapshot : [])
@@ -292,7 +298,7 @@ it('新建确认迟于删除到达时，不把已删除的记录插回列表，�
   vi.stubGlobal(
     'fetch',
     vi.fn((_path: string, init?: RequestInit) =>
-      init?.method === 'POST'
+      init?.method === 'POST' && !removing(init)
         ? new Promise<Response>((resolve) => (respond = resolve))
         : Promise.resolve(Response.json({})),
     ),

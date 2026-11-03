@@ -28,7 +28,7 @@
 | `GET /api/valset/jobs/{id}`         | 任务进度：`state`（`running` / `done` / `cancelled`）、`model`，以及每题 `question`、`status`、`running`、`seconds`、`sessionId`、`error` |
 | `GET /api/valset/jobs/{id}/export`  | 下载结果 `.xlsx`；任务仍在执行时返回 409                                                                                                  |
 | `POST /api/valset/jobs/{id}/cancel` | 取消任务，返回任务                                                                                                                        |
-| `DELETE /api/valset/jobs/{id}`      | 删除任务及其各题会话；任务仍在执行时返回 409                                                                                              |
+| `DELETE /api/valset/jobs/{id}`      | 删除任务及其各题会话；任务仍在执行时返回 409。校园网会断开 DELETE 请求，可改用 `POST` 并加请求头 `X-HTTP-Method-Override: DELETE`         |
 | `POST /api/valset/ask`              | JSON `{"question": "…"}`；同步作答一题，返回 `{"answer", "seconds", "status", "error", "sessionId"}`，`answer` 为纯文本，失败时为空       |
 | `GET /api/valset/template`          | 下载上传模板                                                                                                                              |
 

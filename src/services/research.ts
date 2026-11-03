@@ -54,12 +54,16 @@ const offline =
 const send = (url: string, init?: RequestInit) => fetch(url, init).catch(offline(init?.signal))
 
 export async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  // 校园网的安全设备会断开 DELETE 请求，改用 POST 加请求头，后端按 DELETE 处理
+  const remove = init?.method === 'DELETE'
   const response = await send(`/api${path}`, {
     credentials: 'same-origin',
     ...init,
+    ...(remove && { method: 'POST' }),
     // 上传文件时由浏览器生成带分隔符的 multipart 类型
     headers: {
       ...(!(init?.body instanceof FormData) && { 'Content-Type': 'application/json' }),
+      ...(remove && { 'X-HTTP-Method-Override': 'DELETE' }),
       ...init?.headers,
     },
   })
