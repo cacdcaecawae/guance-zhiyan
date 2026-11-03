@@ -10,6 +10,13 @@ export interface Artifact {
   name: string
   format: string
   size: number
+  /** 系统生成的 Office 文件保留了生成时的原文，可在线预览 */
+  preview?: boolean
+}
+/** Office 文件的预览原文：Word、演示文稿为 Markdown，Excel 为 CSV */
+export interface ArtifactPreview {
+  kind: 'markdown' | 'csv'
+  text: string
 }
 export type AnswerPart =
   | { id: string; type: 'text'; text: string; step: number }

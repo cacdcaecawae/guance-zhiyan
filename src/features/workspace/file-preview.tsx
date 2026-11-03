@@ -4,8 +4,8 @@ import { Button } from '@/components/ui/button'
 import { ResizeHandle } from '@/components/ui/resize-handle'
 import { parseCsv } from '@/lib/csv'
 import { readPref, writePref } from '@/lib/storage'
-import { artifactUrl, readArtifactText } from '@/services/research'
-import type { Artifact } from '@/types'
+import { artifactUrl, readArtifactPreview, readArtifactText } from '@/services/research'
+import type { Artifact, ArtifactPreview } from '@/types'
 import { Markdown } from './markdown'
 
 const TEXT_FORMATS = new Set(['md', 'markdown', 'csv', 'txt', 'json'])
@@ -15,8 +15,9 @@ const MAX_TABLE_COLUMNS = 50
 // 预览内容来自模型或沙箱，不可信：限制渲染规模，避免巨大的表格或 Markdown 卡死页面
 const MAX_MARKDOWN_CHARS = 100_000
 
+// 系统生成的 Office 文件预览生成时保留的原文（不超过 200 KB），外部文件只能下载
 const canPreview = (file: Artifact) =>
-  TEXT_FORMATS.has(file.format) && file.size <= MAX_PREVIEW_BYTES
+  file.preview || (TEXT_FORMATS.has(file.format) && file.size <= MAX_PREVIEW_BYTES)
 
 /** 朱红格式块：会话文件卡片与预览空状态共用。 */
 export function FormatBlock({
@@ -37,17 +38,29 @@ export function FormatBlock({
   )
 }
 
+type Content = { kind: ArtifactPreview['kind'] | 'text'; text: string }
 type Loaded =
-  { status: 'loading' } | { status: 'error'; message: string } | { status: 'done'; text: string }
+  { status: 'loading' } | { status: 'error'; message: string } | ({ status: 'done' } & Content)
 
 function Body({ file }: { file: Artifact }) {
-  const { id } = file
+  const { id, format, preview } = file
   const [loaded, setLoaded] = useState<Loaded>({ status: 'loading' })
   const [attempt, setAttempt] = useState(0)
   useEffect(() => {
     const abort = new AbortController()
-    readArtifactText({ id }, abort.signal).then(
-      (text) => setLoaded({ status: 'done', text }),
+    const content: Promise<Content> = preview
+      ? readArtifactPreview({ id }, abort.signal)
+      : readArtifactText({ id }, abort.signal).then((text) => ({
+          kind:
+            format === 'csv'
+              ? 'csv'
+              : format === 'md' || format === 'markdown'
+                ? 'markdown'
+                : 'text',
+          text,
+        }))
+    content.then(
+      (done) => setLoaded({ status: 'done', ...done }),
       (failure: unknown) => {
         if (!abort.signal.aborted)
           setLoaded({
@@ -57,7 +70,7 @@ function Body({ file }: { file: Artifact }) {
       },
     )
     return () => abort.abort()
-  }, [id, attempt])
+  }, [id, format, preview, attempt])
 
   if (loaded.status === 'loading')
     return (
@@ -84,7 +97,7 @@ function Body({ file }: { file: Artifact }) {
         </Button>
       </div>
     )
-  if (file.format === 'csv') {
+  if (loaded.kind === 'csv') {
     const [head = [], ...rows] = parseCsv(loaded.text)
     const columns = Math.max(head.length, ...rows.slice(0, MAX_TABLE_ROWS).map((row) => row.length))
     const clipped = rows.length > MAX_TABLE_ROWS || columns > MAX_TABLE_COLUMNS
@@ -117,7 +130,7 @@ function Body({ file }: { file: Artifact }) {
       </div>
     )
   }
-  if (file.format === 'md' || file.format === 'markdown')
+  if (loaded.kind === 'markdown')
     return (
       <div className="font-serif text-ui-prose">
         <Markdown text={loaded.text.slice(0, MAX_MARKDOWN_CHARS)} />

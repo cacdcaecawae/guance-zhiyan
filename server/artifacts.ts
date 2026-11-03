@@ -165,6 +165,22 @@ const fitColumns = (needs: number[], total: number) => {
   return widths.map((width) => (width * total) / sum)
 }
 
+/** 每格加引号的 CSV，与前端 parseCsv 互逆；guard 时给以 = + @ - 开头的文字加 '，免得表格软件当公式执行 */
+const csv = (rows: (string | number)[][], guard: boolean) =>
+  rows
+    .map((row) =>
+      row
+        .map((cell) => {
+          const text =
+            guard && typeof cell === 'string' && /^[\s]*[=+@-]/u.test(cell)
+              ? `'${cell}`
+              : String(cell)
+          return `"${text.replaceAll('"', '""')}"`
+        })
+        .join(','),
+    )
+    .join('\r\n')
+
 // PowerPoint 的段落层级最多 9 级（0–8），自动编号起始号与 Word 一样最大 32767
 const MAX_LEVEL = 8
 const MAX_START = 32767
@@ -682,6 +698,8 @@ export class Artifacts {
         `FILE_INVALID_${format.toUpperCase()}_CONTENT`,
       )
     let bytes: Buffer
+    // Office 文件保留生成时的原文供在线预览：docx、pptx 为 Markdown，xlsx 为 CSV
+    let preview = format === 'docx' || format === 'pptx' ? content : undefined
     if (format === 'docx') bytes = await docx(content, title)
     else if (format === 'pptx') {
       // 与 Word 同样解析 Markdown：每个标题开一页，其下文字行与表格归该页，列表项显示项目符号或编号，
@@ -1092,30 +1110,13 @@ export class Artifacts {
           }
         }
         bytes = Buffer.from(await book.xlsx.writeBuffer())
-      } else {
-        // Spreadsheet applications may execute formula-like CSV text.
-        bytes = Buffer.from(
-          '\uFEFF' +
-            rows
-              .map((row) =>
-                (row as (string | number)[])
-                  .map((cell) => {
-                    const text =
-                      typeof cell === 'string' && /^[\s]*[=+@-]/u.test(cell)
-                        ? `'${cell}`
-                        : String(cell)
-                    return `"${text.replaceAll('"', '""')}"`
-                  })
-                  .join(','),
-              )
-              .join('\r\n'),
-          'utf8',
-        )
-      }
+        // 预览用的 CSV 保留单元格原值，与 Excel 中显示的一致
+        preview = csv(rows, false)
+      } else bytes = Buffer.from('\uFEFF' + csv(rows, true), 'utf8')
     } else bytes = Buffer.from(content)
     signal?.throwIfAborted()
     const filename = title + '.' + format
-    return this.save(userId, sessionId, filename, bytes, signal, true)
+    return this.save(userId, sessionId, filename, bytes, signal, true, preview)
   }
   async save(
     userId: string,
@@ -1124,6 +1125,7 @@ export class Artifacts {
     bytes: Buffer,
     signal?: AbortSignal,
     generated = false,
+    preview?: string,
   ) {
     this.store.session(userId, sessionId)
     if (
@@ -1148,14 +1150,15 @@ export class Artifacts {
       await writeFile(this.path(artifact.id), bytes, { flag: 'wx', mode: 0o600, signal })
       signal?.throwIfAborted()
       // Check after the await: concurrent generations cannot bypass the quota.
+      // 预览原文存在数据库里，同样计入配额
       const used = this.store.db
         .prepare(
-          `SELECT COALESCE(SUM(a.size), 0) AS size FROM artifacts a JOIN sessions s ON a.session_id=s.id WHERE s.user_id=?`,
+          `SELECT COALESCE(SUM(a.size + COALESCE(LENGTH(CAST(a.preview AS BLOB)), 0)), 0) AS size FROM artifacts a JOIN sessions s ON a.session_id=s.id WHERE s.user_id=?`,
         )
         .get(userId) as { size: number }
-      if (used.size + bytes.length > MAX_USER_BYTES)
+      if (used.size + bytes.length + Buffer.byteLength(preview ?? '') > MAX_USER_BYTES)
         throw new HarnessError('文件空间已达上限，请联系管理员。', 'FILE_QUOTA')
-      this.store.addArtifact(userId, artifact, generated)
+      this.store.addArtifact(userId, artifact, generated, preview)
     } catch (error) {
       await unlink(this.path(artifact.id)).catch(() => {})
       throw error

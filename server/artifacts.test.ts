@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import ExcelJS from 'exceljs'
 import JSZip from 'jszip'
+import { parseCsv } from '../src/lib/csv.ts'
 import { Artifacts } from './artifacts.ts'
 import { Store } from './store.ts'
 import { toolError } from './view.ts'
@@ -453,6 +454,68 @@ test('spreadsheets also accept a Markdown table or one JSON array per line', asy
       '["序号","名称"]\n\n["1","甲"]\n',
     )
     assert.equal(await files.read(user.id, session.id, csv.id), '"序号","名称"\r\n"1","甲"')
+  } finally {
+    store.close()
+    await rm(root, { recursive: true })
+  }
+})
+
+test('generated Office files keep their source for preview: Markdown for Word and decks, CSV for spreadsheets', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'gczy-preview-test-'))
+  const store = new Store(root)
+  try {
+    const files = new Artifacts(store)
+    const user = store.user('test:preview', 'Test')
+    const session = store.create(user.id)
+    const markdown =
+      '# 报告\n\n见[planid 1·原文](/api/library/passages/00000000-0000-4000-8000-000000000000)。'
+    const docx = await files.create(user.id, session.id, '报告', 'docx', markdown)
+    const pptx = await files.create(user.id, session.id, '汇报', 'pptx', markdown)
+    const rows = [
+      ['指标', '说明'],
+      ['=1+1', '含,逗号与"引号"\n换行'],
+      [12, ''],
+    ]
+    const xlsx = await files.create(user.id, session.id, '表格', 'xlsx', JSON.stringify(rows))
+    const md = await files.create(user.id, session.id, '笔记', 'md', markdown)
+    const external = await files.save(
+      user.id,
+      session.id,
+      '外部.docx',
+      await readFile(files.path(docx.id)),
+    )
+    assert.deepEqual(store.preview(user.id, docx.id), { kind: 'markdown', text: markdown })
+    assert.deepEqual(store.preview(user.id, pptx.id), { kind: 'markdown', text: markdown })
+    const table = store.preview(user.id, xlsx.id)
+    assert.equal(table.kind, 'csv')
+    // 单元格保留原值（Excel 里公式样的文字也是文本），前端 parseCsv 原样读回
+    assert.deepEqual(
+      parseCsv(table.text),
+      rows.map((row) => row.map(String)),
+    )
+    assert.deepEqual(
+      store.artifacts(user.id, session.id).map((file) => [file.name, file.preview]),
+      [
+        ['报告.docx', true],
+        ['汇报.pptx', true],
+        ['表格.xlsx', true],
+        ['笔记.md', undefined],
+        ['外部.docx', undefined],
+      ],
+    )
+    // md、csv 直接读文件预览；沙箱或外部生成的 Office 文件没有预览
+    for (const file of [md, external])
+      assert.throws(() => store.preview(user.id, file.id), { status: 404 })
+    // 预览原文存在数据库里，同样计入文件配额
+    const used =
+      [docx, pptx, xlsx, md, external].reduce((sum, file) => sum + file.size, 0) +
+      2 * Buffer.byteLength(markdown) +
+      Buffer.byteLength(table.text)
+    const rest = 50 * 1024 * 1024 - used
+    await assert.rejects(files.save(user.id, session.id, '填满.bin', Buffer.alloc(rest + 1)), {
+      code: 'FILE_QUOTA',
+    })
+    await files.save(user.id, session.id, '填满.bin', Buffer.alloc(rest))
   } finally {
     store.close()
     await rm(root, { recursive: true })

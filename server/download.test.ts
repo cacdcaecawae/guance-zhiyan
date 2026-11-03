@@ -78,6 +78,27 @@ test('artifact downloads preserve bytes, headers and ownership when streamed', a
   await directory.arrayBuffer()
 })
 
+test('Office previews follow download ownership; files without a preview are 404', async (t) => {
+  const f = await fixture(t, 1)
+  const report = { ...f.artifact, id: randomUUID(), name: '报告.docx', format: 'docx' }
+  f.store.addArtifact(f.user.id, report, true, '# 报告\n\n正文')
+  const preview = (id: string, user?: string) =>
+    fetch(`${f.url.replace(f.artifact.id, id)}/preview`, {
+      headers: user ? { 'x-test-user': user } : {},
+    })
+  const own = await preview(report.id)
+  assert.equal(own.status, 200)
+  assert.deepEqual(await own.json(), { kind: 'markdown', text: '# 报告\n\n正文' })
+  for (const response of [await preview(report.id, 'other'), await preview(f.artifact.id)]) {
+    assert.equal(response.status, 404)
+    await response.arrayBuffer()
+  }
+  f.store.remove(f.user.id, f.session.id)
+  const deleted = await preview(report.id)
+  assert.equal(deleted.status, 404, 'a deleted session hides its previews')
+  await deleted.arrayBuffer()
+})
+
 test('a client that disconnects during file admission does not trigger a full read or leak a handle', async (t) => {
   const f = await fixture(t)
   const entered = Promise.withResolvers<void>()
