@@ -191,7 +191,7 @@ const passageColumns = `c.id, c.version_id AS versionId, v.document_id AS docume
 const CURRENT_TITLES = `rag_versions v INDEXED BY rag_versions_title
   JOIN rag_documents d ON d.id=v.document_id AND d.version_id=v.id`
 // Every word must match; the 500-character query limit bounds their number.
-// ponytail: substring match scans the title index (51k titles in ~5 ms); use FTS if it slows.
+// ponytail: substring match scans the title index (tens of thousands of titles in ~5 ms); use FTS if it slows.
 const titleWords = (title: string) => {
   const words = title.split(/\s+/).filter(Boolean)
   return { words, clause: words.map(() => 'instr(v.title, ?) > 0').join(' AND ') || '1' }
@@ -533,7 +533,7 @@ export class LibraryStore {
       throw new HttpError(400, '文献分页参数无效。')
     const { clause, words } = titleWords(title)
     // Page through the title index first: source_url and published_at come after the full text in
-    // each row, so reading them for every document took 45 s on a cold 51k-document library.
+    // each row, so reading them for every document took 45 s on a cold library of tens of thousands of documents.
     return this.store.db
       .prepare(
         `SELECT d.id, v.id AS versionId, v.title, v.source_url AS sourceUrl,
