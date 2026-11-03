@@ -9,6 +9,7 @@ import { MIME } from './artifacts.ts'
 import { RAG_ERRORS, RagError } from './rag.ts'
 import type { LibraryStore, Passage } from './rag-store.ts'
 import { authenticate as defaultAuthenticate, type Authenticate } from './auth.ts'
+import type { Accounts } from './accounts.ts'
 import { sessionChanges, type SessionFrame } from '../src/services/session-stream.ts'
 import type { Session } from '../src/types/index.ts'
 
@@ -48,6 +49,8 @@ export function createApp(
   agents: Agents,
   options: {
     authenticate?: Authenticate
+    /** Server mode: account login and logout; authenticates by session cookie. */
+    accounts?: Accounts
     origin?: string
     dist?: string
     library?: LibraryStore
@@ -55,7 +58,8 @@ export function createApp(
     search?: (query: string, signal: AbortSignal) => Promise<Passage[]>
   } = {},
 ) {
-  const authenticate = options.authenticate ?? defaultAuthenticate
+  const accounts = options.accounts
+  const authenticate = options.authenticate ?? accounts?.authenticate ?? defaultAuthenticate
   const server = createServer(async (request, response) => {
     response.setHeader('Cache-Control', 'no-store')
     response.setHeader('X-Content-Type-Options', 'nosniff')
@@ -103,7 +107,29 @@ export function createApp(
         response.setHeader('Content-Type', mime[kind] ?? 'application/octet-stream')
         return response.end(data)
       }
-      const identity = await authenticate(request)
+      // SameSite Cookie 之外再核对来源，登录与退出也不能由外站发起
+      if (
+        request.method !== 'GET' &&
+        (request.headers['sec-fetch-site'] === 'cross-site' ||
+          (request.headers.origin && request.headers.origin !== options.origin))
+      )
+        throw new HttpError(403, '请求来源不被允许。')
+      if (accounts && path === '/api/login' && request.method === 'POST') {
+        const input = await body(request, 4096, '请求内容过长。')
+        const { username, password } = (input && typeof input === 'object' ? input : {}) as {
+          username?: unknown
+          password?: unknown
+        }
+        if (typeof username !== 'string' || typeof password !== 'string' || !username || !password)
+          throw new HttpError(400, '请输入用户名和密码。')
+        const identity = await accounts.login(request, response, username, password)
+        return json(response, 200, { ...store.user(identity.subject, identity.name), login: true })
+      }
+      if (accounts && path === '/api/logout' && request.method === 'POST') {
+        accounts.logout(request, response)
+        return json(response, 200, {})
+      }
+      const identity = await authenticate(request, response)
       if (
         !identity ||
         !identity.subject ||
@@ -111,18 +137,14 @@ export function createApp(
         !identity.name ||
         identity.name.length > 128
       ) {
+        // login 告诉网页显示登录页；用到一半失效时提示刷新
+        if (accounts)
+          return json(response, 401, { error: '登录已失效，请刷新页面重新登录。', login: true })
         throw new HttpError(401, '需要身份认证。学校登录尚未接入，请联系管理员。')
       }
       const user = store.user(identity.subject, identity.name)
-      if (request.method !== 'GET') {
-        if (
-          request.headers['sec-fetch-site'] === 'cross-site' ||
-          (request.headers.origin && request.headers.origin !== options.origin)
-        ) {
-          throw new HttpError(403, '请求来源不被允许。')
-        }
-      }
-      if (path === '/api/me' && request.method === 'GET') return json(response, 200, user)
+      if (path === '/api/me' && request.method === 'GET')
+        return json(response, 200, accounts ? { ...user, login: true } : user)
       if (path === '/api/models' && request.method === 'GET')
         return json(response, 200, modelCatalog(!!agents.options.adapter))
       if (path === '/api/library' || path.startsWith('/api/library/')) {
