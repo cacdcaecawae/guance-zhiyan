@@ -39,17 +39,44 @@ test('上传验证集逐题作答，查看会话并导出模板格式的结果',
   await expect(page.getByRole('alert')).toContainText('.xlsx')
   await expect(page.getByRole('button', { name: '开始测试' })).toBeDisabled()
 
-  await picker.setInputFiles({
-    name: '样例验证集.xlsx',
-    mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-    buffer: await xlsx([
-      ['问题', '预期答案'],
-      ['你好', '测试回答'],
-      ['模拟失败', '无'],
-    ]),
-  })
+  // 一次选多个：非 xlsx 不加入并列出文件名，新加入的最后一个默认选中
+  const sheet = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+  const spare = await xlsx([
+    ['问题', '预期答案'],
+    ['备用', '无'],
+  ])
+  await picker.setInputFiles([
+    { name: '备用.xlsx', mimeType: sheet, buffer: spare },
+    {
+      name: '样例验证集.xlsx',
+      mimeType: sheet,
+      buffer: await xlsx([
+        ['问题', '预期答案'],
+        ['你好', '测试回答'],
+        ['模拟失败', '无'],
+      ]),
+    },
+    { name: '说明.txt', mimeType: 'text/plain', buffer: Buffer.from('说明') },
+  ])
+  await expect(page.getByRole('alert')).toContainText('说明.txt')
+  const listed = page.getByRole('list', { name: '待测试的文件' }).getByRole('listitem')
+  await expect(listed).toHaveCount(2)
+  await expect(page.getByRole('radio', { name: /样例验证集\.xlsx/ })).toBeChecked()
+
+  // 移除一行；选中的被移除时落到第一个
+  await picker.setInputFiles({ name: '多余.xlsx', mimeType: sheet, buffer: spare })
+  await expect(listed).toHaveCount(3)
+  await expect(page.getByRole('radio', { name: /多余\.xlsx/ })).toBeChecked()
+  await page.getByRole('button', { name: '移除 多余.xlsx' }).click()
+  await expect(listed).toHaveCount(2)
+  await expect(page.getByRole('radio', { name: /备用\.xlsx/ })).toBeChecked()
+
+  // 选中第二个开始：该行移出列表，剩下的仍在并被选中
+  await page.getByRole('radio', { name: /样例验证集\.xlsx/ }).check()
   await page.getByRole('button', { name: '开始测试' }).click()
   await expect(page).toHaveURL(/\/valset\?job=[0-9a-f-]{36}$/)
+  await expect(listed).toHaveCount(1)
+  await expect(page.getByRole('radio', { name: /备用\.xlsx/ })).toBeChecked()
   await expect(progress).toHaveText('已完成 2 / 2 题 · 正常 1 · 失败 1')
   const rows = page.getByRole('row')
   await expect(rows.nth(1)).toContainText('正常')
