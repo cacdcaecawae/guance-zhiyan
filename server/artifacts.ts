@@ -114,6 +114,9 @@ const RED = 'B0302A'
 const PASSAGE = /^\/api\/library\/passages\/([0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})$/i
 /** 检索工具给的现成引用写法（rag-tools.ts 的 cite）的链接文字：文件正文只留引用编号，文献名列在文末 */
 const TOOL_CITE = /^planid \S+·原文$/
+/** 文件引了文献库原文时，随生成结果提醒模型：对话里复述的内容同样附出处 */
+const FILE_REPLY =
+  '回复里写到文件中的具体要点或数字时，每条末尾原样复制所依据片段的 cite，不能只写文献编号；不写“已核对无误”之类的自我评价。'
 /** 表格单元格里的文献库原文链接（JSON 写法的表格不经 Markdown 解析） */
 const CELL_CITE =
   /\[([^\]]*)\]\(\s*<?\/api\/library\/passages\/([0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})>?\s*\)/gi
@@ -1273,17 +1276,22 @@ export class Artifacts {
           content: { type: 'string', required: true },
         },
         output: contentOutput,
-        execute: async (args, exec) =>
-          JSON.stringify(
-            await this.create(
-              userId,
-              sessionId,
-              args.name,
-              args.format,
-              args.content,
-              exec.signal,
-            ).catch(rethrowStopped(exec.signal)),
-          ),
+        execute: async (args, exec) => {
+          const artifact = await this.create(
+            userId,
+            sessionId,
+            args.name,
+            args.format,
+            args.content,
+            exec.signal,
+          ).catch(rethrowStopped(exec.signal))
+          // 回复紧跟工具结果写：只靠系统提示时，模型常把出处只写进文件、对话里只写文献编号
+          return JSON.stringify(
+            /\/api\/library\/passages\//.test(args.content)
+              ? { ...artifact, note: FILE_REPLY }
+              : artifact,
+          )
+        },
       }),
     )
     ctx.tools.register(

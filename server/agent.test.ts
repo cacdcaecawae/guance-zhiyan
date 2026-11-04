@@ -1379,3 +1379,43 @@ test('a tool stopped mid-way shows as interrupted, while its real failures still
     await rm(root, { recursive: true })
   }
 })
+
+test('a generated file citing the library reminds the reply to cite as well', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'gczy-file-note-test-'))
+  const store = new Store(root)
+  const model = new TestModel((request) =>
+    request.messages.at(-1)?.role === 'tool'
+      ? textChunks('已生成。')
+      : toolChunks('create_file', {
+          name: '报告',
+          format: 'docx',
+          content: request.messages
+            .at(-1)
+            ?.content.some((block) => block.type === 'text' && block.text.includes('引用'))
+            ? '# 报告\n\n“原文”[planid 1·原文](/api/library/passages/00000000-0000-4000-8000-000000000000)'
+            : '# 报告\n\n正文',
+        }),
+  )
+  const agents = await new Agents(store, { adapter: model }).init()
+  try {
+    const user = store.user('test:file-note', 'Test')
+    const notes = []
+    for (const question of ['带引用的报告', '不带出处的报告']) {
+      const session = store.create(user.id)
+      await agents.start(user.id, session.id, question)
+      await agents.active.get(session.id)?.done
+      const answer = (await agents.snapshot(user.id, session.id)).messages.at(-1)!
+      const part = answer.role === 'assistant' && answer.parts.find((item) => item.type === 'tool')
+      assert.ok(part && part.type === 'tool' && part.status === 'done')
+      const output = JSON.parse(part.output)
+      assert.equal(output.format, 'docx')
+      notes.push(output.note)
+    }
+    assert.match(notes[0], /cite/)
+    assert.equal(notes[1], undefined)
+  } finally {
+    await agents.close()
+    store.close()
+    await rm(root, { recursive: true })
+  }
+})
