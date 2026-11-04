@@ -35,6 +35,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { HarnessError } from '@deepseek-ai/dsh-llm'
 import type { Artifact } from '../src/types/index.ts'
+import { LibraryStore } from './rag-store.ts'
 import { Store, HttpError } from './store.ts'
 
 export const MIME: Record<string, string> = {
@@ -80,7 +81,7 @@ export const contentOutput = {
 const markdown = unified().use(remarkParse).use(remarkGfm)
 type Block = ReturnType<typeof markdown.parse>['children'][number]
 type Inline = Extract<Block, { type: 'paragraph' }>['children'][number]
-/** sup 为文献引用编号，code 为行内代码 */
+/** sup 为文献引用编号（source 为所引片段），code 为行内代码 */
 type Seg = {
   text: string
   bold?: boolean
@@ -88,6 +89,7 @@ type Seg = {
   strike?: boolean
   link?: string
   sup?: boolean
+  source?: Source
   code?: boolean
 }
 type Align = NonNullable<Extract<Block, { type: 'table' }>['align']>
@@ -105,9 +107,16 @@ type Item =
   | Line
   /** 行 × 列 × 单元格内各行 */
   | { type: 'table'; rows: Seg[][][][]; align: Align }
+/** 文件里引用的文献库片段：id 为片段编号，label 为链接文字 */
+type Source = { id: string; label: string }
 
 const RED = 'B0302A'
 const PASSAGE = /^\/api\/library\/passages\/([0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})$/i
+/** 检索工具给的现成引用写法（rag-tools.ts 的 cite）的链接文字：文件正文只留引用编号，文献名列在文末 */
+const TOOL_CITE = /^planid \S+·原文$/
+/** 表格单元格里的文献库原文链接（JSON 写法的表格不经 Markdown 解析） */
+const CELL_CITE =
+  /\[([^\]]*)\]\(\s*<?\/api\/library\/passages\/([0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})>?\s*\)/gi
 const plain = (segs: Seg[]) => segs.map((seg) => seg.text).join('')
 const cjk = /[㐀-鿿]/
 /** 中文语境的直双引号换成弯引号：引号内含汉字才换；单引号常是英文撇号（China's），不动。替换前后长度不变 */
@@ -204,11 +213,11 @@ const tooComplex = (content: string) =>
   /^[ \t]{65}/m.test(content)
 
 /** Markdown 展开为标题、文字行与表格的序列，Word、演示文稿与表格共用。空行、分隔线、链接定义等不输出。
- * 文献库原文链接只留文字，后附引用编号（同一片段同一编号），sources 按编号列出片段。
+ * 文献库原文链接只留文字（工具给的现成引用连文字也不留），后附引用编号（同一片段同一编号），sources 按编号列出片段。
  * 正文过于复杂或解析失败时按 code 报错。 */
 export function flatten(content: string, code: string) {
   const items: Item[] = []
-  const sources: { id: string; label: string }[] = []
+  const sources: Source[] = []
   let lists = 0
   let mark: Line['mark']
   /** 行内内容拆成行（换行、<br> 各起一行），每行为带格式的文字段。HTML 标签不显示；
@@ -229,12 +238,14 @@ export function flatten(content: string, code: string) {
       else if (node.type === 'link') {
         const passage = PASSAGE.exec(node.url)?.[1].toLowerCase()
         const web = !passage && /^https?:\/\//i.test(node.url)
-        inline(node.children, web ? { ...style, link: node.url } : style, out)
+        const label = plain(tidy(inline(node.children).flat()))
+        if (!passage || !TOOL_CITE.test(label))
+          inline(node.children, web ? { ...style, link: node.url } : style, out)
         if (passage) {
           const n =
             sources.findIndex((source) => source.id === passage) + 1 ||
-            sources.push({ id: passage, label: plain(tidy(inline(node.children).flat())) })
-          out.at(-1)!.push({ text: `[${n}]`, sup: true })
+            sources.push({ id: passage, label })
+          out.at(-1)!.push({ text: `[${n}]`, sup: true, source: sources[n - 1] })
         }
       } else if (node.type === 'linkReference') inline(node.children, style, out)
       else if ((node.type === 'image' || node.type === 'imageReference') && node.alt)
@@ -355,8 +366,8 @@ const listLevels = (
 
 /** Word：开头的 # 标题作文档标题（其后以破折号开头的标题作副标题），其余标题依次用 1–4 级标题样式；
  * 正文首行缩进两字，表格表头加底色并跨页重复；页眉为短标题，页脚“第 X 页 / 共 Y 页”。
- * 一级章节不少于 3 个的长报告加封面，标题与首个章节前的说明放在封面上。文末列出引用来源。 */
-function docx(content: string, name: string) {
+ * 一级章节不少于 3 个的长报告加封面，标题与首个章节前的说明放在封面上。文末列出引用来源，每条由 source 写出。 */
+function docx(content: string, name: string, source: (source: Source) => string) {
   const { items, sources } = flatten(content, 'FILE_INVALID_DOCX_CONTENT')
   const head = items[0]
   const titled = head?.type === 'heading' && head.depth === 1
@@ -540,10 +551,10 @@ function docx(content: string, name: string) {
         ? [
             new Paragraph({ heading: HeadingLevel.HEADING_1, children: [new TextRun('引用来源')] }),
             ...sources.map(
-              (source, i) =>
+              (item, i) =>
                 new Paragraph({
                   style: 'Source',
-                  children: [new TextRun(`[${i + 1}]\t${source.label}　片段 ${source.id}`)],
+                  children: [new TextRun(`[${i + 1}]\t${source(item)}`)],
                 }),
             ),
           ]
@@ -659,8 +670,22 @@ function docx(content: string, name: string) {
 
 export class Artifacts {
   store: Store
+  library: LibraryStore
   constructor(store: Store) {
     this.store = store
+    this.library = new LibraryStore(store)
+  }
+  /** 引用来源的一条，与界面原文片段栏同样写出文献标题、编号、片段序号与章节；片段不在库里时沿用链接文字与片段编号 */
+  source({ id, label }: Source) {
+    try {
+      const passage = this.library.passage(id)
+      // 章节路径去掉 Markdown 标题符号，同前端 headingPath
+      const heading = passage.heading.replace(/(^|\/\s*)#+\s+/g, '$1')
+      return `《${passage.title}》 文献编号 ${passage.documentId} · 片段 ${passage.ordinal + 1}${heading ? ` · ${heading}` : ''}`
+    } catch (error) {
+      if (error instanceof HttpError) return `${label}　片段 ${id}`
+      throw error
+    }
   }
   path(id: string) {
     if (!/^[0-9a-f-]{36}$/.test(id)) throw new HttpError(404, '没有找到文件。')
@@ -700,7 +725,8 @@ export class Artifacts {
     let bytes: Buffer
     // Office 文件保留生成时的原文供在线预览：docx、pptx 为 Markdown，xlsx 为 CSV
     let preview = format === 'docx' || format === 'pptx' ? content : undefined
-    if (format === 'docx') bytes = await docx(content, title)
+    const source = (item: Source) => this.source(item)
+    if (format === 'docx') bytes = await docx(content, title, source)
     else if (format === 'pptx') {
       // 与 Word 同样解析 Markdown：每个标题开一页，其下文字行与表格归该页，列表项显示项目符号或编号，
       // > 引用作页底注；文献引用编号列在末页“引用来源”。
@@ -741,9 +767,9 @@ export class Artifacts {
         sections.push({
           title: '引用来源',
           level: 0,
-          items: sources.map((source, i) => ({
+          items: sources.map((item, i) => ({
             type: 'line',
-            segs: [{ text: `[${i + 1}] ${source.label}　片段 ${source.id}` }],
+            segs: [{ text: `[${i + 1}] ${source(item)}` }],
             depth: 0,
             quote: false,
           })),
@@ -1005,9 +1031,18 @@ export class Artifacts {
           const table = flatten(content, 'FILE_INVALID_TABLE').items.find(
             (item) => item.type === 'table',
           )
+          // 表格没有文末来源页，引用编号就地写成文献名
           rows = table?.rows.map((row) =>
             row.map((lines) =>
-              lines.map((line) => plain(line.filter((seg) => !seg.sup))).join('\n'),
+              lines
+                .map((line) =>
+                  line
+                    .map((seg, k) =>
+                      seg.source ? `${k ? ' ' : ''}${source(seg.source)}` : seg.text,
+                    )
+                    .join(''),
+                )
+                .join('\n'),
             ),
           )
         }
@@ -1029,6 +1064,15 @@ export class Artifacts {
           '表格内容必须为二维 JSON 数组或 Markdown 表格，最多 2000 行、50 列，单元格仅支持文本或数字。',
           'FILE_INVALID_TABLE',
         )
+      // JSON 写法的单元格不经 Markdown 解析，其中的文献库原文链接同样就地写成文献名
+      for (const row of rows)
+        for (const [k, cell] of row.entries())
+          if (typeof cell === 'string')
+            row[k] = cell.replace(
+              CELL_CITE,
+              (_, label: string, id: string, at: number) =>
+                `${at ? ' ' : ''}${source({ id: id.toLowerCase(), label })}`,
+            )
       if (format === 'xlsx') {
         if (
           rows.some((row) =>

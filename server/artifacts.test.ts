@@ -7,6 +7,7 @@ import ExcelJS from 'exceljs'
 import JSZip from 'jszip'
 import { parseCsv } from '../src/lib/csv.ts'
 import { Artifacts } from './artifacts.ts'
+import { LibraryStore } from './rag-store.ts'
 import { Store } from './store.ts'
 import { toolError } from './view.ts'
 
@@ -114,9 +115,10 @@ test('Word renders Markdown tables, lists, emphasis, links and quotes as Word st
       [
         '对比报告',
         '一、要点',
-        '正文加粗与强调，见planid 7·原文[1]与统计局。',
+        // 工具给的现成引用（planid N·原文）在正文只留编号
+        '正文加粗与强调，见[1]与统计局。',
         // 只把引号内含汉字的双引号换成弯引号，单引号与行内代码不动
-        '结论：目标“十三五”，\'快递进邮站\'，China\'s 规划，"ok"，"代码" **原样**，再见planid 7·原文[1]与planid 8·原文[2]。',
+        '结论：目标“十三五”，\'快递进邮站\'，China\'s 规划，"ok"，"代码" **原样**，再见[1]与[2]。',
         ...['第一条', '子条目', '甲', '乙', '地区', '目标', '上海', '4.5%', '左右', '江苏', '', ''],
         ...['原文摘录', '丙', '段', '落', '丁', '段落', '年度', '引用来源'],
         `[1]\tplanid 7·原文　片段 ${a.slice(-36).toLowerCase()}`,
@@ -443,7 +445,8 @@ test('spreadsheets also accept a Markdown table or one JSON array per line', asy
       [
         ['指标', '数值'],
         ['快递', 12],
-        ['见planid 1·原文', '3\n4'],
+        // 表格没有文末来源页，引用就地写成来源；库里没有这个片段时沿用链接文字与片段编号
+        ['见 planid 1·原文　片段 00000000-0000-4000-8000-000000000000', '3\n4'],
       ],
     )
     const csv = await files.create(
@@ -454,6 +457,75 @@ test('spreadsheets also accept a Markdown table or one JSON array per line', asy
       '["序号","名称"]\n\n["1","甲"]\n',
     )
     assert.equal(await files.read(user.id, session.id, csv.id), '"序号","名称"\r\n"1","甲"')
+  } finally {
+    store.close()
+    await rm(root, { recursive: true })
+  }
+})
+
+test('generated files name cited passages by title, document number, passage and section', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'gczy-sources-test-'))
+  const store = new Store(root)
+  try {
+    const files = new Artifacts(store)
+    const library = new LibraryStore(store)
+    const { versionId, chunks } = library.stage({
+      id: '48470',
+      title: '天元区国民经济和社会发展第十二个五年规划纲要',
+      text: '# 六、产业发展\n\n## （一）优化提升第二产业\n\n轨道交通装备制造产业。\n',
+    })
+    library.publish(versionId, null)
+    const user = store.user('test:sources', 'Test')
+    const session = store.create(user.id)
+    const unknown = '00000000-0000-4000-8000-000000000000'
+    const cite = (id: string) => `[planid 48470·原文](/api/library/passages/${id})`
+    // 与界面原文片段栏同样的写法；章节路径去掉 Markdown 标题符号
+    const named =
+      '《天元区国民经济和社会发展第十二个五年规划纲要》 文献编号 48470 · 片段 1 · 六、产业发展 / （一）优化提升第二产业'
+    // 库里没有的片段（未发布、已删除）沿用链接文字与片段编号
+    const fallback = `planid 48470·原文　片段 ${unknown}`
+    const content = `# 报告\n\n“轨道交通装备制造产业。”${cite(chunks[0].id)}\n\n未入库${cite(unknown)}`
+    const docx = await files.create(user.id, session.id, '报告', 'docx', content)
+    assert.equal(
+      await files.read(user.id, session.id, docx.id),
+      [
+        ...['报告', '“轨道交通装备制造产业。”[1]', '未入库[2]', '引用来源'],
+        ...[`[1]\t${named}`, `[2]\t${fallback}`, ''],
+      ].join('\n'),
+    )
+    const pptx = await files.create(user.id, session.id, '汇报', 'pptx', content)
+    const zip = await JSZip.loadAsync(await readFile(files.path(pptx.id)))
+    const last = zip.file(/^ppt\/slides\/slide\d+\.xml$/).length
+    assert.deepEqual(texts(await zip.file(`ppt/slides/slide${last}.xml`)!.async('string')), [
+      '引用来源',
+      `[1] ${named}`,
+      `[2] ${fallback}`,
+    ])
+    // 表格没有来源页，引用就地写成来源：Markdown 表格与 JSON 写法一样
+    const xlsx = await files.create(
+      user.id,
+      session.id,
+      '表格',
+      'xlsx',
+      `| 要点 | 出处 |\n| --- | --- |\n| 轨道交通 | ${cite(chunks[0].id)} |`,
+    )
+    const book = new ExcelJS.Workbook()
+    await book.xlsx.load(Uint8Array.from(await readFile(files.path(xlsx.id))).buffer)
+    assert.deepEqual(book.worksheets[0].getRow(2).values, [, '轨道交通', named])
+    const csv = await files.create(
+      user.id,
+      session.id,
+      '表格',
+      'csv',
+      JSON.stringify([
+        ['要点', '出处'],
+        ['轨道交通', `“轨道交通装备制造产业。”${cite(chunks[0].id)}`],
+      ]),
+    )
+    assert.equal(
+      await files.read(user.id, session.id, csv.id),
+      `"要点","出处"\r\n"轨道交通","“轨道交通装备制造产业。” ${named}"`,
+    )
   } finally {
     store.close()
     await rm(root, { recursive: true })
@@ -834,8 +906,8 @@ test('decks render bold runs, nested bullets, numbered items, notes, citations a
     assert.deepEqual(texts(slides[0]), ['汇报', '副标题', '依据文献：某规划'])
     assert.doesNotMatch(slides[0], /type="slidenum"/)
     assert.deepEqual(texts(slides[1]), [
-      ...['一、要点', '加粗', '说明', 'planid 1·原文', '[1]', '子要点', '甲', '乙'],
-      ...['出处：', 'planid 1·原文', '[1]'],
+      ...['一、要点', '加粗', '说明', '[1]', '子要点', '甲', '乙'],
+      ...['出处：', '[1]'],
     ])
     assert.match(slides[1], /type="slidenum"><a:rPr[^>]*\/><a:t>2</)
     assert.match(slides[1], /b="1"[^>]*>(?:(?!<\/a:r>).)*<a:t>加粗</)
