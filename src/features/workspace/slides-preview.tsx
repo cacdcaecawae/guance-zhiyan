@@ -152,7 +152,12 @@ export function Slides({ text }: { text: string }) {
                 {page.kicker && <p className="text-ui-xs text-seal">{page.kicker}</p>}
                 <h2 className="text-ui-lg font-bold">{page.title}</h2>
               </div>
-              <div className="min-h-0 flex-1">
+              <div className="flex min-h-0 flex-1 flex-col gap-2">
+                {page.lead?.map((line, i) => (
+                  <p key={i} className="text-ui-sm">
+                    <Segs segs={line} />
+                  </p>
+                ))}
                 <Body page={page} />
               </div>
               {page.notes.map((line, i) => (
