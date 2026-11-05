@@ -532,7 +532,7 @@ test('generated files name cited passages by title, document number, passage and
   }
 })
 
-test('generated Office files keep their source for preview: Markdown for Word and decks, CSV for spreadsheets', async () => {
+test('generated Office files keep their source for preview: Markdown for Word, the slide plan for decks, CSV for spreadsheets', async () => {
   const root = await mkdtemp(join(tmpdir(), 'gczy-preview-test-'))
   const store = new Store(root)
   try {
@@ -557,7 +557,19 @@ test('generated Office files keep their source for preview: Markdown for Word an
       await readFile(files.path(docx.id)),
     )
     assert.deepEqual(store.preview(user.id, docx.id), { kind: 'markdown', text: markdown })
-    assert.deepEqual(store.preview(user.id, pptx.id), { kind: 'markdown', text: markdown })
+    // 演示文稿的预览是与导出文件同一份分页
+    const slides = store.preview(user.id, pptx.id)
+    assert.equal(slides.kind, 'slides')
+    assert.deepEqual(
+      JSON.parse(slides.text).slides.map((slide: { layout: string; title: string }) => [
+        slide.layout,
+        slide.title,
+      ]),
+      [
+        ['cover', '报告'],
+        ['sources', '引用来源'],
+      ],
+    )
     const table = store.preview(user.id, xlsx.id)
     assert.equal(table.kind, 'csv')
     // 单元格保留原值（Excel 里公式样的文字也是文本），前端 parseCsv 原样读回
@@ -581,7 +593,8 @@ test('generated Office files keep their source for preview: Markdown for Word an
     // 预览原文存在数据库里，同样计入文件配额
     const used =
       [docx, pptx, xlsx, md, external].reduce((sum, file) => sum + file.size, 0) +
-      2 * Buffer.byteLength(markdown) +
+      Buffer.byteLength(markdown) +
+      Buffer.byteLength(slides.text) +
       Buffer.byteLength(table.text)
     const rest = 50 * 1024 * 1024 - used
     await assert.rejects(files.save(user.id, session.id, '填满.bin', Buffer.alloc(rest + 1)), {
@@ -823,7 +836,7 @@ test('generated decks have a cover, a slide per heading and continuation slides 
     const user = store.user('test:office-text', 'Test')
     const session = store.create(user.id)
     const items = Array.from({ length: 15 }, (_, i) => `第${i + 1}条` + '字'.repeat(30))
-    const long = '长'.repeat(700)
+    const long = '长'.repeat(800)
     const content = [
       '# 长三角规划对比',
       '## 一、背景',
@@ -851,13 +864,13 @@ test('generated decks have a cover, a slide per heading and continuation slides 
     )
     // 没有正文、下面还有小节的“二、主要做法”不单独成页，显示在其下各页标题上方
     assert.deepEqual(slides.slice(0, 2), [
-      ['长三角规划对比'],
+      ['汇报材料', '长三角规划对比'],
       ['一、背景', '要点 &amp; &lt;原文&gt;', '普通段落 😀'],
     ])
     assert.deepEqual(slides[2], ['二、主要做法', '1. 产业', ...items.slice(0, 14)])
     assert.deepEqual(slides[3], ['二、主要做法', '1. 产业（续）', items[14]])
-    assert.deepEqual(slides[4], ['二、主要做法', '2. 长段', long.slice(0, 616)])
-    assert.deepEqual(slides[5], ['二、主要做法', '2. 长段（续）', long.slice(616)])
+    assert.deepEqual(slides[4], ['二、主要做法', '2. 长段', long.slice(0, 728)])
+    assert.deepEqual(slides[5], ['二、主要做法', '2. 长段（续）', long.slice(728)])
     assert.match(await zip.file('ppt/slides/slide2.xml')!.async('string'), /<a:buChar/)
   } finally {
     store.close()
@@ -903,11 +916,12 @@ test('decks render bold runs, nested bullets, numbered items, notes, citations a
       ),
     )
     // 破折号标题作封面副标题，其下的简短说明也放在封面
-    assert.deepEqual(texts(slides[0]), ['汇报', '副标题', '依据文献：某规划'])
+    assert.deepEqual(texts(slides[0]), ['汇报材料', '汇报', '副标题', '依据文献：某规划'])
     assert.doesNotMatch(slides[0], /type="slidenum"/)
+    // “> 出处：[…]”只剩引用编号，接到上一行末尾；本页引用的文献写在页脚
     assert.deepEqual(texts(slides[1]), [
-      ...['一、要点', '加粗', '说明', '[1]', '子要点', '甲', '乙'],
-      ...['出处：', '[1]'],
+      ...['一、要点', '加粗', '说明', '[1]', '子要点', '甲', '乙', '[1]'],
+      `来源：[1]planid 1·原文　片段 ${passage}`,
     ])
     assert.match(slides[1], /type="slidenum"><a:rPr[^>]*\/><a:t>2</)
     assert.match(slides[1], /b="1"[^>]*>(?:(?!<\/a:r>).)*<a:t>加粗</)
@@ -923,16 +937,15 @@ test('decks render bold runs, nested bullets, numbered items, notes, citations a
           `<a:buAutoNum type="arabicPeriod" startAt="${n}"\\/><\\/a:pPr><a:r>(?:(?!<\\/a:r>).)*<a:t>${text}<`,
         ),
       )
-    // 引用作页底注
-    assert.match(slides[1], /sz="1100"[^>]*>(?:(?!<\/a:r>).)*<a:t>出处：</)
     // 只有引用注的“二、比较”不单独成页：作章节名显示在其下各页标题上方，引用注并入下一页
     // 表格单独成页，按估算行高切开，每页重复表头，标题标“（续）”；表后的文字另起一页
     const tables = slides.filter((xml) => xml.includes('<a:tbl>'))
-    assert.equal(tables.length, 2)
+    assert.equal(tables.length, 3)
     assert.deepEqual(
       tables.map((xml) => texts(xml).slice(0, 4)),
       [
         ['二、比较', '对比', '地区', '目标'],
+        ['二、比较', '对比（续）', '地区', '目标'],
         ['二、比较', '对比（续）', '地区', '目标'],
       ],
     )
@@ -948,7 +961,132 @@ test('decks render bold runs, nested bullets, numbered items, notes, citations a
     )
     assert.deepEqual(texts(slides.at(-2)!), ['二、比较', '对比（续）', '表后说明'])
     assert.deepEqual(texts(slides.at(-1)!), ['引用来源', `[1] planid 1·原文　片段 ${passage}`])
-    assert.equal(count, 6)
+    assert.equal(count, 7)
+  } finally {
+    store.close()
+    await rm(root, { recursive: true })
+  }
+})
+
+test('decks pick layouts by content: cover with the basis line, cards, label rows, a single highlighted row and source footers', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'gczy-pptx-layout-test-'))
+  const store = new Store(root)
+  try {
+    const files = new Artifacts(store)
+    const library = new LibraryStore(store)
+    const { versionId, chunks } = library.stage({
+      id: '24177',
+      title: '五指山市  国民经济和社会发展第十四个五年规划纲要',
+      text: `# 一、目标\n\n${'甲'.repeat(400)}\n\n# 二、保障\n\n${'乙'.repeat(400)}\n`,
+    })
+    library.publish(versionId, null)
+    assert.equal(chunks.length, 2)
+    const user = store.user('test:layouts', 'Test')
+    const session = store.create(user.id)
+    const cite = (id: string) => `[planid 24177·原文](/api/library/passages/${id})`
+    const long = '规划实施'.repeat(20)
+    const content = [
+      '# 五指山市实施保障汇报',
+      '依据文献：《五指山市规划纲要》（planid 24177）',
+      '# 一、要点',
+      `- **产业升级**："推动制造业高端化"${cite(chunks[0].id)}`,
+      `- **数字转型**："建设"数字城市"，推进产业化"`,
+      `  ${cite(chunks[1].id)}`,
+      '# 二、细则',
+      `- **甲项**：${long}${cite(chunks[0].id)}`,
+      '- 乙项：短说明',
+      '# 三、单条',
+      `- **总目标**："确保"十四五"规划明确的各项目标任务落实落细落到位。"（出处：${cite(chunks[1].id)}）`,
+    ].join('\n')
+    const pptx = await files.create(user.id, session.id, '汇报', 'pptx', content)
+    type Plan = {
+      layout: string
+      title: string
+      foot?: string
+      lines?: { text: string }[][]
+      rows?: { label: { text: string }[]; body: { text: string }[] }[]
+    }
+    const plan: Plan[] = JSON.parse(store.preview(user.id, pptx.id).text).slides
+    const join = (segs: { text: string }[]) => segs.map((seg) => seg.text).join('')
+    // 开头的 # 标题不是“一、”这类章节编号：作封面，其下的依据文献也上封面，不单独成页
+    assert.deepEqual(
+      plan.map((slide) => [slide.layout, slide.title]),
+      [
+        ['cover', '五指山市实施保障汇报'],
+        ['cards', '一、要点'],
+        ['rows', '二、细则'],
+        ['rows', '三、单条'],
+        ['sources', '引用来源'],
+      ],
+    )
+    assert.deepEqual(plan[0].lines!.map(join), ['依据文献：《五指山市规划纲要》（planid 24177）'])
+    // 2–4 条短说明排成卡片；另起一行的引用编号接到上一行末尾；引文里的引号按内外层配对
+    assert.deepEqual(
+      plan[1].rows!.map((row) => [join(row.label), join(row.body)]),
+      [
+        ['产业升级', '“推动制造业高端化”[1]'],
+        ['数字转型', '“建设‘数字城市’，推进产业化”[2]'],
+      ],
+    )
+    // 页脚写本页引用的文献，同一文献的片段并在一起；标题去掉汉字间的空白
+    assert.equal(
+      plan[1].foot,
+      '来源：[1][2]《五指山市国民经济和社会发展第十四个五年规划纲要》 文献编号 24177 · 片段 1、2',
+    )
+    // 说明较长时排成标签行；列表里不加粗的“标签：说明”也算
+    assert.deepEqual(
+      plan[2].rows!.map((row) => [join(row.label), join(row.body)]),
+      [
+        ['甲项', `${long}[1]`],
+        ['乙项', '短说明'],
+      ],
+    )
+    // “（出处：[…]）”只留编号
+    assert.deepEqual(
+      plan[3].rows!.map((row) => join(row.body)),
+      ['“确保‘十四五’规划明确的各项目标任务落实落细落到位。”[2]'],
+    )
+    const zip = await JSZip.loadAsync(await readFile(files.path(pptx.id)))
+    const cover = await zip.file('ppt/slides/slide1.xml')!.async('string')
+    assert.deepEqual(texts(cover), [
+      '汇报材料',
+      '五指山市实施保障汇报',
+      '依据文献：《五指山市规划纲要》（planid 24177）',
+    ])
+    assert.match(cover, /<p:bg>.*232327/s)
+    assert.match(await zip.file('ppt/slides/slide2.xml')!.async('string'), /roundRect/)
+    // Word 共用同样的引号与引用编号处理
+    const docx = await files.create(user.id, session.id, '报告', 'docx', content)
+    const text = await files.read(user.id, session.id, docx.id)
+    assert.match(text, /“建设‘数字城市’，推进产业化”\[2\]\n/)
+    assert.match(text, /落到位。”\[2\]\n/)
+    assert.doesNotMatch(text, /出处/)
+  } finally {
+    store.close()
+    await rm(root, { recursive: true })
+  }
+})
+
+test('straight quotes pair by position unless an inner quote sits inside a longer quotation', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'gczy-quotes-test-'))
+  const store = new Store(root)
+  try {
+    const files = new Artifacts(store)
+    const user = store.user('test:quotes', 'Test')
+    const session = store.create(user.id)
+    const lines = [
+      '"十三五"和"十四五"',
+      '"推动上级"一把手"抓好下级"一把手"，着力破解难题。"',
+      'He said "hi" and "bye"',
+      '只有一个"引号',
+    ]
+    const docx = await files.create(user.id, session.id, '引号', 'docx', lines.join('\n\n'))
+    assert.deepEqual((await files.read(user.id, session.id, docx.id)).split('\n').slice(0, 4), [
+      '“十三五”和“十四五”',
+      '“推动上级‘一把手’抓好下级‘一把手’，着力破解难题。”',
+      'He said "hi" and "bye"',
+      '只有一个"引号',
+    ])
   } finally {
     store.close()
     await rm(root, { recursive: true })

@@ -223,7 +223,14 @@ export class Store {
     const { format } = this.artifact(userId, id)
     const text = this.db.prepare('SELECT preview FROM artifacts WHERE id=?').get(id)?.preview
     if (typeof text !== 'string') throw new HttpError(404, '该文件没有在线预览。')
-    return { kind: format === 'xlsx' ? 'csv' : 'markdown', text }
+    // 演示文稿保留的是分页结果（JSON）；早先生成的演示文稿保留的是 Markdown
+    const kind =
+      format === 'xlsx'
+        ? 'csv'
+        : format === 'pptx' && text.startsWith('{"slides":')
+          ? 'slides'
+          : 'markdown'
+    return { kind, text }
   }
   addArtifact(userId: string, artifact: Artifact, generated = false, preview?: string) {
     this.session(userId, artifact.sessionId)
