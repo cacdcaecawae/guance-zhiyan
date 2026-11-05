@@ -53,6 +53,19 @@ export class TestModel extends LlmAdapter {
           return textChunks('原位重新生成已完成')
         }
         if (question.includes('模拟失败')) throw new Error('Test provider failure')
+        if (question.includes('生成汇报稿'))
+          return toolChunks('create_file', {
+            name: '实施保障汇报',
+            format: 'pptx',
+            content: [
+              '# 实施保障汇报',
+              '依据文献：《某规划》',
+              '## 三项重点',
+              '- **产业升级**："推动制造业高端化"',
+              '- **数字转型**："建设"智慧城市"，推进产业化"',
+              '- **绿色发展**："推进节能减排"',
+            ].join('\n'),
+          })
         if (question.includes('生成报告'))
           return [
             ...textChunks('先生成报告。').filter((chunk) => chunk.type !== 'finish'),

@@ -7,6 +7,7 @@ import { readPref, writePref } from '@/lib/storage'
 import { artifactUrl, readArtifactPreview, readArtifactText } from '@/services/research'
 import type { Artifact, ArtifactPreview } from '@/types'
 import { Markdown } from './markdown'
+import { Slides } from './slides-preview'
 
 const TEXT_FORMATS = new Set(['md', 'markdown', 'csv', 'txt', 'json'])
 const MAX_PREVIEW_BYTES = 2 * 1024 * 1024
@@ -18,6 +19,13 @@ const MAX_MARKDOWN_CHARS = 100_000
 // 系统生成的 Office 文件预览生成时保留的原文（不超过 200 KB），外部文件只能下载
 const canPreview = (file: Artifact) =>
   file.preview || (TEXT_FORMATS.has(file.format) && file.size <= MAX_PREVIEW_BYTES)
+
+/** 预览的“一页纸”；演示文稿不画纸，按页画幻灯片 */
+const sheet = (children: ReactNode) => (
+  <div className="document-sheet mx-auto min-w-0 max-w-3xl rounded-sm bg-card px-5 py-8 shadow-sm sm:px-8">
+    {children}
+  </div>
+)
 
 /** 朱红格式块：会话文件卡片与预览空状态共用。 */
 export function FormatBlock({
@@ -73,14 +81,14 @@ function Body({ file }: { file: Artifact }) {
   }, [id, format, preview, attempt])
 
   if (loaded.status === 'loading')
-    return (
+    return sheet(
       <p role="status" className="flex items-center gap-2 text-ui-caption text-foreground-subtle">
         <Loader2Icon className="size-4 animate-spin" aria-hidden />
         正在读取文件…
-      </p>
+      </p>,
     )
   if (loaded.status === 'error')
-    return (
+    return sheet(
       <div className="flex flex-col items-start gap-2">
         <p role="alert" className="text-ui-caption text-destructive">
           {loaded.message}
@@ -95,13 +103,14 @@ function Body({ file }: { file: Artifact }) {
         >
           重试
         </Button>
-      </div>
+      </div>,
     )
+  if (loaded.kind === 'slides') return <Slides text={loaded.text} />
   if (loaded.kind === 'csv') {
     const [head = [], ...rows] = parseCsv(loaded.text)
     const columns = Math.max(head.length, ...rows.slice(0, MAX_TABLE_ROWS).map((row) => row.length))
     const clipped = rows.length > MAX_TABLE_ROWS || columns > MAX_TABLE_COLUMNS
-    return (
+    return sheet(
       <div className="answer-markdown overflow-x-auto">
         <table>
           <thead>
@@ -127,11 +136,11 @@ function Body({ file }: { file: Artifact }) {
             {MAX_TABLE_COLUMNS} 列，完整内容请下载。
           </p>
         )}
-      </div>
+      </div>,
     )
   }
   if (loaded.kind === 'markdown')
-    return (
+    return sheet(
       <div className="font-serif text-ui-prose">
         <Markdown text={loaded.text.slice(0, MAX_MARKDOWN_CHARS)} />
         {loaded.text.length > MAX_MARKDOWN_CHARS && (
@@ -139,9 +148,11 @@ function Body({ file }: { file: Artifact }) {
             文件较长，此处显示前 {MAX_MARKDOWN_CHARS / 10_000} 万字，完整内容请下载。
           </p>
         )}
-      </div>
+      </div>,
     )
-  return <pre className="font-mono text-ui-sm whitespace-pre-wrap wrap-anywhere">{loaded.text}</pre>
+  return sheet(
+    <pre className="font-mono text-ui-sm whitespace-pre-wrap wrap-anywhere">{loaded.text}</pre>,
+  )
 }
 
 /** 右侧文件预览：灰色桌面上的一页纸。文件内容来自模型或工具，按不可信文本渲染。 */
@@ -171,9 +182,7 @@ export const FilePreview = memo(function FilePreview({
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto p-4">
         {canPreview(file) ? (
-          <div className="document-sheet mx-auto min-w-0 max-w-3xl rounded-sm bg-card px-5 py-8 shadow-sm sm:px-8">
-            <Body key={file.id} file={file} />
-          </div>
+          <Body key={file.id} file={file} />
         ) : (
           // 不可预览时不画空白的“纸”，在桌面上居中说明
           <div className="flex flex-col items-center gap-3 px-4 py-16 text-center">

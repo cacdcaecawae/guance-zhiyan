@@ -47,6 +47,59 @@ it('系统生成的 Word 读取保留的 Markdown 渲染，Excel 读取保留的
   expect(screen.getByRole('cell', { name: '12' })).toBeInTheDocument()
 })
 
+it('系统生成的演示文稿按保留的分页画成幻灯片：封面、卡片、标签行与页脚来源', async () => {
+  const slides = [
+    {
+      layout: 'cover',
+      title: '实施保障汇报',
+      subtitle: '',
+      lines: [[{ text: '依据文献：某规划' }]],
+    },
+    {
+      layout: 'cards',
+      kicker: '一、总体',
+      title: '三项重点',
+      notes: [],
+      foot: '来源：[1]《某规划》 文献编号 1 · 片段 2',
+      rows: [
+        {
+          label: [{ text: '产业升级' }],
+          body: [{ text: '“推动高端化”' }, { text: '[1]', sup: true }],
+        },
+        { label: [{ text: '数字转型' }], body: [{ text: '“建设智慧城市”' }] },
+      ],
+    },
+    {
+      layout: 'rows',
+      kicker: '',
+      title: '细则',
+      notes: [[{ text: '本节为推断' }]],
+      foot: '',
+      rows: [
+        { label: [{ text: '甲项' }], body: [{ text: '说明甲' }] },
+        { label: [{ text: '乙项' }], body: [{ text: '说明乙' }] },
+      ],
+    },
+  ]
+  vi.stubGlobal(
+    'fetch',
+    vi.fn().mockResolvedValue(Response.json({ kind: 'slides', text: JSON.stringify({ slides }) })),
+  )
+  render(<FilePreview file={{ ...file('pptx'), preview: true }} />)
+  const pages = await screen.findAllByRole('listitem', { name: /^第 \d 页$/ })
+  expect(pages).toHaveLength(3)
+  expect(screen.getByRole('heading', { name: '实施保障汇报' })).toBeInTheDocument()
+  expect(screen.getByText('依据文献：某规划')).toBeInTheDocument()
+  expect(screen.getByText('[1]').tagName).toBe('SUP')
+  expect(screen.getByText('来源：[1]《某规划》 文献编号 1 · 片段 2')).toBeInTheDocument()
+  expect(screen.getAllByRole('term').map((item) => item.textContent)).toEqual(['甲项', '乙项'])
+  expect(screen.getAllByRole('definition').map((item) => item.textContent)).toEqual([
+    '说明甲',
+    '说明乙',
+  ])
+  expect(screen.getByText('本节为推断')).toBeInTheDocument()
+})
+
 it('CSV 空表头和空值行保留，不把第一条数据提升为表头', async () => {
   vi.stubGlobal(
     'fetch',

@@ -167,6 +167,20 @@ test('真实文件工具、执行追踪和 Word 下载；其他用户不能访�
   }
 })
 
+test('系统生成的演示文稿在预览栏按页显示：深色封面与卡片', async ({ page }) => {
+  await page.goto('/workspace')
+  await page.getByRole('textbox', { name: '研究问题' }).fill('生成汇报稿')
+  await page.getByRole('button', { name: '发送' }).click()
+  const answer = page.getByRole('article', { name: '回答' })
+  await answer.getByRole('button', { name: '实施保障汇报.pptx' }).click()
+  const preview = page.getByRole('complementary', { name: '文件预览' })
+  const slides = preview.getByRole('list', { name: '幻灯片' })
+  await expect(slides.getByRole('listitem', { name: /^第 \d 页$/ })).toHaveCount(2)
+  await expect(slides.getByRole('heading', { name: '实施保障汇报' })).toBeVisible()
+  await expect(slides.getByText('依据文献：《某规划》')).toBeVisible()
+  await expect(slides.getByText('“建设‘智慧城市’，推进产业化”')).toBeVisible()
+})
+
 test('无身份时明确拒绝；发送请求失败保留草稿', async ({ page, context }) => {
   await context.clearCookies()
   await page.goto('/')
