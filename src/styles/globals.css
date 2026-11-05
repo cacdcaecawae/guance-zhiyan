@@ -84,10 +84,10 @@
   .answer-markdown li > ol {
     margin-top: 0.35em;
   }
-  /* 正文内分隔线短而居中，不像通栏分割那样切断阅读 */
+  /* 正文内分隔线为通栏浅色细线：短线居中时看着像空了一块 */
   .answer-markdown hr {
-    @apply mx-auto w-16 border-border-hover;
-    margin-block: 1.6em;
+    @apply border-border;
+    margin-block: 1em;
   }
   .answer-markdown blockquote {
     @apply border-l-2 border-brand/40 pl-4 text-foreground-subtle;
