@@ -34,7 +34,7 @@ import { unified } from 'unified'
 import type { Context } from '@deepseek-ai/cordis'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { HarnessError } from '@deepseek-ai/dsh-llm'
-import type { Artifact } from '../src/types/index.ts'
+import type { Artifact, SlideBody, SlidePlan, SlideSeg } from '../src/types/index.ts'
 import { LibraryStore } from './rag-store.ts'
 import { Store, HttpError } from './store.ts'
 
@@ -122,9 +122,50 @@ const CELL_CITE =
   /\[([^\]]*)\]\(\s*<?\/api\/library\/passages\/([0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})>?\s*\)/gi
 const plain = (segs: Seg[]) => segs.map((seg) => seg.text).join('')
 const cjk = /[㐀-鿿]/
-/** 中文语境的直双引号换成弯引号：引号内含汉字才换；单引号常是英文撇号（China's），不动。替换前后长度不变 */
-const curly = (text: string) =>
-  text.replace(/"([^"\n]*)"/g, (match, inner: string) => (cjk.test(inner) ? `“${inner}”` : match))
+/** 中文语境的直双引号换成弯引号：引号内含汉字才换；单引号常是英文撇号（China's），不动。替换前后长度不变。
+ * 引文里再套引号（“确保"十四五"规划……。”）时，夹在两个汉字之间、紧跟着一小段不含句读的引号按内层引号 ‘’ 配对
+ * （外层引文在它前后含句读才这样认，“"十三五"和"十四五"”仍是两对），否则按出现顺序成对。ponytail: 只认一层嵌套；更深的嵌套按顺序配对 */
+const curly = (text: string) => {
+  const at = [...text.matchAll(/"/g)].map((match) => match.index)
+  const out = [...text]
+  // 把 UTF-16 下标换成码点下标，与 out 对齐
+  const index = (i: number) => Array.from(text.slice(0, i)).length
+  const short = (from: number, to: number) => {
+    const inner = text.slice(from + 1, to)
+    return cjk.test(inner) && Array.from(inner).length <= 20 && !/[，。；！？,;!?]/.test(inner)
+  }
+  for (let k = 0; k + 1 < at.length;) {
+    const open = at[k]
+    let close = k + 1
+    const nested: [number, number][] = []
+    // 外层引文较长（含句读）时，其中夹在汉字之间的短引号是内层引号，且后面还得留一个引号收尾
+    while (
+      close + 2 < at.length &&
+      /[，。；！？,;!?]/.test(
+        text.slice(open + 1, at[close]) + text.slice(at[close + 1] + 1, at.at(-1)),
+      ) &&
+      cjk.test(text[at[close] - 1] ?? '') &&
+      cjk.test(text[at[close] + 1] ?? '') &&
+      short(at[close], at[close + 1])
+    ) {
+      nested.push([at[close], at[close + 1]])
+      close += 2
+    }
+    if (close >= at.length) break
+    if (!cjk.test(text.slice(open + 1, at[close]))) {
+      k = close + 1
+      continue
+    }
+    out[index(open)] = '“'
+    out[index(at[close])] = '”'
+    for (const [a, b] of nested) {
+      out[index(a)] = '‘'
+      out[index(b)] = '’'
+    }
+    k = close + 1
+  }
+  return out.join('')
+}
 /** 一行文字换弯引号，并补上粗体：** 紧挨中文标点时（如 **加粗：**文字）CommonMark 不认作粗体，残留的成对 ** 在这里处理。
  * 行内代码原样保留。 */
 const tidy = (segs: Seg[]) => {
@@ -157,6 +198,25 @@ const tidyText = (segs: Seg[]) => {
     last = [owner[k], !!bold[k]]
   }
   return out
+}
+/** 引用编号前的“出处：”“（来源：”之类：文件里引用已编号、文献列在页脚与文末，这几个字多余 */
+const CITE_LABEL = /\s*([（(]?)\s*(?:原文)?(?:出处|来源|引用)\s*[：:]\s*$/
+/** 去掉紧挨引用编号的“出处：”字样，连同它带的左括号与编号后对应的右括号 */
+const dropCiteLabels = (segs: Seg[]) => {
+  const out = segs.map((seg) => ({ ...seg }))
+  out.forEach((seg, k) => {
+    if (!seg.sup || out[k - 1]?.sup) return
+    const before = out[k - 1]
+    const match = before && CITE_LABEL.exec(before.text)
+    if (!match) return
+    before.text = before.text.slice(0, match.index)
+    if (!match[1]) return
+    let end = k
+    while (out[end + 1]?.sup) end++
+    const after = out[end + 1]
+    if (after) after.text = after.text.replace(/^\s*[）)]/, '')
+  })
+  return out.filter((seg) => seg.text)
 }
 /** 显示宽度：中日韩及全角字符计 2，其余计 1 */
 const textWidth = (text: string) =>
@@ -260,11 +320,19 @@ export function flatten(content: string, code: string) {
   }
   const text = (nodes: readonly Inline[]) => inline(nodes).map(tidy)
   const lines = (lines: Seg[][], depth: number, quote: boolean) => {
-    for (const segs of lines)
-      if (segs.length) {
-        items.push({ type: 'line', segs, depth, quote, mark })
+    for (const raw of lines) {
+      const segs = dropCiteLabels(raw)
+      if (!segs.length) continue
+      // 只有引用编号的一行（模型常把 cite 另起一行，或写成“> 出处：[…]”）接到上一行末尾
+      const last = items.at(-1)
+      if (last?.type === 'line' && segs.every((seg) => seg.sup || !seg.text.trim())) {
+        last.segs.push(...segs.filter((seg) => seg.sup))
         mark = undefined
+        continue
       }
+      items.push({ type: 'line', segs, depth, quote, mark })
+      mark = undefined
+    }
   }
   const walk = (nodes: readonly Block[], depth: number, quote: boolean) => {
     for (const node of nodes) {
@@ -671,6 +739,682 @@ function docx(content: string, name: string, source: (source: Source) => string)
   )
 }
 
+/** 演示文稿的配色、字号与版面尺寸（英寸，16:9 宽屏 13.33 × 7.5），取自 Opus 版样稿，规则见 DESIGN.md“生成文件版式” */
+const DECK = {
+  font: '微软雅黑',
+  ink: '1F1F22',
+  sub: '5A5A60',
+  mute: '8A8A90',
+  deep: '8C2A24',
+  dark: '232327',
+  card: 'F4F3F2',
+  line: 'DDDBD9',
+  x: 0.6,
+  w: 12.1,
+  top: 1.45,
+  /** 正文区高度：其下 6.45 起放页底注，6.95 起放来源脚注与页码 */
+  height: 5,
+}
+/** 每个显示宽度单位（半个汉字）在各字号下的英寸数 */
+const UNIT = (size: number) => size / 72 / 2
+/** 小标题像“一、”“1.”“（一）”“第一章”这类章节编号时，开头的 # 标题不作封面 */
+const ORDINAL =
+  /^(?:[一二三四五六七八九十百]+、|（[一二三四五六七八九十]+）|\d+[.、．]|第.{1,4}[章节篇部分])/
+type Cite = { doc: string; part: string }
+type SlideRow = { label: Seg[]; body: Seg[] }
+
+/** 按字符位置把一行文字段切成两半 */
+const splitSegs = (segs: Seg[], at: number): [Seg[], Seg[]] => {
+  const head: Seg[] = []
+  const rest: Seg[] = []
+  let used = 0
+  for (const seg of segs) {
+    const cut = Math.max(0, Math.min(seg.text.length, at - used))
+    if (cut) head.push({ ...seg, text: seg.text.slice(0, cut) })
+    if (cut < seg.text.length) rest.push({ ...seg, text: seg.text.slice(cut) })
+    used += seg.text.length
+  }
+  return [head, rest]
+}
+/** “**标签**：说明”一行（列表项里不加粗的“标签：说明”也算）拆成标签与说明；
+ * 标签过长（超过 12 个汉字）或不是这种写法时返回 undefined */
+const labelOf = (item: Line): SlideRow | undefined => {
+  if (item.quote || item.depth > 1) return
+  const k = item.segs.findIndex((seg) => !seg.bold && seg.text.trim())
+  if (k === 0 && item.mark) {
+    const match = /^([^：:，。；、“”"\s]{1,12})[：:]/.exec(plain(item.segs))
+    if (!match || textWidth(match[1]) > 24) return
+    const [, body] = splitSegs(item.segs, match[0].length)
+    return body.length ? { label: [{ text: match[1], bold: true }], body } : undefined
+  }
+  if (k <= 0) return
+  const head = plain(item.segs.slice(0, k))
+  const rest = item.segs.slice(k)
+  if (!/[：:]\s*$/.test(head) && !/^\s*[：:]/.test(rest[0].text)) return
+  const label = head.trim().replace(/[：:]$/, '')
+  if (!label || textWidth(label) > 24) return
+  return {
+    label: [{ text: label, bold: true }],
+    body: [{ ...rest[0], text: rest[0].text.replace(/^\s*[：:]\s*/, '') }, ...rest.slice(1)],
+  }
+}
+/** 标签行：标签列宽按本节最长的标签定，各行高按字数估算 */
+const labelWidth = (rows: SlideRow[]) =>
+  Math.min(
+    3.2,
+    Math.max(1.2, Math.max(...rows.map((row) => textWidth(plain(row.label)))) * UNIT(15) + 0.25),
+  )
+const rowHeight = (row: SlideRow, labelW: number) => {
+  const bodyW = DECK.w - labelW - 0.3
+  const label = Math.ceil((textWidth(plain(row.label)) * UNIT(15)) / labelW)
+  const body = Math.max(1, Math.ceil((textWidth(plain(row.body)) * UNIT(14)) / bodyW))
+  return Math.max(label * 0.3, body * 0.26) + 0.3
+}
+/** 卡片：标签 18 磅、说明 14 磅，返回标签区高度与卡片高度 */
+const cardSize = (rows: SlideRow[]) => {
+  const inner = (DECK.w - 0.3 * (rows.length - 1)) / rows.length - 0.6
+  const label =
+    Math.max(...rows.map((row) => Math.ceil((textWidth(plain(row.label)) * UNIT(18)) / inner))) *
+    0.34
+  const body =
+    Math.max(...rows.map((row) => Math.ceil((textWidth(plain(row.body)) * UNIT(14)) / inner))) *
+    0.26
+  return {
+    label,
+    height: Math.min(DECK.height - 0.1, Math.max(3.4, 1.0 + label + 0.15 + body + 0.4)),
+  }
+}
+const toSlideSegs = (segs: Seg[]): SlideSeg[] =>
+  segs.map(({ text, bold, italics, strike, link, sup }) => ({
+    text,
+    ...(bold && { bold }),
+    ...(italics && { italics }),
+    ...(strike && { strike }),
+    ...(link && { link }),
+    ...(sup && { sup }),
+  }))
+
+/**
+ * 演示文稿分页：与 Word 同样解析 Markdown，每个标题开一页，按内容形态选版式——
+ * 封面；“**标签**：说明”的行排成标签行（2–4 条且每条说明不超过约 60 字时排成并排卡片）；表格单独成页；
+ * 其余为项目符号页；文末“引用来源”。> 引用作页底注，本页引用编号对应的文献写在页脚。
+ * 导出文件与在线预览用同一份结果。
+ */
+function deckPlan(
+  content: string,
+  title: string,
+  source: (source: Source) => string,
+  cite: (id: string) => Cite | undefined,
+): SlidePlan[] {
+  type Section = { title: string; level: number; items: Exclude<Item, { type: 'heading' }>[] }
+  const { items, sources } = flatten(content, 'FILE_INVALID_PPTX_CONTENT')
+  const sections: Section[] = [{ title, level: 0, items: [] }]
+  for (const item of items) {
+    if (item.type === 'heading')
+      sections.push({ title: plain(item.segs).trim(), level: item.depth, items: [] })
+    else if (item.type === 'table' || plain(item.segs).trim()) sections.at(-1)!.items.push(item)
+  }
+  if (!sections[0].items.length) sections.shift()
+  // 封面：开头的 # 标题（它是章节编号式的小标题、且正文另有其他 # 标题时用文件名），紧跟的破折号标题作副标题，
+  // 两者下面不长的文字（如依据文献）也放在封面
+  let cover = title
+  let subtitle = ''
+  let coverItems: Section['items'] = []
+  const first = sections[0]
+  if (
+    first?.level === 1 &&
+    (!first.items.length ||
+      sections.filter((s) => s.level === 1).length === 1 ||
+      !ORDINAL.test(first.title))
+  )
+    ({ title: cover, items: coverItems } = sections.shift()!)
+  if (/^[—–-]/.test(sections[0]?.title ?? '')) {
+    subtitle = sections[0].title.replace(/^[—–-]+\s*/, '')
+    coverItems = [...coverItems, ...sections.shift()!.items]
+  }
+  if (
+    coverItems.some((item) => item.type === 'table') ||
+    coverItems.reduce(
+      (sum, item) => sum + (item.type === 'line' ? plain(item.segs).length : 0),
+      0,
+    ) > 300
+  ) {
+    sections.unshift({ title: subtitle || cover, level: 1, items: coverItems })
+    coverItems = []
+  }
+  const plan: SlidePlan[] = [
+    {
+      layout: 'cover',
+      title: cover,
+      subtitle,
+      lines: coverItems.flatMap((item) => (item.type === 'line' ? [toSlideSegs(item.segs)] : [])),
+    },
+  ]
+  /** 来源脚注：同一文献的片段并在一起，如“[1][2]《……》 文献编号 24177 · 片段 69、70” */
+  const foot = (numbers: number[]) => {
+    const groups = new Map<string, { marks: string; parts: string[] }>()
+    for (const n of new Set(numbers)) {
+      const item = sources[n - 1]
+      if (!item) continue
+      const found = cite(item.id)
+      const key = found?.doc ?? `${item.label}　片段 ${item.id}`
+      const group = groups.get(key) ?? groups.set(key, { marks: '', parts: [] }).get(key)!
+      group.marks += `[${n}]`
+      if (found) group.parts.push(found.part)
+    }
+    const text = [...groups]
+      .map(
+        ([doc, { marks, parts }]) =>
+          `${marks}${doc}${parts.length ? ` · 片段 ${parts.join('、')}` : ''}`,
+      )
+      .join('；')
+    const chars = Array.from(text ? `来源：${text}` : '')
+    // ponytail: 页脚两行约 160 字，超出截断；完整清单在文末“引用来源”
+    return chars.length > 160 ? `${chars.slice(0, 159).join('')}…` : chars.join('')
+  }
+  const marks = (segs: Seg[]) =>
+    segs.flatMap((seg) => (seg.source ? [sources.indexOf(seg.source) + 1] : []))
+  const cellMarks = (rows: string[][]) =>
+    rows.flatMap((row) =>
+      row.flatMap((cell) => [...cell.matchAll(/\[(\d+)\]/g)].map((m) => Number(m[1]))),
+    )
+  // ponytail: 项目符号页按每行 52 字、每页 14 行估算分页（15 磅微软雅黑实测约 58 个汉字一行），
+  // 西文与长单词按字数计偏保守；要更满的版面再按字体测宽
+  const PER_LINE = 52
+  const PER_SLIDE = 14
+  // ponytail: 表格按 14 磅字宽估算各行行数与行高，单行高过整页时仍会超出页面；要精确再按字体测宽
+  const CELL_LINE = (14 * 1.2) / 72
+  const chapters: Section[] = []
+  let carried: Seg[][] = []
+  sections.forEach((section, s) => {
+    while (chapters.length && chapters.at(-1)!.level >= section.level) chapters.pop()
+    // 没有正文（至多只有引用注）、下一节层级更深的标题不单独成页，作章节名显示在其下各页标题上方
+    const quoteOnly = section.items.every((item) => item.type === 'line' && item.quote)
+    if (quoteOnly && (sections[s + 1]?.level ?? 0) > section.level) {
+      chapters.push(section)
+      for (const item of section.items) if (item.type === 'line') carried.push(item.segs)
+      return
+    }
+    const kicker = chapters.at(-1)?.title ?? ''
+    // 每页的正文与页底注；页底注挂在当前页
+    const pages: { page: SlideBody; notes: Seg[][]; marks: number[] }[] = []
+    const lines = section.items.filter((item): item is Line => item.type === 'line' && !item.quote)
+    const notes = section.items.filter((item): item is Line => item.type === 'line' && item.quote)
+    const rows = lines.map(labelOf)
+    if (
+      section.title !== '引用来源' &&
+      lines.length &&
+      lines.length + notes.length === section.items.length &&
+      rows.every(Boolean)
+    ) {
+      const all = rows as SlideRow[]
+      const cards =
+        all.length >= 2 && all.length <= 4 && all.every((row) => textWidth(plain(row.body)) <= 120)
+      if (cards)
+        pages.push({
+          page: {
+            layout: 'cards',
+            rows: all.map((row) => ({
+              label: toSlideSegs(row.label),
+              body: toSlideSegs(row.body),
+            })),
+          },
+          notes: [],
+          marks: all.flatMap((row) => marks(row.body)),
+        })
+      else {
+        const labelW = labelWidth(all)
+        let used = DECK.height
+        for (const row of all) {
+          const height = rowHeight(row, labelW)
+          if (used + height > DECK.height) {
+            pages.push({ page: { layout: 'rows', rows: [] }, notes: [], marks: [] })
+            used = 0
+          }
+          const last = pages.at(-1)!
+          ;(last.page as { rows: unknown[] }).rows.push({
+            label: toSlideSegs(row.label),
+            body: toSlideSegs(row.body),
+          })
+          last.marks.push(...marks(row.body))
+          used += height
+        }
+      }
+      pages.at(-1)!.notes.push(...notes.map((item) => item.segs))
+    } else {
+      let used = PER_SLIDE
+      for (const item of section.items) {
+        if (item.type === 'table') {
+          const cells = item.rows.map((row) =>
+            row.map((lines) => lines.map((line) => plain(line)).join('\n')),
+          )
+          const colW = fitColumns(
+            cells[0].map(
+              (_, j) => Math.max(...item.rows.map((row) => cellWidth(row[j]))) * UNIT(14) + 0.3,
+            ),
+            DECK.w,
+          )
+          const heights = cells.map(
+            (row) =>
+              Math.max(
+                ...row.map((text, j) =>
+                  text
+                    .split('\n')
+                    .reduce(
+                      (sum, line) =>
+                        sum +
+                        Math.max(1, Math.ceil((textWidth(line) * UNIT(14)) / (colW[j] - 0.3))),
+                      0,
+                    ),
+                ),
+              ) *
+                CELL_LINE +
+              0.16,
+          )
+          let chunk: string[][] = []
+          let height = heights[0]
+          const flush = () =>
+            pages.push({
+              page: { layout: 'table', rows: [cells[0], ...chunk], colW, align: item.align },
+              notes: [],
+              marks: cellMarks(chunk),
+            })
+          cells.slice(1).forEach((row, k) => {
+            if (chunk.length && height + heights[k + 1] > DECK.height) {
+              flush()
+              chunk = []
+              height = heights[0]
+            }
+            chunk.push(row)
+            height += heights[k + 1]
+          })
+          flush()
+          used = PER_SLIDE
+          continue
+        }
+        const chars = Array.from(plain(item.segs))
+        if (item.quote) {
+          if (!pages.length) {
+            pages.push({ page: { layout: 'bullets', lines: [] }, notes: [], marks: [] })
+            used = 0
+          }
+          pages.at(-1)!.notes.push(item.segs)
+          pages.at(-1)!.marks.push(...marks(item.segs))
+          used += 0.6 * Math.ceil(chars.length / 80)
+          continue
+        }
+        // 超过一页的长段按字数切开，切开的部分不保留行内格式
+        const pieces =
+          chars.length > PER_LINE * PER_SLIDE
+            ? Array.from({ length: Math.ceil(chars.length / (PER_LINE * PER_SLIDE)) }, (_, i) => [
+                {
+                  text: chars
+                    .slice(i * PER_LINE * PER_SLIDE, (i + 1) * PER_LINE * PER_SLIDE)
+                    .join(''),
+                },
+              ])
+            : [item.segs]
+        pieces.forEach((piece, i) => {
+          const cost = Math.ceil(Array.from(plain(piece)).length / PER_LINE)
+          const last = pages.at(-1)
+          if (!last || last.page.layout !== 'bullets' || used + cost > PER_SLIDE) {
+            pages.push({ page: { layout: 'bullets', lines: [] }, notes: [], marks: [] })
+            used = 0
+          }
+          const { page, marks: numbers } = pages.at(-1)!
+          ;(page as { lines: unknown[] }).lines.push({
+            segs: toSlideSegs(piece),
+            level: Math.min(Math.max(item.depth - 1, 0), MAX_LEVEL),
+            ...(item.mark && !i && { bullet: item.mark.ordered ? item.mark.n : true }),
+          })
+          numbers.push(...marks(piece))
+          used += cost
+        })
+      }
+    }
+    if (!pages.length) pages.push({ page: { layout: 'bullets', lines: [] }, notes: [], marks: [] })
+    pages[0].notes.unshift(...carried)
+    carried = []
+    pages.forEach(({ page, notes, marks: numbers }, i) =>
+      plan.push({
+        ...page,
+        kicker,
+        title: i ? `${section.title}（续）` : section.title,
+        notes: notes.map(toSlideSegs),
+        foot: foot([...numbers, ...notes.flatMap(marks)]),
+      } as SlidePlan),
+    )
+  })
+  if (sources.length) {
+    const lines = sources.map((item, i) => ({
+      segs: [{ text: `[${i + 1}] ${source(item)}` }],
+      level: 0,
+    }))
+    const PER = 9
+    for (let i = 0; i < lines.length; i += PER)
+      plan.push({
+        layout: 'sources',
+        kicker: '',
+        title: i ? '引用来源（续）' : '引用来源',
+        notes: [],
+        foot: '',
+        lines: lines.slice(i, i + PER),
+      })
+  }
+  return plan
+}
+
+/** 按 deckPlan 的分页写出 .pptx；各版式的画法与 DESIGN.md“生成文件版式”一致 */
+async function writeDeck(plan: SlidePlan[], title: string) {
+  // TypeScript 把该包的类型声明当作 CommonJS；Node 按 ESM 加载时默认导出即是类
+  const deck = new (PptxGenJS as unknown as typeof PptxGenJS.default)()
+  Object.assign(deck, {
+    layout: 'LAYOUT_WIDE',
+    title,
+    subject: title,
+    author: '管策智研',
+    company: '管策智研',
+  })
+  type Run = { text: string; options: Record<string, unknown> }
+  // 段落属性只写在首段：pptxgenjs 遇到带项目符号的文字段会另起一段
+  const runs = (segs: SlideSeg[], paragraph: Record<string, unknown> = {}): Run[] =>
+    segs.map((seg, k) => ({
+      text: seg.text,
+      options: {
+        bold: seg.bold,
+        italic: seg.italics,
+        strike: seg.strike ? 'sngStrike' : undefined,
+        hyperlink: seg.link ? { url: seg.link } : undefined,
+        ...(seg.sup && { superscript: true, color: RED }),
+        ...(!k && paragraph),
+        ...(k === segs.length - 1 && { breakLine: true }),
+      },
+    }))
+  type Slide = ReturnType<typeof deck.addSlide>
+  // lang 设为中文，PowerPoint 才按中文禁则断行（不让“、）”落到行首）
+  const text = (slide: Slide, value: string | Run[], options: Record<string, unknown>) =>
+    slide.addText(value as Run[], {
+      fontFace: DECK.font,
+      color: DECK.ink,
+      margin: 0,
+      isTextBox: true,
+      lang: 'zh-CN',
+      ...options,
+    })
+  for (const page of plan) {
+    const slide = deck.addSlide()
+    if (page.layout === 'cover') {
+      slide.background = { color: DECK.dark }
+      text(slide, '汇报材料', {
+        x: 0.8,
+        y: 1.2,
+        w: 6,
+        h: 0.4,
+        fontSize: 14,
+        color: 'E07A72',
+        charSpacing: 4,
+      })
+      text(slide, page.title, {
+        x: 0.8,
+        y: 1.8,
+        w: 11.7,
+        h: 2.2,
+        fontSize: textWidth(page.title) > 44 ? 32 : 40,
+        bold: true,
+        color: 'FFFFFF',
+        valign: 'top',
+      })
+      if (page.subtitle)
+        text(slide, page.subtitle, {
+          x: 0.8,
+          y: 4.15,
+          w: 11.7,
+          h: 0.6,
+          fontSize: 20,
+          color: 'C9C9CE',
+        })
+      if (page.lines.length)
+        text(
+          slide,
+          page.lines.flatMap((line) => runs(line)),
+          {
+            x: 0.8,
+            y: 5.1,
+            w: 11.7,
+            h: 1.8,
+            fontSize: 12,
+            color: '9A9AA0',
+            valign: 'top',
+            paraSpaceAfter: 2,
+          },
+        )
+      continue
+    }
+    slide.slideNumber = {
+      x: 12.1,
+      y: 7.0,
+      w: 0.8,
+      h: 0.3,
+      fontFace: DECK.font,
+      fontSize: 10,
+      color: DECK.mute,
+      align: 'right',
+    }
+    // 没有正文的标题放在页面中部，作章节过渡页
+    const empty = 'lines' in page && !page.lines.length
+    text(
+      slide,
+      [
+        ...(page.kicker
+          ? [
+              {
+                text: page.kicker,
+                options: { fontSize: 12, bold: false, color: RED, breakLine: true },
+              },
+            ]
+          : []),
+        { text: page.title, options: {} },
+      ],
+      {
+        x: DECK.x,
+        y: empty ? 2.4 : 0.3,
+        w: DECK.w,
+        h: empty ? 1.4 : 0.95,
+        fontSize: empty ? 32 : 28,
+        bold: true,
+        valign: 'bottom',
+      },
+    )
+    if (page.layout === 'rows' && page.rows.length === 1) {
+      // 只有一条：标签作朱红小标题，说明放大，免得整页只用上方一行
+      const [row] = page.rows
+      text(slide, runs(row.label), {
+        x: DECK.x,
+        y: DECK.top + 0.2,
+        w: DECK.w,
+        h: 0.5,
+        fontSize: 16,
+        bold: true,
+        color: RED,
+      })
+      text(slide, runs(row.body), {
+        x: DECK.x,
+        y: DECK.top + 0.85,
+        w: DECK.w,
+        h: DECK.height - 1.0,
+        fontSize: 22,
+        valign: 'top',
+      })
+    } else if (page.layout === 'rows') {
+      const labelW = labelWidth(page.rows)
+      const heights = page.rows.map((row) => rowHeight(row, labelW))
+      // 行少时把剩余高度匀给各行（每行至多加 0.6 英寸），版面不只用上方几行
+      const extra = Math.min(
+        0.6,
+        (DECK.height - heights.reduce((a, b) => a + b, 0)) / heights.length,
+      )
+      let y = DECK.top
+      page.rows.forEach((row, i) => {
+        const height = heights[i] + Math.max(0, extra)
+        if (i)
+          slide.addShape('line', {
+            x: DECK.x,
+            y,
+            w: DECK.w,
+            h: 0,
+            line: { color: DECK.line, width: 0.75 },
+          })
+        text(slide, runs(row.label), {
+          x: DECK.x,
+          y: y + 0.13,
+          w: labelW,
+          h: height - 0.13,
+          fontSize: 15,
+          bold: true,
+          valign: 'top',
+        })
+        text(slide, runs(row.body), {
+          x: DECK.x + labelW + 0.3,
+          y: y + 0.13,
+          w: DECK.w - labelW - 0.3,
+          h: height - 0.13,
+          fontSize: 14,
+          color: DECK.sub,
+          valign: 'top',
+        })
+        y += height
+      })
+    } else if (page.layout === 'cards') {
+      const width = (DECK.w - 0.3 * (page.rows.length - 1)) / page.rows.length
+      const { label, height } = cardSize(page.rows)
+      page.rows.forEach((row, i) => {
+        const x = DECK.x + i * (width + 0.3)
+        const y = DECK.top + 0.1
+        slide.addShape('roundRect', {
+          x,
+          y,
+          w: width,
+          h: height,
+          fill: { color: DECK.card },
+          line: { color: DECK.card },
+          rectRadius: 0.08,
+        })
+        slide.addShape('ellipse', {
+          x: x + 0.3,
+          y: y + 0.3,
+          w: 0.5,
+          h: 0.5,
+          fill: { color: RED },
+          line: { color: RED },
+        })
+        text(slide, String(i + 1), {
+          x: x + 0.3,
+          y: y + 0.3,
+          w: 0.5,
+          h: 0.5,
+          fontSize: 16,
+          bold: true,
+          color: 'FFFFFF',
+          align: 'center',
+          valign: 'middle',
+        })
+        text(slide, runs(row.label), {
+          x: x + 0.3,
+          y: y + 1.0,
+          w: width - 0.6,
+          h: label,
+          fontSize: 18,
+          bold: true,
+          valign: 'top',
+        })
+        text(slide, runs(row.body), {
+          x: x + 0.3,
+          y: y + 1.0 + label + 0.15,
+          w: width - 0.6,
+          h: height - label - 1.45,
+          fontSize: 14,
+          color: DECK.sub,
+          valign: 'top',
+        })
+      })
+    } else if (page.layout === 'table') {
+      const wide = page.rows[0].length >= 3
+      slide.addTable(
+        page.rows.map((row, r) =>
+          row.map((value, j) => ({
+            text: value,
+            options: !r
+              ? { align: 'center', bold: true, color: 'FFFFFF', fill: { color: DECK.deep } }
+              : wide && !j
+                ? { align: page.align[j] ?? 'left', bold: true, fill: { color: DECK.card } }
+                : { align: page.align[j] ?? 'left' },
+          })),
+        ),
+        {
+          x: DECK.x,
+          y: DECK.top,
+          w: DECK.w,
+          colW: page.colW,
+          fontFace: DECK.font,
+          fontSize: 14,
+          color: DECK.ink,
+          valign: 'middle',
+          margin: [0.06, 0.12, 0.06, 0.12],
+          border: { type: 'solid', pt: 0.75, color: DECK.line },
+        },
+      )
+    } else if (page.lines.length)
+      text(
+        slide,
+        page.lines.flatMap((line) =>
+          runs(line.segs, {
+            bullet:
+              line.bullet === undefined
+                ? false
+                : line.bullet === true
+                  ? true
+                  : { type: 'number', numberStartAt: line.bullet },
+            indentLevel: line.level,
+          }),
+        ),
+        {
+          x: DECK.x,
+          y: DECK.top,
+          w: DECK.w,
+          h: DECK.height,
+          fontSize: page.layout === 'sources' ? 13 : 15,
+          valign: 'top',
+          paraSpaceAfter: 6,
+        },
+      )
+    if (page.notes.length)
+      text(
+        slide,
+        page.notes.flatMap((line) => runs(line)),
+        {
+          x: DECK.x,
+          y: 6.45,
+          w: DECK.w,
+          h: 0.45,
+          fontSize: 11,
+          color: DECK.sub,
+          valign: 'bottom',
+        },
+      )
+    if (page.foot)
+      text(slide, page.foot, {
+        x: DECK.x,
+        y: 6.95,
+        w: 11.3,
+        h: 0.4,
+        fontSize: 10,
+        color: DECK.mute,
+        valign: 'top',
+      })
+  }
+  return (await deck.write({ outputType: 'nodebuffer' })) as Buffer
+}
+
 export class Artifacts {
   store: Store
   library: LibraryStore
@@ -678,17 +1422,31 @@ export class Artifacts {
     this.store = store
     this.library = new LibraryStore(store)
   }
-  /** 引用来源的一条，与界面原文片段栏同样写出文献标题、编号、片段序号与章节；片段不在库里时沿用链接文字与片段编号 */
-  source({ id, label }: Source) {
+  /** 片段所属文献（标题与文献编号）、片段序号与章节，与界面原文片段栏同样的写法；片段不在库里时为 undefined */
+  cite(id: string) {
     try {
       const passage = this.library.passage(id)
-      // 章节路径去掉 Markdown 标题符号，同前端 headingPath
-      const heading = passage.heading.replace(/(^|\/\s*)#+\s+/g, '$1')
-      return `《${passage.title}》 文献编号 ${passage.documentId} · 片段 ${passage.ordinal + 1}${heading ? ` · ${heading}` : ''}`
+      // 标题去掉汉字之间的空白（源库标题常有分行留下的空格）；章节路径去掉 Markdown 标题符号，同前端 headingPath
+      const title = passage.title
+        .replace(/(?<=[㐀-鿿])\s+(?=[㐀-鿿])/g, '')
+        .replace(/\s+/g, ' ')
+        .trim()
+      return {
+        doc: `《${title}》 文献编号 ${passage.documentId}`,
+        part: String(passage.ordinal + 1),
+        heading: passage.heading.replace(/(^|\/\s*)#+\s+/g, '$1'),
+      }
     } catch (error) {
-      if (error instanceof HttpError) return `${label}　片段 ${id}`
+      if (error instanceof HttpError) return
       throw error
     }
+  }
+  /** 引用来源的一条：文献、片段序号与章节；片段不在库里时沿用链接文字与片段编号 */
+  source({ id, label }: Source) {
+    const found = this.cite(id)
+    return found
+      ? `${found.doc} · 片段 ${found.part}${found.heading ? ` · ${found.heading}` : ''}`
+      : `${label}　片段 ${id}`
   }
   path(id: string) {
     if (!/^[0-9a-f-]{36}$/.test(id)) throw new HttpError(404, '没有找到文件。')
@@ -726,298 +1484,15 @@ export class Artifacts {
         `FILE_INVALID_${format.toUpperCase()}_CONTENT`,
       )
     let bytes: Buffer
-    // Office 文件保留生成时的原文供在线预览：docx、pptx 为 Markdown，xlsx 为 CSV
-    let preview = format === 'docx' || format === 'pptx' ? content : undefined
+    // Office 文件保留生成时的原文供在线预览：docx 为 Markdown，pptx 为分页结果（见下），xlsx 为 CSV
+    let preview = format === 'docx' ? content : undefined
     const source = (item: Source) => this.source(item)
     if (format === 'docx') bytes = await docx(content, title, source)
     else if (format === 'pptx') {
-      // 与 Word 同样解析 Markdown：每个标题开一页，其下文字行与表格归该页，列表项显示项目符号或编号，
-      // > 引用作页底注；文献引用编号列在末页“引用来源”。
-      type Section = { title: string; level: number; items: Exclude<Item, { type: 'heading' }>[] }
-      const { items, sources } = flatten(content, 'FILE_INVALID_PPTX_CONTENT')
-      const sections: Section[] = [{ title, level: 0, items: [] }]
-      for (const item of items) {
-        if (item.type === 'heading')
-          sections.push({ title: plain(item.segs).trim(), level: item.depth, items: [] })
-        else if (item.type === 'table' || plain(item.segs).trim()) sections.at(-1)!.items.push(item)
-      }
-      if (!sections[0].items.length) sections.shift()
-      // 封面：开头的 # 标题（正文另有其他 # 标题且它下面有正文时用文件名），紧跟的破折号标题作副标题，
-      // 两者下面不长的文字（如依据文献）也放在封面
-      let cover = title
-      let subtitle = ''
-      let coverItems: Section['items'] = []
-      if (
-        sections[0]?.level === 1 &&
-        (!sections[0].items.length || sections.filter((s) => s.level === 1).length === 1)
-      )
-        ({ title: cover, items: coverItems } = sections.shift()!)
-      if (/^[—–-]/.test(sections[0]?.title ?? '')) {
-        subtitle = sections[0].title.replace(/^[—–-]+\s*/, '')
-        coverItems = [...coverItems, ...sections.shift()!.items]
-      }
-      if (
-        coverItems.some((item) => item.type === 'table') ||
-        coverItems.reduce(
-          (sum, item) => sum + (item.type === 'line' ? plain(item.segs).length : 0),
-          0,
-        ) > 300
-      ) {
-        sections.unshift({ title: subtitle || cover, level: 1, items: coverItems })
-        coverItems = []
-      }
-      if (sources.length)
-        sections.push({
-          title: '引用来源',
-          level: 0,
-          items: sources.map((item, i) => ({
-            type: 'line',
-            segs: [{ text: `[${i + 1}] ${source(item)}` }],
-            depth: 0,
-            quote: false,
-          })),
-        })
-      // ponytail: 按每行 44 字、每页 14 行估算分页（18 磅微软雅黑实测约 47 个汉字一行、正文框约 16 行），
-      // 西文与长单词按字数计偏保守；要更满的版面再按字体测宽
-      const PER_LINE = 44
-      const PER_SLIDE = 14
-      // ponytail: 表格按 14 磅字宽估算各行行数与行高，单行高过整页时仍会超出页面；要精确再按字体测宽
-      const CELL_UNIT = 14 / 72 / 2
-      const CELL_LINE = (14 * 1.2) / 72
-      const TABLE_HEIGHT = 5
-      const fontFace = '微软雅黑'
-      const font = { fontFace, color: '1B1B1D' }
-      const grey = { fontFace, color: '7F7F7F' }
-      const red = { color: RED }
-      type Run = { text: string; options: Record<string, unknown> }
-      // 段落属性只写在首段：pptxgenjs 遇到带项目符号的文字段会另起一段
-      const toRuns = (segs: Seg[], paragraph: Record<string, unknown> = {}): Run[] =>
-        segs.map((seg, k) => ({
-          text: seg.text,
-          options: {
-            bold: seg.bold,
-            italic: seg.italics,
-            strike: seg.strike ? 'sngStrike' : undefined,
-            hyperlink: seg.link ? { url: seg.link } : undefined,
-            ...(seg.sup && { superscript: true, ...red }),
-            ...(!k && paragraph),
-            ...(k === segs.length - 1 && { breakLine: true }),
-          },
-        }))
-      // TypeScript 把该包的类型声明当作 CommonJS；Node 按 ESM 加载时默认导出即是类
-      const deck = new (PptxGenJS as unknown as typeof PptxGenJS.default)()
-      Object.assign(deck, {
-        layout: 'LAYOUT_WIDE',
-        title: cover,
-        subject: cover,
-        author: '管策智研',
-        company: '管策智研',
-      })
-      const first = deck.addSlide()
-      first.addShape('rect', { x: 0, y: 0, w: 0.3, h: 7.5, fill: red, line: red })
-      first.addText(cover, {
-        x: 1,
-        y: 1.2,
-        w: 11.3,
-        h: 2.6,
-        fontSize: 36,
-        bold: true,
-        valign: 'bottom',
-        ...font,
-      })
-      if (subtitle)
-        first.addText(subtitle, { x: 1, y: 3.95, w: 11.3, h: 0.8, fontSize: 20, ...grey })
-      if (coverItems.length)
-        first.addText(
-          coverItems.flatMap((item) => (item.type === 'line' ? toRuns(item.segs) : [])),
-          { x: 1, y: 4.9, w: 11.3, h: 2, fontSize: 14, valign: 'top', paraSpaceAfter: 4, ...grey },
-        )
-      // 没有正文（至多只有引用注）、下一节层级更深的标题不单独成页，作章节名显示在其下各页标题上方
-      const chapters: Section[] = []
-      let carried: Run[] = []
-      sections.forEach((section, s) => {
-        while (chapters.length && chapters.at(-1)!.level >= section.level) chapters.pop()
-        const quoteOnly = section.items.every((item) => item.type === 'line' && item.quote)
-        if (quoteOnly && (sections[s + 1]?.level ?? 0) > section.level) {
-          chapters.push(section)
-          for (const item of section.items)
-            if (item.type === 'line') carried.push(...toRuns(item.segs))
-          return
-        }
-        // 每页为一组文字段（每行最后一段带 breakLine），或一段表格（首行为表头，每页重复）；notes 为页底注
-        type Page = { notes: Run[] } & (
-          { runs: Run[] } | { rows: string[][]; colW: number[]; align: Align }
-        )
-        const pages: Page[] = []
-        let used = PER_SLIDE
-        for (const item of section.items) {
-          if (item.type === 'table') {
-            const rows = item.rows.map((row) =>
-              row.map((lines) => lines.map((line) => plain(line)).join('\n')),
-            )
-            const colW = fitColumns(
-              rows[0].map(
-                (_, j) => Math.max(...item.rows.map((row) => cellWidth(row[j]))) * CELL_UNIT + 0.3,
-              ),
-              12.1,
-            )
-            const heights = rows.map(
-              (row) =>
-                Math.max(
-                  ...row.map((text, j) =>
-                    text
-                      .split('\n')
-                      .reduce(
-                        (sum, line) =>
-                          sum +
-                          Math.max(1, Math.ceil((textWidth(line) * CELL_UNIT) / (colW[j] - 0.2))),
-                        0,
-                      ),
-                  ),
-                ) *
-                  CELL_LINE +
-                0.1,
-            )
-            let page: string[][] = []
-            let height = heights[0]
-            rows.slice(1).forEach((row, k) => {
-              if (page.length && height + heights[k + 1] > TABLE_HEIGHT) {
-                pages.push({ rows: [rows[0], ...page], colW, align: item.align, notes: [] })
-                page = []
-                height = heights[0]
-              }
-              page.push(row)
-              height += heights[k + 1]
-            })
-            pages.push({ rows: [rows[0], ...page], colW, align: item.align, notes: [] })
-            used = PER_SLIDE
-            continue
-          }
-          const chars = Array.from(plain(item.segs))
-          if (item.quote) {
-            // 页底注挂在当前页；按每行 80 字、约合 0.6 行正文占用版面
-            if (!pages.length) {
-              pages.push({ runs: [], notes: [] })
-              used = 0
-            }
-            pages.at(-1)!.notes.push(...toRuns(item.segs))
-            used += 0.6 * Math.ceil(chars.length / 80)
-            continue
-          }
-          const { mark } = item
-          // 超过一页的长段按字数切开，切开的部分不保留行内格式
-          const pieces =
-            chars.length > PER_LINE * PER_SLIDE
-              ? Array.from({ length: Math.ceil(chars.length / (PER_LINE * PER_SLIDE)) }, (_, i) => [
-                  {
-                    text: chars
-                      .slice(i * PER_LINE * PER_SLIDE, (i + 1) * PER_LINE * PER_SLIDE)
-                      .join(''),
-                  },
-                ])
-              : [item.segs]
-          pieces.forEach((piece, i) => {
-            const cost = Math.ceil(Array.from(plain(piece)).length / PER_LINE)
-            const last = pages.at(-1)
-            if (!last || !('runs' in last) || used + cost > PER_SLIDE) {
-              pages.push({ runs: [], notes: [] })
-              used = 0
-            }
-            ;(pages.at(-1) as { runs: Run[] }).runs.push(
-              ...toRuns(piece, {
-                bullet:
-                  mark && !i
-                    ? mark.ordered
-                      ? { type: 'number', numberStartAt: mark.n }
-                      : true
-                    : false,
-                indentLevel: Math.min(Math.max(item.depth - 1, 0), MAX_LEVEL),
-              }),
-            )
-            used += cost
-          })
-        }
-        if (!pages.length) pages.push({ runs: [], notes: [] })
-        pages[0].notes.unshift(...carried)
-        carried = []
-        const kicker = chapters.at(-1)?.title
-        pages.forEach((page, i) => {
-          const slide = deck.addSlide()
-          slide.slideNumber = {
-            x: 12.1,
-            y: 7.0,
-            w: 0.8,
-            h: 0.3,
-            fontSize: 10,
-            align: 'right',
-            ...grey,
-          }
-          // 没有正文的标题放在页面中部，作章节过渡页
-          const top = 'rows' in page || page.runs.length ? 0.3 : 2.4
-          slide.addText(
-            [
-              ...(kicker
-                ? [{ text: kicker, options: { fontSize: 14, breakLine: true, ...red } }]
-                : []),
-              { text: i ? `${section.title}（续）` : section.title, options: {} },
-            ],
-            {
-              x: 0.6,
-              y: top,
-              w: 12.1,
-              h: 1,
-              fontSize: top < 1 ? 24 : 32,
-              bold: true,
-              valign: 'bottom',
-              ...font,
-            },
-          )
-          slide.addShape('rect', { x: 0.7, y: top + 1.1, w: 1, h: 0.06, fill: red, line: red })
-          if ('rows' in page)
-            slide.addTable(
-              page.rows.map((row, r) =>
-                row.map((text, j) => ({
-                  text,
-                  options: r
-                    ? { align: page.align[j] ?? 'left' }
-                    : { align: 'center', bold: true, color: 'FFFFFF', fill: red },
-                })),
-              ),
-              {
-                x: 0.6,
-                y: 1.65,
-                w: 12.1,
-                colW: page.colW,
-                fontSize: 14,
-                valign: 'middle',
-                border: { type: 'solid', pt: 0.75, color: 'BFBFBF' },
-                ...font,
-              },
-            )
-          else if (page.runs.length)
-            slide.addText(page.runs, {
-              x: 0.6,
-              y: 1.65,
-              w: 12.1,
-              h: 5,
-              fontSize: 18,
-              valign: 'top',
-              paraSpaceAfter: 6,
-              ...font,
-            })
-          if (page.notes.length)
-            slide.addText(page.notes, {
-              x: 0.6,
-              y: 6.7,
-              w: 11.4,
-              h: 0.6,
-              fontSize: 11,
-              valign: 'bottom',
-              ...grey,
-            })
-        })
-      })
-      bytes = (await deck.write({ outputType: 'nodebuffer' })) as Buffer
+      const plan = deckPlan(content, title, source, (id) => this.cite(id))
+      bytes = await writeDeck(plan, (plan[0] as { title: string }).title)
+      // 在线预览与导出文件用同一份分页
+      preview = JSON.stringify({ slides: plan })
     } else if (format === 'xlsx' || format === 'csv') {
       // 二维 JSON 数组；也接受按行写的 JSON 数组（JSON Lines）和 Markdown 表格（取第一张）。
       // 都不是时给出下面的格式说明，而不是笼统的“工具执行失败”
