@@ -1,10 +1,19 @@
-import { CircleAlertIcon, DownloadIcon, Loader2Icon, PlayIcon, UploadIcon } from 'lucide-react'
+import {
+  CircleAlertIcon,
+  DownloadIcon,
+  Loader2Icon,
+  PlayIcon,
+  UploadIcon,
+  XIcon,
+} from 'lucide-react'
 import * as DialogPrimitive from '@radix-ui/react-dialog'
 import { useEffect, useRef, useState } from 'react'
 import { Link, useSearchParams } from 'react-router'
 import { TopBar } from '@/app/shell'
 import { Button } from '@/components/ui/button'
 import { LoadStatus } from '@/components/ui/load-status'
+import { Tooltip } from '@/components/ui/tooltip'
+import { FormatBlock } from '@/features/workspace/file-preview'
 import { cn } from '@/lib/cn'
 import { useRequest, type Loaded } from '@/lib/use-request'
 import {
@@ -59,25 +68,47 @@ export function ValsetPage() {
   )
 }
 
+const sameFile = (a: File, b: File) =>
+  a.name === b.name && a.size === b.size && a.lastModified === b.lastModified
+
+/** 上传区：可选多个文件，列在下方，选中其中一个开始测试。列表只在页面内存里，离开页面即清空。 */
 function Upload({ onStarted }: { onStarted: (job: ValsetJob) => void }) {
-  const [file, setFile] = useState<File | null>(null)
+  const [files, setFiles] = useState<File[]>([])
+  const [selected, setSelected] = useState<File>()
   const [error, setError] = useState<string>()
   const [starting, setStarting] = useState(false)
   const [dragging, setDragging] = useState(false)
-  const choose = (next: File | undefined) => {
-    if (!next) return
-    const xlsx = /\.xlsx$/i.test(next.name)
-    setFile(xlsx ? next : null)
-    setError(xlsx ? undefined : '请选择 .xlsx 格式的 Excel 文件（.xls 请先另存为 .xlsx）。')
+  // 选中的文件被移除（含开始成功后移除）时落到第一个，选中状态只由列表推出
+  const chosen = selected && files.includes(selected) ? selected : files[0]
+  const add = (list: FileList | null | undefined) => {
+    const picked = [...(list ?? [])]
+    if (!picked.length) return
+    const rejected = picked.filter((item) => !/\.xlsx$/i.test(item.name))
+    const fresh = picked.filter(
+      (item) => /\.xlsx$/i.test(item.name) && !files.some((old) => sameFile(old, item)),
+    )
+    setFiles([...files, ...fresh])
+    if (fresh.length) setSelected(fresh.at(-1))
+    setError(
+      rejected.length
+        ? `只能选择 .xlsx 格式的 Excel 文件（.xls 请先另存为 .xlsx），未加入：${rejected.map((item) => item.name).join('、')}`
+        : undefined,
+    )
+  }
+  const remove = (file: File) => {
+    setFiles((current) => current.filter((item) => item !== file))
+    // 移除按钮随行消失，焦点交给上传区
+    document.getElementById('valset-file')?.focus()
   }
   const start = () => {
+    const file = chosen
     if (!file || starting) return
     setStarting(true)
     setError(undefined)
     startValsetJob(file)
       .then(
         (job) => {
-          setFile(null)
+          setFiles((current) => current.filter((item) => item !== file))
           onStarted(job)
         },
         (failure: unknown) => setError(message(failure, '上传失败，请重试。')),
@@ -98,7 +129,7 @@ function Upload({ onStarted }: { onStarted: (job: ValsetJob) => void }) {
         onDrop={(event) => {
           event.preventDefault()
           setDragging(false)
-          choose(event.dataTransfer.files[0])
+          add(event.dataTransfer.files)
         }}
         className={cn(
           'flex cursor-pointer flex-col items-center gap-1.5 rounded-xl border border-dashed border-border bg-card px-4 py-8 text-center transition-colors hover:border-border-hover hover:bg-hover has-focus-visible:ring-2 has-focus-visible:ring-ring',
@@ -108,23 +139,59 @@ function Upload({ onStarted }: { onStarted: (job: ValsetJob) => void }) {
         <input
           id="valset-file"
           type="file"
+          multiple
           aria-label="选择验证集文件"
           accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
           className="sr-only"
           onChange={(event) => {
-            choose(event.target.files?.[0])
+            add(event.target.files)
             // 同一文件改过后可再次选择
             event.target.value = ''
           }}
         />
         <UploadIcon className="mb-1 size-5 text-foreground-subtle" aria-hidden />
-        <span className="text-ui-base wrap-anywhere">
-          {file ? file.name : '拖入验证集文件，或点击选择'}
-        </span>
+        <span className="text-ui-base">拖入验证集文件，或点击选择（可多选）</span>
         <span className="text-ui-sm text-balance text-foreground-subtle">
           Excel（.xlsx），第一行为表头“问题”“预期答案”，最多 1000 条
         </span>
       </label>
+      {files.length > 0 && (
+        <ul aria-label="待测试的文件" className="flex flex-col gap-2">
+          {files.map((file) => (
+            <li
+              key={`${file.name}\n${file.size}\n${file.lastModified}`}
+              className="flex min-w-0 items-center gap-3 rounded-xl border border-card-border bg-card p-3 transition-colors hover:border-border-hover hover:bg-surface-hover has-checked:border-brand has-checked:bg-accent has-[input:focus-visible]:ring-2 has-[input:focus-visible]:ring-ring"
+            >
+              <label className="flex min-w-0 flex-1 cursor-pointer items-center gap-3">
+                <input
+                  type="radio"
+                  name="valset-choice"
+                  checked={file === chosen}
+                  onChange={() => setSelected(file)}
+                  className="size-4 shrink-0 accent-brand"
+                />
+                <FormatBlock format="xlsx" />
+                <span className="flex min-w-0 flex-col">
+                  <span className="truncate text-ui-base font-medium">{file.name}</span>
+                  <span className="text-ui-sm text-foreground-subtlest">
+                    {Math.ceil(file.size / 1024)} KB
+                  </span>
+                </span>
+              </label>
+              <Tooltip label="移除">
+                <button
+                  type="button"
+                  aria-label={`移除 ${file.name}`}
+                  onClick={() => remove(file)}
+                  className="flex size-8 shrink-0 items-center justify-center rounded-lg text-foreground-subtle outline-none transition-colors hover:bg-hover hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+                >
+                  <XIcon className="size-4" />
+                </button>
+              </Tooltip>
+            </li>
+          ))}
+        </ul>
+      )}
       {error && (
         <p role="alert" className="flex items-start gap-1.5 text-ui-caption text-destructive">
           <CircleAlertIcon className="mt-0.5 size-3.5 shrink-0" aria-hidden />
@@ -132,7 +199,7 @@ function Upload({ onStarted }: { onStarted: (job: ValsetJob) => void }) {
         </p>
       )}
       <div className="flex flex-wrap gap-2">
-        <Button disabled={!file} aria-disabled={starting || undefined} onClick={start}>
+        <Button disabled={!chosen} aria-disabled={starting || undefined} onClick={start}>
           {starting ? <Loader2Icon className="animate-spin" aria-hidden /> : <PlayIcon />}
           开始测试
         </Button>
