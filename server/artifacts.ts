@@ -760,8 +760,28 @@ const UNIT = (size: number) => size / 72 / 2
 /** 小标题像“一、”“1.”“（一）”“第一章”这类章节编号时，开头的 # 标题不作封面 */
 const ORDINAL =
   /^(?:[一二三四五六七八九十百]+、|（[一二三四五六七八九十]+）|\d+[.、．]|第.{1,4}[章节篇部分])/
+/** 并成标签时去掉的章节编号前缀（卡片另有编号圆） */
+const ORDINAL_PREFIX = /^(?:[一二三四五六七八九十百]+、|（[一二三四五六七八九十]+）|\d+[.、．])\s*/
 type Cite = { doc: string; part: string }
 type SlideRow = { label: Seg[]; body: Seg[] }
+/** 引导语（15 磅）占的高度：每行约 0.28 英寸，段间与下方各留一点 */
+const leadHeight = (lead: Seg[][]) =>
+  lead.length
+    ? lead.reduce(
+        (sum, segs) =>
+          sum + Math.max(1, Math.ceil((textWidth(plain(segs)) * UNIT(15)) / DECK.w)) * 0.28 + 0.06,
+        0.12,
+      )
+    : 0
+/** 只有引用编号的一行：编号的文献已写在页脚，不再作页底注 */
+const citeOnly = (segs: Seg[]) => segs.every((seg) => seg.sup || !seg.text.trim())
+/** 几行文字接成一段，前一行不以句读结尾时补“；” */
+const joinLines = (lines: Line[]) =>
+  lines.flatMap((line, i) =>
+    i && !/[。！？；…”’）)]$/.test(plain(lines[i - 1].segs).trim())
+      ? [{ text: '；' }, ...line.segs]
+      : line.segs,
+  )
 
 /** 按字符位置把一行文字段切成两半 */
 const splitSegs = (segs: Seg[], at: number): [Seg[], Seg[]] => {
@@ -810,8 +830,8 @@ const rowHeight = (row: SlideRow, labelW: number) => {
   const body = Math.max(1, Math.ceil((textWidth(plain(row.body)) * UNIT(14)) / bodyW))
   return Math.max(label * 0.3, body * 0.26) + 0.3
 }
-/** 卡片：标签 18 磅、说明 14 磅，返回标签区高度与卡片高度 */
-const cardSize = (rows: SlideRow[]) => {
+/** 卡片：标签 18 磅、说明 14 磅，返回标签区高度与卡片高度；room 为可用高度（上方有引导语时变小） */
+const cardSize = (rows: SlideRow[], room = DECK.height) => {
   const inner = (DECK.w - 0.3 * (rows.length - 1)) / rows.length - 0.6
   const label =
     Math.max(...rows.map((row) => Math.ceil((textWidth(plain(row.label)) * UNIT(18)) / inner))) *
@@ -821,7 +841,7 @@ const cardSize = (rows: SlideRow[]) => {
     0.26
   return {
     label,
-    height: Math.min(DECK.height - 0.1, Math.max(3.4, 1.0 + label + 0.15 + body + 0.4)),
+    height: Math.min(room - 0.1, Math.max(3.4, 1.0 + label + 0.15 + body + 0.4)),
   }
 }
 const toSlideSegs = (segs: Seg[]): SlideSeg[] =>
@@ -846,7 +866,14 @@ function deckPlan(
   source: (source: Source) => string,
   cite: (id: string) => Cite | undefined,
 ): SlidePlan[] {
-  type Section = { title: string; level: number; items: Exclude<Item, { type: 'heading' }>[] }
+  /** rows、lead 为并入的子节（见下）与父标题下的引导语 */
+  type Section = {
+    title: string
+    level: number
+    items: Exclude<Item, { type: 'heading' }>[]
+    rows?: SlideRow[]
+    lead?: Seg[][]
+  }
   const { items, sources } = flatten(content, 'FILE_INVALID_PPTX_CONTENT')
   const sections: Section[] = [{ title, level: 0, items: [] }]
   for (const item of items) {
@@ -881,6 +908,40 @@ function deckPlan(
   ) {
     sections.unshift({ title: subtitle || cover, level: 1, items: coverItems })
     coverItems = []
+  }
+  // 父标题下的子标题都是叶子、每个子节正文很短（不超过两段、约 150 字）时，子节并进父标题那一页：
+  // 子标题作标签、正文作说明（再按条数与长短排成卡片或标签行），父标题下的一两句作引导语。
+  // 模型常把“四个方面：”加 4 个各只有一段的小节写成标题，逐节成页会变成一串只有一段话的稀疏页
+  const body = (items: Section['items']) =>
+    items.filter((item): item is Line => item.type === 'line' && !item.quote)
+  const quotes = (items: Section['items']) =>
+    items.filter((item): item is Line => item.type === 'line' && item.quote)
+  const brief = (items: Section['items'], most: number) =>
+    !items.some((item) => item.type === 'table') &&
+    body(items).length <= most &&
+    body(items).reduce((sum, line) => sum + Array.from(plain(line.segs)).length, 0) <= 150
+  for (let s = 0; s < sections.length; s++) {
+    const parent = sections[s]
+    let end = s + 1
+    while (end < sections.length && sections[end].level > parent.level) end++
+    const children = sections.slice(s + 1, end)
+    if (
+      parent.level >= 1 &&
+      children.length >= 2 &&
+      children.every(
+        (child) =>
+          child.level === children[0].level && body(child.items).length && brief(child.items, 2),
+      ) &&
+      brief(parent.items, 2)
+    ) {
+      parent.lead = body(parent.items).map((line) => line.segs)
+      parent.rows = children.map((child) => ({
+        label: [{ text: child.title.replace(ORDINAL_PREFIX, '') || child.title, bold: true }],
+        body: joinLines(body(child.items)),
+      }))
+      parent.items = [parent, ...children].flatMap((section) => quotes(section.items))
+      sections.splice(s + 1, children.length)
+    }
   }
   const plan: SlidePlan[] = [
     {
@@ -930,24 +991,39 @@ function deckPlan(
     while (chapters.length && chapters.at(-1)!.level >= section.level) chapters.pop()
     // 没有正文（至多只有引用注）、下一节层级更深的标题不单独成页，作章节名显示在其下各页标题上方
     const quoteOnly = section.items.every((item) => item.type === 'line' && item.quote)
-    if (quoteOnly && (sections[s + 1]?.level ?? 0) > section.level) {
+    if (!section.rows && quoteOnly && (sections[s + 1]?.level ?? 0) > section.level) {
       chapters.push(section)
       for (const item of section.items) if (item.type === 'line') carried.push(item.segs)
       return
     }
     const kicker = chapters.at(-1)?.title ?? ''
     // 每页的正文与页底注；页底注挂在当前页
-    const pages: { page: SlideBody; notes: Seg[][]; marks: number[] }[] = []
-    const lines = section.items.filter((item): item is Line => item.type === 'line' && !item.quote)
-    const notes = section.items.filter((item): item is Line => item.type === 'line' && item.quote)
-    const rows = lines.map(labelOf)
+    // lead 只出现在一节的第一页
+    const pages: { page: SlideBody; lead?: Seg[][]; notes: Seg[][]; marks: number[] }[] = []
+    const lines = body(section.items)
+    const notes = quotes(section.items)
+    let lead = section.lead ?? []
+    let rows = section.rows ?? lines.map(labelOf)
+    // 开头一两句短引导语（如“四个方面：”）后面全是“标签：说明”时，引导语放在标签行上方
+    const k = rows.findIndex(Boolean)
+    if (
+      !section.rows &&
+      k > 0 &&
+      rows.length - k >= 2 &&
+      rows.slice(k).every(Boolean) &&
+      brief(lines.slice(0, k), 2)
+    ) {
+      lead = lines.slice(0, k).map((line) => line.segs)
+      rows = rows.slice(k)
+    }
     if (
       section.title !== '引用来源' &&
-      lines.length &&
-      lines.length + notes.length === section.items.length &&
-      rows.every(Boolean)
+      rows.length &&
+      (section.rows ||
+        (lead.length + rows.length + notes.length === section.items.length && rows.every(Boolean)))
     ) {
       const all = rows as SlideRow[]
+      const room = DECK.height - leadHeight(lead)
       const cards =
         all.length >= 2 && all.length <= 4 && all.every((row) => textWidth(plain(row.body)) <= 120)
       if (cards)
@@ -964,12 +1040,16 @@ function deckPlan(
         })
       else {
         const labelW = labelWidth(all)
-        let used = DECK.height
+        // 第一页上方有引导语，可用高度小一些；之后的续页用整页
+        pages.push({ page: { layout: 'rows', rows: [] }, notes: [], marks: [] })
+        let used = 0
+        let limit = room
         for (const row of all) {
           const height = rowHeight(row, labelW)
-          if (used + height > DECK.height) {
+          if ((pages.at(-1)!.page as { rows: unknown[] }).rows.length && used + height > limit) {
             pages.push({ page: { layout: 'rows', rows: [] }, notes: [], marks: [] })
             used = 0
+            limit = DECK.height
           }
           const last = pages.at(-1)!
           ;(last.page as { rows: unknown[] }).rows.push({
@@ -981,6 +1061,7 @@ function deckPlan(
         }
       }
       pages.at(-1)!.notes.push(...notes.map((item) => item.segs))
+      pages[0].lead = lead
     } else {
       let used = PER_SLIDE
       for (const item of section.items) {
@@ -1011,16 +1092,32 @@ function deckPlan(
                 CELL_LINE +
               0.16,
           )
+          // 表格前只有一两段短文字（不带项目符号）时，文字作引导语与表格同页，不留只有两行的前一页
+          const prev = pages.at(-1)
+          const before =
+            prev?.page.layout === 'bullets' &&
+            prev.page.lines.length &&
+            prev.page.lines.every((line) => line.bullet === undefined && !line.level) &&
+            leadHeight(prev.page.lines.map((line) => line.segs)) <= 1.6
+              ? pages.pop()
+              : undefined
+          const lead =
+            before?.page.layout === 'bullets' ? before.page.lines.map((line) => line.segs) : []
+          let limit = DECK.height - leadHeight(lead)
           let chunk: string[][] = []
           let height = heights[0]
-          const flush = () =>
+          const flush = () => {
+            const first = limit < DECK.height
             pages.push({
               page: { layout: 'table', rows: [cells[0], ...chunk], colW, align: item.align },
-              notes: [],
-              marks: cellMarks(chunk),
+              ...(first && { lead }),
+              notes: first ? (before?.notes ?? []) : [],
+              marks: [...(first ? (before?.marks ?? []) : []), ...cellMarks(chunk)],
             })
+            limit = DECK.height
+          }
           cells.slice(1).forEach((row, k) => {
-            if (chunk.length && height + heights[k + 1] > DECK.height) {
+            if (chunk.length && height + heights[k + 1] > limit) {
               flush()
               chunk = []
               height = heights[0]
@@ -1075,13 +1172,14 @@ function deckPlan(
     if (!pages.length) pages.push({ page: { layout: 'bullets', lines: [] }, notes: [], marks: [] })
     pages[0].notes.unshift(...carried)
     carried = []
-    pages.forEach(({ page, notes, marks: numbers }, i) =>
+    pages.forEach(({ page, lead, notes, marks: numbers }, i) =>
       plan.push({
         ...page,
         kicker,
         title: i ? `${section.title}（续）` : section.title,
-        notes: notes.map(toSlideSegs),
-        foot: foot([...numbers, ...notes.flatMap(marks)]),
+        ...(lead?.length && { lead: lead.map(toSlideSegs) }),
+        notes: notes.filter((note) => !citeOnly(note)).map(toSlideSegs),
+        foot: foot([...numbers, ...(lead ?? []).flatMap(marks), ...notes.flatMap(marks)]),
       } as SlidePlan),
     )
   })
@@ -1225,12 +1323,30 @@ async function writeDeck(plan: SlidePlan[], title: string) {
         valign: 'bottom',
       },
     )
+    // 引导语在正文上方，正文从其下排起
+    const lead = page.lead ?? []
+    const top = DECK.top + leadHeight(lead)
+    const room = DECK.height - leadHeight(lead)
+    if (lead.length)
+      text(
+        slide,
+        lead.flatMap((line) => runs(line)),
+        {
+          x: DECK.x,
+          y: DECK.top,
+          w: DECK.w,
+          h: leadHeight(lead) - 0.08,
+          fontSize: 15,
+          valign: 'top',
+          paraSpaceAfter: 4,
+        },
+      )
     if (page.layout === 'rows' && page.rows.length === 1) {
       // 只有一条：标签作朱红小标题，说明放大，免得整页只用上方一行
       const [row] = page.rows
       text(slide, runs(row.label), {
         x: DECK.x,
-        y: DECK.top + 0.2,
+        y: top + 0.2,
         w: DECK.w,
         h: 0.5,
         fontSize: 16,
@@ -1239,9 +1355,9 @@ async function writeDeck(plan: SlidePlan[], title: string) {
       })
       text(slide, runs(row.body), {
         x: DECK.x,
-        y: DECK.top + 0.85,
+        y: top + 0.85,
         w: DECK.w,
-        h: DECK.height - 1.0,
+        h: room - 1.0,
         fontSize: 22,
         valign: 'top',
       })
@@ -1249,11 +1365,8 @@ async function writeDeck(plan: SlidePlan[], title: string) {
       const labelW = labelWidth(page.rows)
       const heights = page.rows.map((row) => rowHeight(row, labelW))
       // 行少时把剩余高度匀给各行（每行至多加 0.6 英寸），版面不只用上方几行
-      const extra = Math.min(
-        0.6,
-        (DECK.height - heights.reduce((a, b) => a + b, 0)) / heights.length,
-      )
-      let y = DECK.top
+      const extra = Math.min(0.6, (room - heights.reduce((a, b) => a + b, 0)) / heights.length)
+      let y = top
       page.rows.forEach((row, i) => {
         const height = heights[i] + Math.max(0, extra)
         if (i)
@@ -1286,10 +1399,10 @@ async function writeDeck(plan: SlidePlan[], title: string) {
       })
     } else if (page.layout === 'cards') {
       const width = (DECK.w - 0.3 * (page.rows.length - 1)) / page.rows.length
-      const { label, height } = cardSize(page.rows)
+      const { label, height } = cardSize(page.rows, room)
       page.rows.forEach((row, i) => {
         const x = DECK.x + i * (width + 0.3)
-        const y = DECK.top + 0.1
+        const y = top + 0.1
         slide.addShape('roundRect', {
           x,
           y,
@@ -1352,7 +1465,7 @@ async function writeDeck(plan: SlidePlan[], title: string) {
         ),
         {
           x: DECK.x,
-          y: DECK.top,
+          y: top,
           w: DECK.w,
           colW: page.colW,
           fontFace: DECK.font,
@@ -1379,9 +1492,9 @@ async function writeDeck(plan: SlidePlan[], title: string) {
         ),
         {
           x: DECK.x,
-          y: DECK.top,
+          y: top,
           w: DECK.w,
-          h: DECK.height,
+          h: room,
           fontSize: page.layout === 'sources' ? 13 : 15,
           valign: 'top',
           paraSpaceAfter: 6,

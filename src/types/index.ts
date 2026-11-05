@@ -43,10 +43,17 @@ export type SlideBody =
       colW: number[]
       align: ('left' | 'right' | 'center' | null)[]
     }
-/** 演示文稿的一页：封面，或带页标题的正文页；notes 为页底注，foot 为本页来源脚注 */
+/** 演示文稿的一页：封面，或带页标题的正文页；lead 为正文上方的引导语（如表格前的一两句、小节前的“四个方面：”），
+ * notes 为页底注，foot 为本页来源脚注 */
 export type SlidePlan =
   | { layout: 'cover'; title: string; subtitle: string; lines: SlideSeg[][] }
-  | ({ kicker: string; title: string; notes: SlideSeg[][]; foot: string } & SlideBody)
+  | ({
+      kicker: string
+      title: string
+      lead?: SlideSeg[][]
+      notes: SlideSeg[][]
+      foot: string
+    } & SlideBody)
 export type AnswerPart =
   | { id: string; type: 'text'; text: string; step: number }
   | { id: string; type: 'reasoning'; text: string; step: number }

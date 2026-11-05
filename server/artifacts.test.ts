@@ -1092,3 +1092,111 @@ test('straight quotes pair by position unless an inner quote sits inside a longe
     await rm(root, { recursive: true })
   }
 })
+
+test('short leaf subsections merge into their parent slide and a table shares its slide with the lines before it', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'gczy-pptx-sparse-test-'))
+  const store = new Store(root)
+  try {
+    const files = new Artifacts(store)
+    const user = store.user('test:sparse', 'Test')
+    const session = store.create(user.id)
+    const passage = '00000000-0000-4000-8000-000000000000'
+    const cite = `[planid 24177·原文](/api/library/passages/${passage})`
+    const quote = (text: string) => `"${text}"`
+    // 学校服务器实测的写法：引导语加 4 个各只有一两段的小节；表格前一两句；引用另起一行写在表后
+    const content = [
+      '# 五指山市实施保障措施',
+      '## 一、坚持党的领导核心作用',
+      `${quote('坚持各级党委（党组）在经济社会发展工作中的领导核心作用。')}${cite}`,
+      '重点举措：',
+      '| 要点 | 原文摘录 |',
+      '| --- | --- |',
+      '| 基层党组织建设 | "发挥基层党组织战斗堡垒作用" |',
+      '| 统一战线 | "巩固和发展最广泛的爱国统一战线" |',
+      '',
+      `> ${cite}`,
+      '## 二、完善党和国家监督体系',
+      '四个方面的具体部署：',
+      '### 1. 落实全面从严治党责任制度',
+      `${quote('落实各级党组织监督主体责任，完善领导班子内部监督制度，推动上级"一把手"抓好下级"一把手"。')}${cite}`,
+      '### 2. 发挥党内监督主导作用',
+      quote('以党内监督为主导，整合运用各类监督力量，形成监督合力。'),
+      '### 3. 深化纪检监察体制改革',
+      quote('完善派驻监督制度机制，加强对派驻机构的指导、管理、服务、保障和监督。'),
+      '### 4. 维护制度的严肃性和权威性',
+      quote('把制度执行力、治理能力作为干部考核评价的重要依据。'),
+      quote('年度考核要体现制度执行情况。'),
+      '## 三、长小节不并',
+      '### 1. 甲',
+      '甲'.repeat(160),
+      '### 2. 乙',
+      '短说明',
+    ].join('\n')
+    const pptx = await files.create(user.id, session.id, '汇报', 'pptx', content)
+    type Segs = { text: string; sup?: boolean }[]
+    type Plan = {
+      layout: string
+      title: string
+      lead?: Segs[]
+      notes?: Segs[]
+      foot?: string
+      rows?: { label: Segs; body: Segs }[] | string[][]
+    }
+    const plan: Plan[] = JSON.parse(store.preview(user.id, pptx.id).text).slides
+    const text = (segs: Segs) => segs.map((seg) => seg.text).join('')
+    assert.deepEqual(
+      plan.map((slide) => [slide.layout, slide.title]),
+      [
+        ['cover', '五指山市实施保障措施'],
+        ['table', '一、坚持党的领导核心作用'],
+        ['cards', '二、完善党和国家监督体系'],
+        ['bullets', '1. 甲'],
+        ['bullets', '2. 乙'],
+        ['sources', '引用来源'],
+      ],
+    )
+    // 表格前的两行作引导语与表格同页；表后只有引用编号的一行不作页底注，文献仍写在页脚
+    assert.deepEqual(plan[1].lead!.map(text), [
+      '“坚持各级党委（党组）在经济社会发展工作中的领导核心作用。”[1]',
+      '重点举措：',
+    ])
+    assert.deepEqual(plan[1].notes, [])
+    assert.match(plan[1].foot!, /^来源：\[1\]/)
+    // 4 个短小节并进父标题页（说明都短，排成卡片）：子标题去掉编号作标签，两段接成一段，父标题下的一句作引导语
+    assert.deepEqual(plan[2].lead!.map(text), ['四个方面的具体部署：'])
+    assert.deepEqual(
+      (plan[2].rows as { label: Segs; body: Segs }[]).map((row) => [
+        text(row.label),
+        text(row.body),
+      ]),
+      [
+        [
+          '落实全面从严治党责任制度',
+          '“落实各级党组织监督主体责任，完善领导班子内部监督制度，推动上级‘一把手’抓好下级‘一把手’。”[1]',
+        ],
+        ['发挥党内监督主导作用', '“以党内监督为主导，整合运用各类监督力量，形成监督合力。”'],
+        [
+          '深化纪检监察体制改革',
+          '“完善派驻监督制度机制，加强对派驻机构的指导、管理、服务、保障和监督。”',
+        ],
+        [
+          '维护制度的严肃性和权威性',
+          '“把制度执行力、治理能力作为干部考核评价的重要依据。”“年度考核要体现制度执行情况。”',
+        ],
+      ],
+    )
+    assert.match(plan[2].foot!, /^来源：\[1\]/)
+    // 导出文件里引导语画在正文上方
+    const zip = await JSZip.loadAsync(await readFile(files.path(pptx.id)))
+    const slide3 = texts(await zip.file('ppt/slides/slide3.xml')!.async('string'))
+    assert.deepEqual(slide3.slice(0, 4), [
+      '二、完善党和国家监督体系',
+      '四个方面的具体部署：',
+      '1',
+      '落实全面从严治党责任制度',
+    ])
+  } finally {
+    store.close()
+    await rm(root, { recursive: true })
+  }
+})
