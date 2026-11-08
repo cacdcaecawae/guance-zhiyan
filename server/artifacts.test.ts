@@ -6,7 +6,7 @@ import { join } from 'node:path'
 import ExcelJS from 'exceljs'
 import JSZip from 'jszip'
 import { parseCsv } from '../src/lib/csv.ts'
-import { Artifacts } from './artifacts.ts'
+import { Artifacts, flatten } from './artifacts.ts'
 import { LibraryStore } from './rag-store.ts'
 import { Store } from './store.ts'
 import { toolError } from './view.ts'
@@ -1079,17 +1079,41 @@ test('straight quotes pair by position unless an inner quote sits inside a longe
       '"推动上级"一把手"抓好下级"一把手"，着力破解难题。"',
       'He said "hi" and "bye"',
       '只有一个"引号',
+      '😀"中文😀引号"🚀与"另一段𠮷"',
+      '😀"推动上级"一把手"抓好下级"一把手"，着力破解难题。"🚀',
     ]
     const docx = await files.create(user.id, session.id, '引号', 'docx', lines.join('\n\n'))
-    assert.deepEqual((await files.read(user.id, session.id, docx.id)).split('\n').slice(0, 4), [
-      '“十三五”和“十四五”',
-      '“推动上级‘一把手’抓好下级‘一把手’，着力破解难题。”',
-      'He said "hi" and "bye"',
-      '只有一个"引号',
-    ])
+    assert.deepEqual(
+      (await files.read(user.id, session.id, docx.id)).split('\n').slice(0, lines.length),
+      [
+        '“十三五”和“十四五”',
+        '“推动上级‘一把手’抓好下级‘一把手’，着力破解难题。”',
+        'He said "hi" and "bye"',
+        '只有一个"引号',
+        '😀“中文😀引号”🚀与“另一段𠮷”',
+        '😀“推动上级‘一把手’抓好下级‘一把手’，着力破解难题。”🚀',
+      ],
+    )
   } finally {
     store.close()
     await rm(root, { recursive: true })
+  }
+})
+
+test('quote-heavy allowed content does not repeatedly scan prefixes or suffixes', () => {
+  for (const [input, expected] of [
+    ['"中" '.repeat(16000), '“中” '.repeat(16000)],
+    ['"a" '.repeat(40000), '"a" '.repeat(40000)],
+    ['"开，' + '中"文"'.repeat(12000) + '末"', '“开，' + '中‘文’'.repeat(12000) + '末”'],
+  ]) {
+    assert.ok(Buffer.byteLength(input) < 200_000)
+    const start = performance.now()
+    const { items } = flatten(input, 'FILE_INVALID_DOCX_CONTENT')
+    assert.ok(performance.now() - start < 2000)
+    assert.equal(items.length, 1)
+    assert.equal(items[0].type, 'line')
+    if (items[0].type === 'line')
+      assert.equal(items[0].segs.map((seg) => seg.text).join(''), expected.trimEnd())
   }
 })
 

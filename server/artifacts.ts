@@ -127,9 +127,13 @@ const cjk = /[㐀-鿿]/
  * （外层引文在它前后含句读才这样认，“"十三五"和"十四五"”仍是两对），否则按出现顺序成对。ponytail: 只认一层嵌套；更深的嵌套按顺序配对 */
 const curly = (text: string) => {
   const at = [...text.matchAll(/"/g)].map((match) => match.index)
-  const out = [...text]
-  // 把 UTF-16 下标换成码点下标，与 out 对齐
-  const index = (i: number) => Array.from(text.slice(0, i)).length
+  if (at.length < 2) return text
+  // 正则下标与替换都按 UTF-16 码元定位；未修改的代理对在 join 后原样保留。
+  const out = text.split('')
+  // 句读计数只建一次，避免每对引号都重新扫描行尾，或每层嵌套都重扫行首。
+  const punctuation = new Uint32Array(text.length + 1)
+  for (let i = 0; i < text.length; i++)
+    punctuation[i + 1] = punctuation[i] + Number(/[，。；！？,;!?]/.test(text[i]))
   const short = (from: number, to: number) => {
     const inner = text.slice(from + 1, to)
     return cjk.test(inner) && Array.from(inner).length <= 20 && !/[，。；！？,;!?]/.test(inner)
@@ -141,9 +145,8 @@ const curly = (text: string) => {
     // 外层引文较长（含句读）时，其中夹在汉字之间的短引号是内层引号，且后面还得留一个引号收尾
     while (
       close + 2 < at.length &&
-      /[，。；！？,;!?]/.test(
-        text.slice(open + 1, at[close]) + text.slice(at[close + 1] + 1, at.at(-1)),
-      ) &&
+      (punctuation[at[close]] > punctuation[open + 1] ||
+        punctuation[at.at(-1)!] > punctuation[at[close + 1] + 1]) &&
       cjk.test(text[at[close] - 1] ?? '') &&
       cjk.test(text[at[close] + 1] ?? '') &&
       short(at[close], at[close + 1])
@@ -156,11 +159,11 @@ const curly = (text: string) => {
       k = close + 1
       continue
     }
-    out[index(open)] = '“'
-    out[index(at[close])] = '”'
+    out[open] = '“'
+    out[at[close]] = '”'
     for (const [a, b] of nested) {
-      out[index(a)] = '‘'
-      out[index(b)] = '’'
+      out[a] = '‘'
+      out[b] = '’'
     }
     k = close + 1
   }
